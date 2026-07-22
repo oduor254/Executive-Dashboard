@@ -138,7 +138,7 @@ results AS (
         0                                                               AS sort_order
 
     FROM branch_totals bt
-    LEFT JOIN branch_mapping bm ON LOWER(bt.branch) = LOWER(bm.branch_name)
+    JOIN branch_mapping bm ON LOWER(bt.branch) = LOWER(bm.branch_name)  -- shop locations with a target only
     LEFT JOIN sales_pos_target spt ON (
         spt.name ILIKE bm.target_branch || '%'
         AND spt.period = (SELECT selected_period FROM period_target)
@@ -173,6 +173,7 @@ results AS (
         1                                                               AS sort_order
 
     FROM branch_totals bt
+    JOIN branch_mapping bm ON LOWER(bt.branch) = LOWER(bm.branch_name)  -- same restriction as above
 )
 
 SELECT
@@ -558,6 +559,9 @@ shop_sales AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
+    AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
+    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
+    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
   GROUP BY 1, 2
   HAVING SUM(pl.qty) <> 0
 ),
@@ -1032,6 +1036,8 @@ WHERE
     AND pc.name NOT ILIKE '%Pos%'
     AND pol.qty > 0
     AND pt.name NOT ILIKE '%KES discount%'
+    AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
+    AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
     AND po.date_order >= CAST(:start_date AS TIMESTAMP)
     AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 
@@ -1327,6 +1333,9 @@ raw_sales AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
+    AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
+    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
+    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
   GROUP BY product_name
 ),
 
@@ -1820,6 +1829,9 @@ shop_sales AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
+    AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
+    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
+    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
   GROUP BY 1, 2
   HAVING SUM(pl.price_subtotal_incl) <> 0
 ),
