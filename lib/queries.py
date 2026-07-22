@@ -2350,3 +2350,143 @@ SELECT
 FROM combined
 ORDER BY family, sort_order, bag_name;
 """
+
+# One row per sold line: Date, parsed Product + Color, Location, unit Price,
+# Quantity, Total. A lighter version of CUSTOMER_SALES without the customer
+# name-cleaning/gender lookups — built for offer-type classification
+# (lib/deals.py), which only needs product/location/price/date.
+PRODUCT_LINE_ITEMS = """
+WITH color_list(color) AS (
+    VALUES
+        -- Multi-word colors (longest match wins)
+        ('Black TT'),('Grey TT'),('Beige TT'),('Green TT'),
+        ('Wooven Black'),('Wooven Maroon'),('Wooven Mustard'),('Wooven Purple'),
+        ('Wooven Cream'),('Wooven Brown'),('Wooven Lilac'),
+        ('Croc Black'),('Croc Brown'),('Croc Mustard'),('Croc Orange'),('Croc Pink'),
+        ('Dark Brown'),('Mint Green'),('Yellow Brown'),('Yellow Dotted'),('Navy Blue'),
+        ('Antelope Brown'),
+        ('Red.Pattern'),('Red Pattern'),
+        ('Pattern Pink'),('Pattern Blue'),('Pattern Red'),
+        ('Amapiano Black'),('Amapiano Brown'),('Amapiano Grey'),('Amapiano Nude'),
+        ('Ankara Black'),('Ankara Brown'),('Ankara Grey'),('Ankara Nude'),
+        ('Black X Red'),
+        ('Beige/Red'),('Black/Cracked'),('Black/Red'),('Green/Red'),('Maroon/Red'),
+        ('Black/Beige'),('Black/Choco'),('Black/D.Brown'),('Black/Grey'),('Black/Spice'),
+        ('Red/Black'),('Grey/Black'),('Spice/Black'),('Cracked/Black'),('Chocolate/Black'),
+        ('Black 018'),('Beige 018'),('Dark Brown 018'),('Maroon 018'),
+        ('Titan 1'),('Titan 3'),('Titan 5'),('Titan 6'),('Titan 11'),('Titan 14'),('Titan 15'),
+        ('Goyard 5'),
+        ('Start 20'),('Start 4'),('Start 8'),
+        ('Red P'),('Black B'),('N.Blue'),('D.Brown'),
+        ('Manyatta Dark Brown'),('Manyatta Dark Green'),('Manyatta Green'),('Manyatta Yellow'),
+        ('CN Black'),('CN Grey'),('CN Dark Brown'),
+        ('A3 Red'),('A3 Pink'),
+        ('A4 Red'),('A4 Pink'),
+        ('A5 Red'),('A5 Pink'),
+        ('A3'),('A4'),('A5'),
+        ('Crimson'),
+        ('Beige'),('Black'),('Blue'),('Brown'),('Chocolate'),('Choco'),
+        ('Cracked'),('Green'),('green'),('GREEN'),('Grey'),('Gold'),('Lilac'),('Maroon'),
+        ('Mustard'),('Nude'),('Orange'),('Pink'),('Purple'),
+        ('Red'),('Spice'),('White'),('Yellow')
+),
+
+product_color_split AS (
+    SELECT
+        pt.id AS product_tmpl_id,
+        pt.name AS full_name,
+        (
+            SELECT cl.color
+            FROM color_list cl
+            WHERE pt.name LIKE '% ' || cl.color
+               OR pt.name = cl.color
+            ORDER BY LENGTH(cl.color) DESC
+            LIMIT 1
+        ) AS matched_color
+    FROM product_template pt
+)
+
+SELECT
+    po.date_order::DATE                                             AS "Date",
+
+    CASE
+        WHEN pcs.matched_color IS NULL
+            THEN TRIM(REGEXP_REPLACE(pcs.full_name, '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'))
+        WHEN pcs.full_name = pcs.matched_color
+            THEN pcs.full_name
+        ELSE TRIM(REGEXP_REPLACE(
+                LEFT(
+                    pcs.full_name,
+                    LENGTH(pcs.full_name) - LENGTH(pcs.matched_color)
+                ),
+                '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'
+            ))
+    END                                                             AS "Product",
+
+    CASE
+        WHEN pcs.matched_color IS NULL THEN 'Combo'
+        ELSE pcs.matched_color
+    END                                                             AS "Color",
+
+    CASE
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+            THEN 'Sinza'
+        ELSE INITCAP(
+                TRIM(REGEXP_REPLACE(
+                    COALESCE(sw.name, sl.complete_name, 'N/A'),
+                    '\\s*Shop\\s*', '', 'gi'
+                ))
+            )
+    END                                                             AS "Location",
+
+    ROUND(
+        CASE
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+                THEN (pol.price_subtotal_incl / 25) / NULLIF(pol.qty, 0)
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
+                THEN (pol.price_subtotal_incl / 29) / NULLIF(pol.qty, 0)
+            ELSE pol.price_subtotal_incl / NULLIF(pol.qty, 0)
+        END,
+        2
+    )                                                               AS "Price",
+
+    pol.qty                                                         AS "Quantity",
+
+    ROUND(
+        CASE
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+                THEN pol.price_subtotal_incl / 25
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
+                THEN pol.price_subtotal_incl / 29
+            ELSE pol.price_subtotal_incl
+        END,
+        2
+    )                                                               AS "Total"
+
+FROM pos_order po
+
+LEFT JOIN pos_order_line       pol   ON pol.order_id = po.id
+LEFT JOIN product_product      pp    ON pp.id    = pol.product_id
+LEFT JOIN product_template     pt    ON pt.id    = pp.product_tmpl_id
+LEFT JOIN product_color_split  pcs   ON pcs.product_tmpl_id = pt.id
+LEFT JOIN product_category     pc    ON pc.id    = pt.categ_id
+LEFT JOIN pos_session          ps    ON ps.id    = po.session_id
+LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt   ON spt.id   = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw    ON sw.id    = spt.warehouse_id
+LEFT JOIN stock_location       sl    ON sl.id    = spt.default_location_src_id
+
+WHERE
+    po.state IN ('done', 'paid')
+    AND pt.name NOT ILIKE '%Delivery Fee%'
+    AND pt.name NOT ILIKE '%Gift Bag%'
+    AND pc.name NOT ILIKE '%Pos%'
+    AND pol.qty > 0
+    AND pt.name NOT ILIKE '%KES discount%'
+    AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'
+    AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
+    AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+    AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
+
+ORDER BY po.date_order DESC;
+"""

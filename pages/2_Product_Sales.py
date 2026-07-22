@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, filters, grid, queries, theme
+from lib import auth, db, deals, filters, grid, queries, theme
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
 
@@ -29,8 +29,16 @@ with col_picker:
     start_date, end_date = filters.date_range_control("products")
 
 TOTAL_LABELS = ("MASTERFILE TOTAL", "NON-MASTERFILE TOTAL")
+MAX_TABLE_ROWS = 5000
+OFFER_COLORS = {
+    "Power Deal": theme.CATEGORICAL[0],
+    "Deal of the Week": theme.CATEGORICAL[2],
+    "Regular": theme.TEXT_MUTED,
+}
 
-tab_shop, tab_category, tab_value = st.tabs(["By Shop", "By Category", "Sales Value"])
+tab_shop, tab_category, tab_value, tab_offers = st.tabs(
+    ["By Shop", "By Category", "Sales Value", "Offer Types"]
+)
 
 
 @st.fragment()
@@ -225,6 +233,91 @@ def render_by_value(start_date: date, end_date: date) -> None:
         grid.filterable_table(filtered, currency_columns=("ACTUAL SALES",))
 
 
+@st.fragment()
+def render_by_offer(start_date: date, end_date: date) -> None:
+    df = db.run_query(
+        queries.PRODUCT_LINE_ITEMS,
+        {"start_date": start_date, "end_date": end_date},
+    )
+
+    if df.empty:
+        st.info("No sales for this date range yet.")
+        return
+
+    df = deals.classify(df)
+
+    total_revenue = df["Total"].sum()
+    by_offer = df.groupby("Offer Type")["Total"].sum()
+    power_revenue = by_offer.get("Power Deal", 0.0)
+    dow_revenue = by_offer.get("Deal of the Week", 0.0)
+    pct_on_offer = ((power_revenue + dow_revenue) / total_revenue * 100) if total_revenue else 0.0
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1.container(border=True):
+        st.metric("Total Revenue", f"KES {total_revenue:,.0f}")
+    with k2.container(border=True):
+        st.metric("Power Deal Revenue", f"KES {power_revenue:,.0f}")
+    with k3.container(border=True):
+        st.metric("Deal of the Week Revenue", f"KES {dow_revenue:,.0f}")
+    with k4.container(border=True):
+        st.metric("% of Sales on Offer", f"{pct_on_offer:,.1f}%")
+
+    st.caption(
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
+        "a sale only counts under an offer if the price actually charged matches that "
+        "offer's price — full-price sales of the same product are correctly excluded. "
+        "Power Deals apply to Kenya-side shops only; Deals of the Week vary by shop and "
+        "are curated monthly."
+    )
+
+    order = ["Power Deal", "Deal of the Week", "Regular"]
+    ordered = by_offer.reindex(order).fillna(0)
+
+    with st.container(border=True):
+        fig = go.Figure()
+        fig.add_bar(
+            x=ordered.index, y=ordered.values,
+            marker=dict(color=[OFFER_COLORS[o] for o in ordered.index], cornerradius=4),
+        )
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Revenue by Offer Type", height=360)
+        st.plotly_chart(fig, width="stretch")
+
+    offer_choice = st.selectbox(
+        "Offer Type", ["All Offer Types", "Power Deal", "Deal of the Week", "Regular"],
+        key="offer_type_filter",
+    )
+    filtered = df if offer_choice == "All Offer Types" else df[df["Offer Type"] == offer_choice]
+
+    if not filtered.empty and offer_choice != "All Offer Types":
+        with st.container(border=True):
+            top_products = (
+                filtered.groupby("Product", as_index=False)["Total"]
+                .sum()
+                .nlargest(15, "Total")
+                .sort_values("Total", ascending=True)
+            )
+            fig = go.Figure()
+            fig.add_bar(
+                y=top_products["Product"], x=top_products["Total"], orientation="h",
+                marker=dict(color=theme.sequential_colors(len(top_products)), cornerradius=4),
+            )
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(
+                title=f"Top Products — {offer_choice}",
+                height=max(360, 28 * len(top_products)),
+            )
+            st.plotly_chart(fig, width="stretch")
+
+    with st.container(border=True):
+        display_df = filtered.sort_values("Date", ascending=False)
+        if len(display_df) > MAX_TABLE_ROWS:
+            st.caption(f"Showing first {MAX_TABLE_ROWS:,} of {len(display_df):,} rows.")
+            display_df = display_df.head(MAX_TABLE_ROWS)
+        st.caption("Click a column header's filter icon to search or narrow that column.")
+        grid.filterable_table(display_df, currency_columns=("Price", "Total"))
+
+
 with tab_shop:
     render_by_shop(start_date, end_date)
 
@@ -233,3 +326,6 @@ with tab_category:
 
 with tab_value:
     render_by_value(start_date, end_date)
+
+with tab_offers:
+    render_by_offer(start_date, end_date)
