@@ -90,6 +90,17 @@ def render_stock() -> None:
         st.caption("Click a column header's filter icon to search or narrow that column.")
         grid.filterable_table(filtered)
 
+    st.subheader("Cumulative Stock by Product")
+    st.caption("Every location combined, highest quantity first.")
+
+    with st.container(border=True):
+        cumulative = (
+            df.groupby("Product", as_index=False)["Quantity"]
+            .sum()
+            .sort_values("Quantity", ascending=False)
+        )
+        grid.filterable_table(cumulative)
+
     st.subheader("Stock by Base Product")
     st.caption("Color variants rolled up into one product — e.g. Ace Black TT + Ace Grey + Ace Cracked all count as \"Ace\".")
 
