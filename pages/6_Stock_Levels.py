@@ -109,6 +109,7 @@ def render_stock() -> None:
 
     with st.container(border=True):
         per_color = df.groupby("Product", as_index=False)["Quantity"].sum()
+        per_color = per_color[per_color["Quantity"] > 0]
         per_color["Family"] = per_color["Product"].map(colors.strip_color)
 
         blocks = []
