@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
@@ -91,15 +92,32 @@ def render_stock() -> None:
         grid.filterable_table(filtered)
 
     st.subheader("Cumulative Stock by Product")
-    st.caption("Every location combined, highest quantity first.")
+    st.caption("Every location and color variant combined into one product — e.g. Ace Black TT + Ace Grey + Ace Cracked all count as \"Ace\" — highest quantity first.")
 
     with st.container(border=True):
+        cumulative = df.copy()
+        cumulative["Product"] = cumulative["Product"].map(colors.strip_color)
         cumulative = (
-            df.groupby("Product", as_index=False)["Quantity"]
+            cumulative.groupby("Product", as_index=False)["Quantity"]
             .sum()
             .sort_values("Quantity", ascending=False)
         )
         grid.filterable_table(cumulative)
+
+    st.subheader("Stock by Product & Color")
+    st.caption("Every color variant, every location combined — each product's colors followed by a TOTAL row before the next product.")
+
+    with st.container(border=True):
+        per_color = df.groupby("Product", as_index=False)["Quantity"].sum()
+        per_color["Family"] = per_color["Product"].map(colors.strip_color)
+
+        blocks = []
+        for family in sorted(per_color["Family"].unique()):
+            group = per_color.loc[per_color["Family"] == family, ["Product", "Quantity"]]
+            blocks.append(group.sort_values("Quantity", ascending=False))
+            blocks.append(pd.DataFrame([{"Product": f"{family} TOTAL", "Quantity": group["Quantity"].sum()}]))
+        by_color = pd.concat(blocks, ignore_index=True)
+        grid.filterable_table(by_color)
 
     st.subheader("Stock by Base Product")
     st.caption("Color variants rolled up into one product — e.g. Ace Black TT + Ace Grey + Ace Cracked all count as \"Ace\".")

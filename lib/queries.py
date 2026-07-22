@@ -1889,8 +1889,9 @@ WHERE sl.usage = 'internal'
     OR sl.complete_name ILIKE 'CBD/Stock%'
     OR sl.complete_name ILIKE 'WEB/Stock%' OR sl.complete_name ILIKE '%WEBSITE%'
   )
-  AND COALESCE(pt."name", '') NOT ILIKE '%+%'     -- exclude combo/bundle products
-  AND COALESCE(pt."name", '') NOT ILIKE '% or %'  -- exclude "X or Y" pick-one bundles
+  AND COALESCE(pt."name", '') NOT ILIKE '%+%'          -- exclude combo/bundle products
+  AND COALESCE(pt."name", '') NOT ILIKE '% or %'       -- exclude "X or Y" pick-one bundles
+  AND COALESCE(pt."name", '') NOT ILIKE '%Buy%Get%'    -- exclude "Buy X Get Y Free" bundles
 GROUP BY sl.complete_name, COALESCE(pt."name", pp.id::text)
 ORDER BY "Location", "Product";
 """
