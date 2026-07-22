@@ -65,7 +65,11 @@ def render_by_shop(start_date: date, end_date: date) -> None:
     with k4.container(border=True):
         st.metric("% Masterfile", f"{pct_masterfile:,.1f}%")
 
-    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
+        "excludes combo/bundle products entirely, so totals here read lower than "
+        "Sales Performance, which counts them."
+    )
 
     if detail.empty:
         return
@@ -125,7 +129,11 @@ def render_by_category(start_date: date, end_date: date) -> None:
     with k4.container(border=True):
         st.metric("Bag Styles Sold", f"{len(detail):,}")
 
-    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
+        "excludes combo/bundle products, and only counts products matching a known "
+        "bag category name — both make this total read lower than Sales Performance."
+    )
 
     if category_totals.empty:
         return
@@ -180,8 +188,9 @@ def render_by_value(start_date: date, end_date: date) -> None:
 
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "\"Actual Sales\" is KES-normalized (Uganda ÷29, Sinza ÷25); "
-        "Sales Amount and Total Sales are local currency for those two shops."
+        "\"Actual Sales\" is KES-normalized (Uganda ÷29, Sinza ÷25) and should match "
+        "Sales Performance's Revenue closely — combos only count here if flagged as a "
+        "combo in Odoo. Sales Amount and Total Sales are local currency for Uganda/Sinza."
     )
 
     if detail.empty:
