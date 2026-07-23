@@ -104,6 +104,8 @@ def render_customers(start_date: date, end_date: date) -> None:
             )
             st.dataframe(mismatches, width="stretch", hide_index=True)
 
+    df = df.drop(columns=["First Name"])  # internal-only, used above for gender matching
+
     locations = sorted(df["Location"].dropna().unique())
     selected_location = st.selectbox("Location", ["All Locations"] + locations, key="customers_location_filter")
     filtered = df if selected_location == "All Locations" else df[df["Location"] == selected_location]
