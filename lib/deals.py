@@ -2,10 +2,13 @@
 
 Both are static, monthly-curated promotions — lib/data/power_deals.csv and
 lib/data/deals_of_week.csv need a manual update each month (new products,
-new prices). A sale only counts under an offer if its actual unit price
-matches that offer's price exactly, within the given date's month for
-Deals of the Week — a full-price sale of the same product during the same
-window, or a leftover sale after the offer ends, is correctly excluded.
+new prices), sourced from the shared deals spreadsheet. A sale only counts
+under an offer if its actual unit price matches that offer's price exactly,
+within the given date's month for Deals of the Week — a full-price sale of
+the same product during the same window, or a leftover sale after the offer
+ends, is correctly excluded. A line priced at 0 is a product folded into a
+combo (its price lives on the combo's own line), not a standalone offer
+sale, so it's always excluded regardless of product match.
 """
 from __future__ import annotations
 
@@ -20,7 +23,13 @@ _DATA_DIR = Path(__file__).parent / "data"
 NAIROBI_TOWN_SHOPS = {"Hazina", "Hilton", "Ktda", "Starmall"}
 NON_KENYA_LOCATIONS = {"Uganda", "Sinza"}
 
-_PRICE_TOLERANCE = 0.5  # KES, to absorb rounding
+# Deal of the Week prices in the sheet match the POS almost exactly (~99% of
+# sales land within 0.01 KES), so a tight tolerance is correct there. Power
+# Deal products are consistently charged about 1 KES below the sheet's round
+# number (e.g. sheet says 1200, POS charges 1199 — charm pricing), so they
+# need a wider tolerance or nearly every Power Deal sale is missed.
+_DOW_PRICE_TOLERANCE = 0.5  # KES
+_POWER_PRICE_TOLERANCE = 1.5  # KES
 
 
 @st.cache_data(show_spinner=False)
@@ -56,8 +65,12 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     def _power_match(product: str, price: float) -> bool:
+        if price <= 0:
+            # Sold as part of a combo (price rolled into another line), not
+            # standalone at the offer price — never counts as an offer sale.
+            return False
         target = power_lookup.get(product)
-        return target is not None and abs(price - target) <= _PRICE_TOLERANCE
+        return target is not None and abs(price - target) <= _POWER_PRICE_TOLERANCE
 
     dow_lookup: dict[tuple[str, str, str], float] = {
         (row["month"], row["product"].lower(), row["location"]): row["price_now"]
@@ -65,12 +78,16 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     def _dow_match(month: str, product: str, location: str, price: float) -> bool:
+        if price <= 0:
+            # Sold as part of a combo (price rolled into another line), not
+            # standalone at the offer price — never counts as an offer sale.
+            return False
         candidates = [location]
         if location in NAIROBI_TOWN_SHOPS:
             candidates.append("Nairobi Town")
         for loc in candidates:
             target = dow_lookup.get((month, product, loc))
-            if target is not None and abs(price - target) <= _PRICE_TOLERANCE:
+            if target is not None and abs(price - target) <= _DOW_PRICE_TOLERANCE:
                 return True
         return False
 
