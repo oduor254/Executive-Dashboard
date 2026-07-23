@@ -70,11 +70,21 @@ def _worksheet() -> gspread.Worksheet:
 
 
 def _ensure_formatting(ws: gspread.Worksheet) -> None:
-    """Force consistent number formats so the sheet reads cleanly for
-    everyone, independent of whatever format a cell happened to inherit
-    (Sheets otherwise displays the same underlying integer as "1" in one
-    row and "1.00" in the next)."""
+    """Force consistent cell formats so the sheet reads cleanly and the
+    Date column round-trips reliably.
+
+    Sheets auto-detects a RAW-written string that looks like a date and
+    silently converts the cell to a real date value, displayed per the
+    spreadsheet's locale (e.g. "2026-07-23" becomes "07/23/2026" on some
+    writes, "23/07/2026" on others) — value_input_option="RAW" does not
+    stop this. That breaks the exact-string date match sync relies on to
+    find "already-synced" rows, which is what caused duplicate-looking
+    entries for the same day. Forcing the Date columns to plain TEXT
+    format stops Sheets from ever reinterpreting them.
+    """
     r = _DATA_START_ROW
+    ws.format(f"A{r}:A{_MAX_ROWS}", {"numberFormat": {"type": "TEXT"}})
+    ws.format(f"H{r}:H{_MAX_ROWS}", {"numberFormat": {"type": "TEXT"}})
     ws.format(f"D{r}:D{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
     ws.format(f"K{r}:K{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
     for rng in (f"E{r}:F{_MAX_ROWS}", f"L{r}:M{_MAX_ROWS}"):
