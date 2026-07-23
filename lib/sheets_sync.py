@@ -17,7 +17,7 @@ changes past numbers.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, timedelta
 
 import gspread
 import pandas as pd
@@ -29,7 +29,26 @@ from lib import config
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _MAX_ROWS = 5000  # generous headroom for a daily rollup table
 _DATA_START_ROW = 4
-_DATE_FMT = "%Y-%m-%d"
+
+# Sheets/Excel date serial epoch. Writing dates as this raw number (with the
+# Date column formatted as a real DATE type) sidesteps Sheets' string-to-date
+# guessing entirely — a plain number is never re-interpreted, whereas a
+# text string that looks like a date gets silently parsed and redisplayed
+# per whatever locale format Sheets picks that write, which previously
+# broke the exact-match lookup used to find "already-synced" rows.
+_SERIAL_EPOCH = date(1899, 12, 30)
+
+
+def _date_to_serial(d: date) -> int:
+    return (d - _SERIAL_EPOCH).days
+
+
+def _serial_to_date(value) -> date | None:
+    try:
+        return _SERIAL_EPOCH + timedelta(days=int(float(value)))
+    except (TypeError, ValueError):
+        return None
+
 
 _TABLES = {
     "Power Deal": ("A", "F"),
@@ -70,21 +89,13 @@ def _worksheet() -> gspread.Worksheet:
 
 
 def _ensure_formatting(ws: gspread.Worksheet) -> None:
-    """Force consistent cell formats so the sheet reads cleanly and the
-    Date column round-trips reliably.
-
-    Sheets auto-detects a RAW-written string that looks like a date and
-    silently converts the cell to a real date value, displayed per the
-    spreadsheet's locale (e.g. "2026-07-23" becomes "07/23/2026" on some
-    writes, "23/07/2026" on others) — value_input_option="RAW" does not
-    stop this. That breaks the exact-string date match sync relies on to
-    find "already-synced" rows, which is what caused duplicate-looking
-    entries for the same day. Forcing the Date columns to plain TEXT
-    format stops Sheets from ever reinterpreting them.
-    """
+    """Force consistent cell formats: Date columns as real dates (so the
+    team can filter/pivot on them elsewhere), Quantity as a plain integer,
+    Unit Price/Total as money — independent of whatever format a cell
+    happened to inherit."""
     r = _DATA_START_ROW
-    ws.format(f"A{r}:A{_MAX_ROWS}", {"numberFormat": {"type": "TEXT"}})
-    ws.format(f"H{r}:H{_MAX_ROWS}", {"numberFormat": {"type": "TEXT"}})
+    ws.format(f"A{r}:A{_MAX_ROWS}", {"numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"}})
+    ws.format(f"H{r}:H{_MAX_ROWS}", {"numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"}})
     ws.format(f"D{r}:D{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
     ws.format(f"K{r}:K{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
     for rng in (f"E{r}:F{_MAX_ROWS}", f"L{r}:M{_MAX_ROWS}"):
@@ -103,17 +114,18 @@ def _aggregate(df: pd.DataFrame, offer_type: str) -> pd.DataFrame:
     agg["Unit Price"] = (agg["Total"] / agg["Quantity"]).round(2)
     agg["Total"] = agg["Total"].round(2)
     agg["Quantity"] = agg["Quantity"].round().astype(int)
-    agg["Date"] = pd.to_datetime(agg["Date"]).dt.strftime(_DATE_FMT)
+    agg["Date"] = pd.to_datetime(agg["Date"]).dt.date
     agg = agg.rename(columns={"Location": "Shops"}).sort_values(["Date", "Shops", "Product"])
     return agg[_COLUMNS]
 
 
 def _to_row_values(df: pd.DataFrame) -> list[list]:
-    """Native Python types per cell — DataFrame.values.tolist() on mixed
-    int/float/str columns can inconsistently render ints as e.g. "6.00"
-    once round-tripped through numpy's common-dtype coercion."""
+    """Native Python types per cell, Date as a Sheets serial number —
+    DataFrame.values.tolist() on mixed int/float/str columns can
+    inconsistently render ints as e.g. "6.00" once round-tripped through
+    numpy's common-dtype coercion."""
     return [
-        [r["Date"], r["Shops"], r["Product"], int(r["Quantity"]), float(r["Unit Price"]), float(r["Total"])]
+        [_date_to_serial(r["Date"]), r["Shops"], r["Product"], int(r["Quantity"]), float(r["Unit Price"]), float(r["Total"])]
         for r in df.to_dict("records")
     ]
 
@@ -123,15 +135,16 @@ def _replace_range(
     start_date: date, end_date: date, new_rows: pd.DataFrame,
 ) -> int:
     r = _DATA_START_ROW
-    existing = ws.get(f"{col_start}{r}:{col_end}{_MAX_ROWS}") or []
+    existing = ws.get(
+        f"{col_start}{r}:{col_end}{_MAX_ROWS}", value_render_option="UNFORMATTED_VALUE"
+    ) or []
 
     kept: list[list] = []
     for row in existing:
-        if not row or not str(row[0]).strip():
+        if not row or row[0] in (None, ""):
             continue
-        try:
-            row_date = datetime.strptime(str(row[0]).strip(), _DATE_FMT).date()
-        except ValueError:
+        row_date = _serial_to_date(row[0])
+        if row_date is None:
             kept.append(row)  # not one of ours (or malformed) — leave it alone
             continue
         if not (start_date <= row_date <= end_date):
