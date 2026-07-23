@@ -49,6 +49,12 @@ def render_customers(start_date: date, end_date: date) -> None:
         st.info("No customer transactions for this date range yet.")
         return
 
+    # Gender comes straight from the system (staff have entered it directly
+    # since 2026-07-22). For records with nothing recorded, fall back to the
+    # name-based lookup as before; where something IS recorded, cross-check it
+    # against the name-based lookup to catch likely data-entry errors.
+    df["First Name"] = df["Name"].str.split().str[0].fillna("")
+    mismatches = gender.find_mismatches(df)
     df = gender.apply_gender_fallback(df)
 
     total_revenue = df["Total"].sum()
@@ -69,7 +75,11 @@ def render_customers(start_date: date, end_date: date) -> None:
     with k3.container(border=True):
         st.metric("Avg Spend / Customer", f"KES {avg_spend:,.0f}")
     with k4.container(border=True):
-        st.metric("Gender Identified", f"{pct_identified:,.1f}%")
+        st.metric(
+            "Gender Identified", f"{pct_identified:,.1f}%",
+            help="Recorded directly by staff since 2026-07-22; older/blank records "
+                 "fall back to a name-based guess.",
+        )
 
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · {len(df):,} line items")
 
@@ -81,6 +91,18 @@ def render_customers(start_date: date, end_date: date) -> None:
                 width="stretch",
                 hide_index=True,
             )
+
+    if not mismatches.empty:
+        with st.expander(
+            f"⚠️ {len(mismatches)} possible gender data-entry mismatches "
+            "(recorded gender disagrees with the name)", expanded=False,
+        ):
+            st.caption(
+                "Recorded Gender is what staff entered in the system; Name-Implied Gender is "
+                "what the name-based lookup expects. This doesn't change any recorded data — "
+                "it's a heads-up to double check these specific entries."
+            )
+            st.dataframe(mismatches, width="stretch", hide_index=True)
 
     locations = sorted(df["Location"].dropna().unique())
     selected_location = st.selectbox("Location", ["All Locations"] + locations, key="customers_location_filter")

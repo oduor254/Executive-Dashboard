@@ -662,6 +662,11 @@ product_color_split AS (
     FROM product_template pt
 ),
 
+-- Gender now comes straight from res_partner.gender (added to the data-entry
+-- UI 2026-07-22) — this CTE only needs to produce the cleaned full name.
+-- The old first-name-based gender lookup lives on in Python (lib/gender.py)
+-- as a fallback for records with no gender recorded, and as a cross-check
+-- against what's recorded (lib.gender.find_mismatches).
 customer_name_split AS (
     SELECT
         rp.id,
@@ -689,45 +694,12 @@ customer_name_split AS (
                     ' ', 'g'
                 )
             )
-        ) AS full_name,
-        INITCAP(
-            TRIM(SPLIT_PART(
-                REGEXP_REPLACE(
-                    REGEXP_REPLACE(
-                        REGEXP_REPLACE(
-                            REGEXP_REPLACE(
-                                REGEXP_REPLACE(
-                                    rp.name,
-                                    '\\([^)]*\\)',
-                                    '', 'g'
-                                ),
-                                '(?i)\\s*(prepayment fulfilled|prepayment|sasapay|sasa pay|fullfilled|fulfilled|prepay|coop|I&M|ncba|cash|pdq)\\s*',
-                                ' ', 'g'
-                            ),
-                            '[",;:'']',
-                            '', 'g'
-                        ),
-                        '\\s+[A-Z]\\s+',
-                        ' ', 'g'
-                    ),
-                    '\\s{2,}',
-                    ' ', 'g'
-                ),
-                ' ', 1
-            ))
-        ) AS first_name
+        ) AS full_name
     FROM res_partner rp
 )
 
 SELECT
     po.date_order::DATE                                             AS "Date",
-
-    -- First Name (handle empty cases with fallback to Name)
-    CASE
-        WHEN TRIM(cns.first_name) = '' OR cns.first_name IS NULL
-            THEN SPLIT_PART(cns.full_name, ' ', 1)
-        ELSE cns.first_name
-    END                                                             AS "First Name",
 
     -- Name (full customer name)
     CASE
@@ -736,199 +708,15 @@ SELECT
         ELSE cns.full_name
     END                                                             AS "Name",
 
-    -- Gender (derived from first name lookup)
-    COALESCE(
-        (SELECT gn.gender
-         FROM (VALUES
-            ('Faith','Female'),('Mercy','Female'),('Mary','Female'),('Esther','Female'),
-            ('Caroline','Female'),('Grace','Female'),('Ann','Female'),('Sharon','Female'),
-            ('Elizabeth','Female'),('Jane','Female'),('Lucy','Female'),('Irene','Female'),
-            ('Ruth','Female'),('Christine','Female'),('Maureen','Female'),('Lilian','Female'),
-            ('Cynthia','Female'),('Susan','Female'),('Margaret','Female'),('Catherine','Female'),
-            ('Rose','Female'),('Joyce','Female'),('Agnes','Female'),('Lydia','Female'),
-            ('Eunice','Female'),('Beatrice','Female'),('Winnie','Female'),('Pauline','Female'),
-            ('Janet','Female'),('Edith','Female'),('Doris','Female'),('Alice','Female'),
-            ('Purity','Female'),('Tabitha','Female'),('Naomi','Female'),('Priscilla','Female'),
-            ('Vivian','Female'),('Gladys','Female'),('Judith','Female'),('Dorothy','Female'),
-            ('Peninah','Female'),('Immaculate','Female'),('Jacqueline','Female'),
-            ('Josephine','Female'),('Bernadette','Female'),('Anastasia','Female'),
-            ('Veronica','Female'),('Perpetua','Female'),('Consolata','Female'),
-            ('Magdalene','Female'),('Philomena','Female'),
-            ('Wanjiru','Female'),('Wanjiku','Female'),('Wairimu','Female'),('Wangari','Female'),
-            ('Njeri','Female'),('Nyambura','Female'),('Mumbi','Female'),('Wambui','Female'),
-            ('Gathoni','Female'),('Wangui','Female'),('Waithira','Female'),
-            ('Akinyi','Female'),('Awino','Female'),('Atieno','Female'),('Adhiambo','Female'),
-            ('Anyango','Female'),('Akello','Female'),('Auma','Female'),('Awuor','Female'),
-            ('Nafula','Female'),('Nasimiyu','Female'),('Naliaka','Female'),('Nekesa','Female'),
-            ('Nanjala','Female'),('Zawadi','Female'),('Rehema','Female'),('Fatuma','Female'),
-            ('Amina','Female'),('Zuhura','Female'),('Halima','Female'),('Mwanaidi','Female'),
-            ('Saumu','Female'),('Rukia','Female'),('Mariamu','Female'),('Hadija','Female'),
-            ('Salma','Female'),('Zainab','Female'),('Khadija','Female'),('Asha','Female'),
-            ('Maryam','Female'),('Aisha','Female'),('Fatima','Female'),('Hawa','Female'),
-            ('Nancy','Female'),('Brenda','Female'),('Diana','Female'),('Stella','Female'),
-            ('Sandra','Female'),('Angela','Female'),('Sylvia','Female'),('Monica','Female'),
-            ('Rosemary','Female'),('Violet','Female'),('Claire','Female'),
-            ('Rachel','Female'),('Rebecca','Female'),('Deborah','Female'),('Miriam','Female'),
-            ('Hannah','Female'),('Sarah','Female'),('Leah','Female'),
-            ('Charity','Female'),('Hope','Female'),('Patience','Female'),('Prudence','Female'),
-            ('Happiness','Female'),('Blessing','Female'),('Precious','Female'),('Gift','Female'),
-            ('Millicent','Female'),('Mildred','Female'),('Linet','Female'),('Linda','Female'),
-            ('Lynette','Female'),('Lorna','Female'),('Sheila','Female'),('Sophia','Female'),
-            ('Samantha','Female'),('Stacy','Female'),('Stephanie','Female'),('Suzan','Female'),
-            ('Tina','Female'),('Tracy','Female'),('Valerie','Female'),('Yvonne','Female'),
-            ('Ivy','Female'),('Isabella','Female'),('Hellen','Female'),('Helen','Female'),
-            ('Harriet','Female'),('Florah','Female'),('Florence','Female'),('Fiona','Female'),
-            ('Eva','Female'),('Evelyn','Female'),('Edna','Female'),('Eleanor','Female'),
-            ('Dorcas','Female'),('Doreen','Female'),('Damaris','Female'),('Daisy','Female'),
-            ('Cecilia','Female'),('Carolyne','Female'),('Brigid','Female'),('Betty','Female'),
-            ('Barbara','Female'),('Audrey','Female'),('Annette','Female'),('Anita','Female'),
-            ('Amanda','Female'),('Abigail','Female'),('Maurine','Female'),('Peris','Female'),
-            ('Risper','Female'),('Ziporah','Female'),('Zipporah','Female'),
-            ('Teresia','Female'),('Teresa','Female'),('Triza','Female'),
-            ('Keziah','Female'),('Serah','Female'),('Selina','Female'),('Sabina','Female'),
-            ('Roselyn','Female'),('Phyllis','Female'),('Phoebe','Female'),('Olive','Female'),
-            ('Olivia','Female'),('Nelly','Female'),('Neema','Female'),
-            ('Nkirote','Female'),('Nkatha','Female'),('Moraa','Female'),('Kemunto','Female'),
-            ('Kerubo','Female'),('Kwamboka','Female'),('Gesare','Female'),('Nyaboke','Female'),
-            ('Akoth','Female'),('Juliet','Female'),('Julia','Female'),('June','Female'),
-            ('Jemimah','Female'),('Jedidah','Female'),('Imelda','Female'),
-            ('Scholastica','Female'),('Gentrix','Female'),('Gertrude','Female'),
-            ('Gloria','Female'),('Felicity','Female'),('Celestine','Female'),
-            ('Connie','Female'),('Cordelia','Female'),('Bahati','Female'),
-            ('Penelope','Female'),('Nadia','Female'),('Layla','Female'),('Yasmin','Female'),
-            ('Latifa','Female'),('Zoe','Female'),('Wendy','Female'),('Shirley','Female'),
-            ('Lynet','Female'),('Lucia','Female'),('Lisa','Female'),('Laura','Female'),
-            ('Roseline','Female'),('Nella','Female'),('Nellie','Female'),
-            ('Brian','Male'),('John','Male'),('Joseph','Male'),('Peter','Male'),
-            ('James','Male'),('David','Male'),('Dennis','Male'),('George','Male'),
-            ('Michael','Male'),('Paul','Male'),('Patrick','Male'),('Daniel','Male'),
-            ('Robert','Male'),('Richard','Male'),('Francis','Male'),('Charles','Male'),
-            ('Stephen','Male'),('Steven','Male'),('Philip','Male'),('Thomas','Male'),
-            ('William','Male'),('Henry','Male'),('Edward','Male'),('Andrew','Male'),
-            ('Anthony','Male'),('Mark','Male'),('Matthew','Male'),('Luke','Male'),
-            ('Simon','Male'),('Samuel','Male'),('Nathan','Male'),('Isaac','Male'),
-            ('Joshua','Male'),('Emmanuel','Male'),('Benjamin','Male'),('Jonathan','Male'),
-            ('Timothy','Male'),('Kevin','Male'),('Kenneth','Male'),('Leonard','Male'),
-            ('Lawrence','Male'),('Martin','Male'),('Moses','Male'),('Nicholas','Male'),
-            ('Oliver','Male'),('Oscar','Male'),('Raymond','Male'),('Ronald','Male'),
-            ('Sebastian','Male'),('Solomon','Male'),('Stanley','Male'),
-            ('Victor','Male'),('Vincent','Male'),('Walter','Male'),('Wesley','Male'),
-            ('Wilson','Male'),('Zachary','Male'),
-            ('Kamau','Male'),('Njoroge','Male'),('Mwangi','Male'),('Kariuki','Male'),
-            ('Githinji','Male'),('Kimani','Male'),('Kibet','Male'),('Kipchoge','Male'),
-            ('Kiptoo','Male'),('Kipkoech','Male'),('Kiprotich','Male'),
-            ('Mutua','Male'),('Musyoka','Male'),('Muema','Male'),('Muthomi','Male'),
-            ('Muthee','Male'),('Muriuki','Male'),('Mureithi','Male'),('Mugo','Male'),
-            ('Ochieng','Male'),('Otieno','Male'),('Omondi','Male'),('Owino','Male'),
-            ('Odongo','Male'),('Onyango','Male'),('Okoth','Male'),
-            ('Wekesa','Male'),('Simiyu','Male'),('Barasa','Male'),('Makokha','Male'),
-            ('Hassan','Male'),('Hussein','Male'),('Omar','Male'),('Ahmed','Male'),
-            ('Mohammed','Male'),('Ali','Male'),('Ibrahim','Male'),('Yusuf','Male'),
-            ('Salim','Male'),('Hamisi','Male'),('Rashid','Male'),('Bakari','Male'),
-            ('Juma','Male'),('Musa','Male'),('Issa','Male'),
-            ('Eric','Male'),('Erick','Male'),('Edwin','Male'),('Elijah','Male'),
-            ('Ezekiel','Male'),('Enoch','Male'),('Eliud','Male'),('Elias','Male'),
-            ('Felix','Male'),('Frank','Male'),('Franklin','Male'),('Frederick','Male'),
-            ('Geoffrey','Male'),('Gerald','Male'),('Gilbert','Male'),('Gordon','Male'),
-            ('Gregory','Male'),('Harrison','Male'),('Herbert','Male'),('Hillary','Male'),
-            ('Humphrey','Male'),('Ian','Male'),('Jack','Male'),('Jacob','Male'),
-            ('Jason','Male'),('Jeremy','Male'),('Jesse','Male'),('Joel','Male'),
-            ('Jordan','Male'),('Justin','Male'),('Julius','Male'),
-            ('Keith','Male'),('Kelvin','Male'),('Kennedy','Male'),('Ken','Male'),
-            ('Laban','Male'),('Lazarus','Male'),('Lewis','Male'),('Linus','Male'),
-            ('Mathew','Male'),('Maurice','Male'),('Melvin','Male'),('Milton','Male'),
-            ('Morris','Male'),('Newton','Male'),('Norman','Male'),
-            ('Phineas','Male'),('Pius','Male'),('Prince','Male'),
-            ('Raphael','Male'),('Reuben','Male'),('Rodgers','Male'),('Rogers','Male'),
-            ('Ronnie','Male'),('Roy','Male'),('Samson','Male'),('Shadrack','Male'),
-            ('Silas','Male'),('Suleiman','Male'),('Terence','Male'),('Terry','Male'),
-            ('Tom','Male'),('Tony','Male'),('Trevor','Male'),('Titus','Male'),
-            ('Valentine','Male'),('Wycliffe','Male'),('Wilfred','Male'),('Willis','Male'),
-            ('Collins','Male'),('Clinton','Male'),('Clement','Male'),('Christopher','Male'),
-            ('Calvin','Male'),('Caleb','Male'),('Boniface','Male'),('Benson','Male'),
-            ('Bernard','Male'),('Benedict','Male'),('Ben','Male'),
-            ('Alex','Male'),('Alexander','Male'),('Alfred','Male'),('Alvin','Male'),
-            ('Ambrose','Male'),('Amos','Male'),('Antony','Male'),('Arnold','Male'),
-            ('Arthur','Male'),('Augustine','Male'),('Austin','Male'),
-            ('Abel','Male'),('Abraham','Male'),('Adam','Male'),('Adrian','Male'),
-            ('Albert','Male'),('Allan','Male'),('Allen','Male'),
-            ('Dedan','Male'),('Dickson','Male'),('Douglas','Male'),('Duncan','Male'),
-            ('Cyrus','Male'),('Cornelius','Male'),('Conrad','Male'),('Cosmas','Male'),
-            ('Festus','Male'),('Gideon','Male'),('Godwin','Male'),('Godfrey','Male'),
-            ('Hezekiah','Male'),('Hosea','Male'),('Ignatius','Male'),('Isaiah','Male'),
-            ('Jeremiah','Male'),('Job','Male'),('Jonah','Male'),
-            ('Lameck','Male'),('Levy','Male'),('Lot','Male'),
-            ('Micah','Male'),('Mordecai','Male'),('Nahum','Male'),('Nehemiah','Male'),
-            ('Nicodemus','Male'),('Noah','Male'),('Obadiah','Male'),('Obed','Male'),
-            ('Reginald','Male'),('Renson','Male'),('Shaun','Male'),('Spencer','Male'),
-            ('Theodore','Male'),('Tobias','Male'),('Uriah','Male'),
-            ('Zadock','Male'),('Zedekiah','Male'),('Zephaniah','Male'),
-            ('Elvis','Male'),('Emeka','Male'),
-            ('Gichuru','Male'),('Nandwa','Male'),('Wangila','Male'),('Masinde','Male'),
-            ('Ogola','Male'),('Ogolla','Male'),
-            ('Chris','Male'),('Christian','Male'),('Bruce','Male'),('Brandon','Male'),
-            ('Bob','Male'),('Billy','Male'),('Ivan','Male'),('Jake','Male'),
-            ('Jefferson','Male'),('Jerome','Male'),('Kelly','Male'),
-            ('Livingstone','Male'),('Rex','Male'),('Roman','Male'),('Ruben','Male'),
-            ('Tobijah','Male'),('Ulrick','Male'),('Valentin','Male'),
-            ('Carol','Female'),
-            ('Nalongo','Female'),
-            ('Bethy','Female'),
-            ('Mabel','Female'),
-            ('Veron','Female'),
-            ('Abigael','Female'),
-            ('Cherotich','Female'),
-            ('Sharlet','Female'),
-            ('Curie','Female'),
-            ('Kezia','Female'),
-            ('Eglah','Female'),
-            ('Staicy','Female'),
-            ('Vanessa','Female'),
-            ('Furaha','Female'),
-            ('Halola','Female'),
-            ('Beth','Female'),
-            ('Vallary','Female'),
-            ('Elosy','Female'),
-            ('Cheryl','Female'),
-            ('Anne','Female'),
-            ('Dyna','Female'),
-            ('Mitchelle','Female'),
-            ('Patricia','Female'),
-            ('Philister','Female'),
-            ('Phelgona','Female'),
-            ('Everlyne','Female'),
-            ('Victoria','Female'),
-            ('KNOWLEDGE','Female'),
-            ('Tonny','Male'),
-            ('Benard','Male'),
-            ('Hawkins','Male'),
-            ('Kathimuuri','Male'),
-            ('Geofrey','Male'),
-            ('Edgar','Male'),
-            ('Mabeya','Male'),
-            ('Odhiambo','Male'),
-            ('Zacheus','Male'),
-            ('Neville','Male'),
-            ('Gabbs','Male')
-         ) AS gn(first_name, gender)
-         WHERE LOWER(gn.first_name) = LOWER(
-            CASE
-                WHEN TRIM(cns.first_name) = '' OR cns.first_name IS NULL
-                    THEN SPLIT_PART(cns.full_name, ' ', 1)
-                ELSE cns.first_name
-            END
-         )
-         LIMIT 1
-        ),
-        'N/A'
-    )                                                                   AS "Gender",
+    -- Gender — direct from partner record (male / female / corporate / blank)
+    COALESCE(INITCAP(NULLIF(TRIM(rp.gender), '')), 'N/A')           AS "Gender",
 
     -- Phone (clean special characters, return N/A if empty)
     CASE
         WHEN TRIM(
             CASE
-                WHEN rp.phone ~ '^\\+?(254|256|255)'
-                    THEN '0' || REGEXP_REPLACE(rp.phone, '^\\+?(254|256|255)', '')
+                WHEN rp.phone ~ '^\+?(254|256|255)'
+                    THEN '0' || REGEXP_REPLACE(rp.phone, '^\+?(254|256|255)', '')
                 ELSE rp.phone
             END
         ) = '' OR rp.phone IS NULL
@@ -936,8 +724,8 @@ SELECT
         ELSE TRIM(
             REGEXP_REPLACE(
                 CASE
-                    WHEN rp.phone ~ '^\\+?(254|256|255)'
-                        THEN '0' || REGEXP_REPLACE(rp.phone, '^\\+?(254|256|255)', '')
+                    WHEN rp.phone ~ '^\+?(254|256|255)'
+                        THEN '0' || REGEXP_REPLACE(rp.phone, '^\+?(254|256|255)', '')
                     ELSE rp.phone
                 END,
                 '[^0-9+]', '', 'g'
@@ -948,7 +736,7 @@ SELECT
     -- Product (remove discount text and color suffix)
     CASE
         WHEN pcs.matched_color IS NULL
-            THEN TRIM(REGEXP_REPLACE(pcs.full_name, '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'))
+            THEN TRIM(REGEXP_REPLACE(pcs.full_name, '^\d+(\.\d+)?\s*KES\s+discount.*$', '', 'i'))
         WHEN pcs.full_name = pcs.matched_color
             THEN pcs.full_name
         ELSE TRIM(REGEXP_REPLACE(
@@ -956,7 +744,7 @@ SELECT
                     pcs.full_name,
                     LENGTH(pcs.full_name) - LENGTH(pcs.matched_color)
                 ),
-                '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'
+                '^\d+(\.\d+)?\s*KES\s+discount.*$', '', 'i'
             ))
     END                                                             AS "Product",
 
@@ -969,7 +757,7 @@ SELECT
     -- Category
     CASE
         WHEN pc.name = 'All' THEN 'Combo'
-        ELSE TRIM(REGEXP_REPLACE(pc.name, '^[^/]+/\\s*', ''))
+        ELSE TRIM(REGEXP_REPLACE(pc.name, '^[^/]+/\s*', ''))
     END                                                             AS "Category",
 
     -- Location
@@ -979,7 +767,7 @@ SELECT
         ELSE INITCAP(
                 TRIM(REGEXP_REPLACE(
                     COALESCE(sw.name, sl.complete_name, 'N/A'),
-                    '\\s*Shop\\s*', '', 'gi'
+                    '\s*Shop\s*', '', 'gi'
                 ))
             )
     END                                                             AS "Location",
@@ -1043,10 +831,6 @@ WHERE
 
 ORDER BY po.date_order DESC;
 """
-
-# Production floor breakdown across 8 stages (materials -> drawn -> cut -> issued
-# -> WIP -> in-store -> repairs -> samples), one row per Metric + Product.
-# "Bags Cut in Store" is a live balance and intentionally ignores the date range.
 PRODUCTION_BREAKDOWN = """
 WITH date_range AS (
     SELECT

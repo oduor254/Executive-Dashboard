@@ -60,3 +60,40 @@ def top_unmapped_names(df: pd.DataFrame, n: int = 25) -> pd.Series:
     unresolved = df.loc[df["Gender"] == "N/A", "First Name"]
     unresolved = unresolved[unresolved.str.strip() != ""]
     return unresolved.value_counts().head(n)
+
+
+def find_mismatches(df: pd.DataFrame, n: int = 25) -> pd.DataFrame:
+    """Rows where the recorded Gender (keyed in by staff) disagrees with what
+    the name-based lookup would predict — e.g. "John" recorded as Female.
+
+    Only flags cases where the lookup has a confident, different opinion; a
+    recorded value with no lookup match at all isn't a mismatch. Meant as a
+    data-entry cross-check, not a correction — recorded values are never
+    changed based on this.
+    """
+    lookup = _load_lookup()
+    recorded = df[df["Gender"] != "N/A"].copy()
+    if recorded.empty:
+        return recorded.iloc[0:0][["Name", "First Name", "Gender"]].rename(
+            columns={"Gender": "Recorded Gender"}
+        ).assign(**{"Name-Implied Gender": [], "Occurrences": []})
+
+    recorded["Name-Implied Gender"] = recorded["First Name"].apply(_resolve, lookup=lookup)
+    mismatches = recorded[
+        (recorded["Name-Implied Gender"] != "N/A")
+        & (recorded["Name-Implied Gender"] != recorded["Gender"])
+    ]
+    if mismatches.empty:
+        return mismatches[["Name", "First Name", "Gender", "Name-Implied Gender"]].rename(
+            columns={"Gender": "Recorded Gender"}
+        ).assign(Occurrences=[])
+
+    summary = (
+        mismatches.groupby(["Name", "First Name", "Gender", "Name-Implied Gender"])
+        .size()
+        .reset_index(name="Occurrences")
+        .rename(columns={"Gender": "Recorded Gender"})
+        .sort_values("Occurrences", ascending=False)
+        .head(n)
+    )
+    return summary
