@@ -5,7 +5,10 @@ without opening the dashboard.
 The sheet has two tables side by side on one worksheet:
   Power Deals        columns A:F (Date, Shops, Product, Quantity, Unit Price, Total)
   Deal of the Week    columns H:M (same layout)
-Row 1 holds merged section titles, row 2 the column headers; data starts row 3.
+Row 1 is blank, row 2 holds merged section titles, row 3 the column
+headers; data starts row 4. (Row 1 doesn't come back from a plain CSV
+export of the sheet since it's fully blank — don't let that fool a future
+re-read into off-by-one-ing this again.)
 
 Sync is manual (a button on the Offer Types tab) and replaces rows for the
 dates being synced while leaving everything outside that range untouched —
@@ -25,6 +28,7 @@ from lib import config
 
 _SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 _MAX_ROWS = 5000  # generous headroom for a daily rollup table
+_DATA_START_ROW = 4
 _DATE_FMT = "%Y-%m-%d"
 
 _TABLES = {
@@ -70,9 +74,10 @@ def _ensure_formatting(ws: gspread.Worksheet) -> None:
     everyone, independent of whatever format a cell happened to inherit
     (Sheets otherwise displays the same underlying integer as "1" in one
     row and "1.00" in the next)."""
-    ws.format(f"D3:D{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
-    ws.format(f"K3:K{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
-    for rng in (f"E3:F{_MAX_ROWS}", f"L3:M{_MAX_ROWS}"):
+    r = _DATA_START_ROW
+    ws.format(f"D{r}:D{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
+    ws.format(f"K{r}:K{_MAX_ROWS}", {"numberFormat": {"type": "NUMBER", "pattern": "0"}})
+    for rng in (f"E{r}:F{_MAX_ROWS}", f"L{r}:M{_MAX_ROWS}"):
         ws.format(rng, {"numberFormat": {"type": "NUMBER", "pattern": "#,##0.00"}})
 
 
@@ -107,7 +112,8 @@ def _replace_range(
     ws: gspread.Worksheet, col_start: str, col_end: str,
     start_date: date, end_date: date, new_rows: pd.DataFrame,
 ) -> int:
-    existing = ws.get(f"{col_start}3:{col_end}{_MAX_ROWS}") or []
+    r = _DATA_START_ROW
+    existing = ws.get(f"{col_start}{r}:{col_end}{_MAX_ROWS}") or []
 
     kept: list[list] = []
     for row in existing:
@@ -124,9 +130,9 @@ def _replace_range(
     merged = kept + _to_row_values(new_rows)
     merged.sort(key=lambda r: (r[0], r[1] if len(r) > 1 else "", r[2] if len(r) > 2 else ""))
 
-    ws.batch_clear([f"{col_start}3:{col_end}{_MAX_ROWS}"])
+    ws.batch_clear([f"{col_start}{r}:{col_end}{_MAX_ROWS}"])
     if merged:
-        ws.update(f"{col_start}3", merged, value_input_option="RAW")
+        ws.update(range_name=f"{col_start}{r}", values=merged, value_input_option="RAW")
     return len(new_rows)
 
 
