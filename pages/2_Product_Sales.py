@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, deals, filters, grid, queries, theme
+from lib import auth, db, deals, filters, grid, queries, sheets_sync, theme
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
 
@@ -262,13 +262,27 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     with k4.container(border=True):
         st.metric("% of Sales on Offer", f"{pct_on_offer:,.1f}%")
 
-    st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "a sale only counts under an offer if the price actually charged matches that "
-        "offer's price — full-price sales of the same product are correctly excluded. "
-        "Power Deals apply to Kenya-side shops only; Deals of the Week vary by shop and "
-        "are curated monthly."
-    )
+    col_caption, col_sync = st.columns([3, 1])
+    with col_caption:
+        st.caption(
+            f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
+            "a sale only counts under an offer if the price actually charged is below "
+            "that offer's original price — full-price sales of the same product are "
+            "correctly excluded. Power Deals apply to Kenya-side shops only; Deals of "
+            "the Week vary by shop and are curated monthly."
+        )
+    with col_sync:
+        if st.button("📤 Sync to Sheet", key="sync_deals_sheet", width="stretch"):
+            with st.spinner("Writing to the deals tracker sheet…"):
+                try:
+                    written = sheets_sync.sync(df, start_date, end_date)
+                    st.success(
+                        f"Synced {start_date:%b %d} – {end_date:%b %d}: "
+                        f"{written['Power Deal']} Power Deal row(s), "
+                        f"{written['Deal of the Week']} Deal of the Week row(s)."
+                    )
+                except Exception as exc:
+                    st.error(f"Sync failed: {exc}")
 
     order = ["Power Deal", "Deal of the Week", "Regular"]
     ordered = by_offer.reindex(order).fillna(0)
