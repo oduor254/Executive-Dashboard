@@ -58,7 +58,6 @@ _DATA_DIR = Path(__file__).parent / "data"
 # Deals of the Week: these four Nairobi CBD shops share one set of deals.
 NAIROBI_TOWN_SHOPS = {"Hazina", "Hilton", "Ktda", "Starmall"}
 NON_KENYA_LOCATIONS = {"Uganda", "Sinza"}
-COUNTRY_BY_LOCATION = {"Uganda": "Uganda", "Sinza": "Tanzania"}
 
 _COMBO_BUY_GET = r"buy.*get"
 
@@ -97,13 +96,16 @@ def _combo_bag_count(product: str) -> int:
 
 
 def country_of(location: str) -> str:
-    return COUNTRY_BY_LOCATION.get(location, "Kenya")
+    # Uganda and Sinza are each their own single-shop country label; every
+    # other location rolls up into "Kenya". "Sinza" (not "Tanzania") for
+    # uniformity with how Goods in Transit already labels this channel.
+    return location if location in NON_KENYA_LOCATIONS else "Kenya"
 
 
 def classify(df: pd.DataFrame) -> pd.DataFrame:
     """Add "Offer Type" ("Power Deal", "Deal of the Week", "Singles",
     "Special Offers", "Combo", or "Regular") and "Country" ("Kenya",
-    "Uganda", or "Tanzania") columns.
+    "Uganda", or "Sinza") columns.
 
     Expects one row per sold line with Date, Product, Location, Price
     (unit price) columns — matches lib.queries.PRODUCT_LINE_ITEMS.

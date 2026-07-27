@@ -262,7 +262,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     combo_qty = by_offer_qty.get("Combo", 0.0)
     regular_revenue = by_offer_revenue.get("Regular", 0.0)
     # Anything that isn't a full-price sale or a bundle counts as "on offer" —
-    # covers Power Deal/Deal of the Week plus Uganda/Tanzania's Singles and
+    # covers Power Deal/Deal of the Week plus Uganda/Sinza's Singles and
     # Special Offers, without having to name every category here.
     pct_on_offer = ((total_revenue - regular_revenue - combo_revenue) / total_revenue * 100) if total_revenue else 0.0
 
@@ -289,7 +289,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             "a sale only counts under an offer if the price actually charged is below "
             "that offer's original price — full-price sales of the same product are "
             "correctly excluded. Power Deals apply to Kenya-side shops only; Deals of "
-            "the Week vary by shop and are curated monthly. Uganda and Tanzania use "
+            "the Week vary by shop and are curated monthly. Uganda and Sinza use "
             "their own sheets' category names — Singles and Special Offers — rather "
             "than Deal of the Week."
         )
@@ -328,7 +328,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         )
     with col_country:
         country_choice = st.selectbox(
-            "Country", ["All Countries", "Kenya", "Uganda", "Tanzania"],
+            "Country", ["All Countries", "Kenya", "Uganda", "Sinza"],
             key="offer_type_country_filter",
         )
     with col_location:
