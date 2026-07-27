@@ -299,7 +299,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                     st.error(f"Sync failed: {exc}")
 
     order = ["Power Deal", "Deal of the Week", "Combo", "Regular"]
-    ordered = by_offer.reindex(order).fillna(0)
+    ordered = by_offer_revenue.reindex(order).fillna(0)
 
     with st.container(border=True):
         fig = go.Figure()
