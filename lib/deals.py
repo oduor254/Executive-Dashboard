@@ -3,7 +3,15 @@ Regular sale.
 
 Both are static, monthly-curated promotions — lib/data/power_deals.csv and
 lib/data/deals_of_week.csv need a manual update each month (new products,
-new prices), sourced from the shared deals spreadsheet.
+new prices), sourced from the shared deals spreadsheet's Kenya, Uganda, and
+Tanzania tabs. Power Deals are Kenya-only (the other two countries' sheets
+don't have a location/month-independent "standing discount" list — every
+Uganda/Tanzania row is itself month-specific, so it's Deal-of-the-Week
+shaped). Deal of the Week rows for Uganda ("Uganda") and Tanzania ("Sinza")
+carry prices already converted to KES-equivalent — Uganda ÷29, Tanzania
+÷25 — matching the same conversion PRODUCT_LINE_ITEMS applies to the
+actual sale price, so the comparison in _is_discounted stays apples to
+apples regardless of which country a sale happened in.
 
 A sale counts under an offer if the product matches (and, for Deals of the
 Week, the location and the sale's month match too) AND the price actually
@@ -46,6 +54,7 @@ _DATA_DIR = Path(__file__).parent / "data"
 # Deals of the Week: these four Nairobi CBD shops share one set of deals.
 NAIROBI_TOWN_SHOPS = {"Hazina", "Hilton", "Ktda", "Starmall"}
 NON_KENYA_LOCATIONS = {"Uganda", "Sinza"}
+COUNTRY_BY_LOCATION = {"Uganda": "Uganda", "Sinza": "Tanzania"}
 
 _COMBO_BUY_GET = r"buy.*get"
 
@@ -83,9 +92,13 @@ def _combo_bag_count(product: str) -> int:
     return 1  # a plain "X or Y" choose-one bundle
 
 
+def country_of(location: str) -> str:
+    return COUNTRY_BY_LOCATION.get(location, "Kenya")
+
+
 def classify(df: pd.DataFrame) -> pd.DataFrame:
-    """Add an "Offer Type" column: "Power Deal", "Deal of the Week", "Combo",
-    or "Regular".
+    """Add "Offer Type" ("Power Deal", "Deal of the Week", "Combo", or
+    "Regular") and "Country" ("Kenya", "Uganda", or "Tanzania") columns.
 
     Expects one row per sold line with Date, Product, Location, Price
     (unit price) columns — matches lib.queries.PRODUCT_LINE_ITEMS.
@@ -93,6 +106,7 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if df.empty:
         df["Offer Type"] = pd.Series(dtype="object")
+        df["Country"] = pd.Series(dtype="object")
         return df
 
     power = _load_power_deals()
@@ -147,4 +161,6 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     df["Offer Type"] = offer
 
     df.loc[is_combo, "Quantity"] = df.loc[is_combo, "Quantity"] * df.loc[is_combo, "Product"].apply(_combo_bag_count)
+
+    df["Country"] = df["Location"].apply(country_of)
     return df

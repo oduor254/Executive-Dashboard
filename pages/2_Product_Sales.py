@@ -311,11 +311,16 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         fig.update_layout(title="Revenue by Offer Type", height=360)
         st.plotly_chart(fig, width="stretch")
 
-    col_offer, col_location = st.columns(2)
+    col_offer, col_country, col_location = st.columns(3)
     with col_offer:
         offer_choice = st.selectbox(
             "Offer Type", ["All Offer Types", "Power Deal", "Deal of the Week", "Combo", "Regular"],
             key="offer_type_filter",
+        )
+    with col_country:
+        country_choice = st.selectbox(
+            "Country", ["All Countries", "Kenya", "Uganda", "Tanzania"],
+            key="offer_type_country_filter",
         )
     with col_location:
         locations = sorted(df["Location"].dropna().unique())
@@ -324,6 +329,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         )
 
     filtered = df if offer_choice == "All Offer Types" else df[df["Offer Type"] == offer_choice]
+    filtered = filtered if country_choice == "All Countries" else filtered[filtered["Country"] == country_choice]
     filtered = filtered if location_choice == "All Locations" else filtered[filtered["Location"] == location_choice]
 
     if not filtered.empty and offer_choice != "All Offer Types":
@@ -349,7 +355,8 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     if not filtered.empty:
         with st.container(border=True):
             st.caption(
-                f"Bags sold — {offer_choice} · {location_choice} — with total quantity and revenue per bag."
+                f"Bags sold — {offer_choice} · {country_choice} · {location_choice} — "
+                "with total quantity and revenue per bag."
             )
             bag_summary = (
                 filtered.groupby("Product", as_index=False)
