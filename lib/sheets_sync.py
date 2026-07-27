@@ -17,7 +17,7 @@ changes past numbers.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import gspread
 import pandas as pd
@@ -48,6 +48,51 @@ def _serial_to_date(value) -> date | None:
         return _SERIAL_EPOCH + timedelta(days=int(float(value)))
     except (TypeError, ValueError):
         return None
+
+
+def _coerce_date(value) -> date | None:
+    """Parse a Date cell that should be a serial number but, from an older
+    buggy version of this sync, might still be leftover text in one of
+    several formats."""
+    d = _serial_to_date(value)
+    if d is not None:
+        return d
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _coerce_number(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return float(str(value).replace(",", "").strip())
+
+
+def _normalize_row(row: list) -> list | None:
+    """Re-derive a canonical [serial, shop, product, qty, price, total] row
+    from whatever's actually in the sheet, so a row written by an earlier,
+    buggier version of this sync (comma-formatted text, a different date
+    string format, ...) gets self-healed instead of silently persisting
+    forever — every "kept" row gets re-validated on every sync, not just
+    freshly-computed ones. Returns None if the row isn't recoverable (kept
+    as-is by the caller rather than dropped, since that should never
+    happen for a sheet only this code writes to)."""
+    if not row or len(row) < 6:
+        return None
+    row_date = _coerce_date(row[0])
+    if row_date is None:
+        return None
+    try:
+        qty = int(round(_coerce_number(row[3])))
+        price = round(_coerce_number(row[4]), 2)
+        total = round(_coerce_number(row[5]), 2)
+    except (TypeError, ValueError):
+        return None
+    return [_date_to_serial(row_date), str(row[1]).strip(), str(row[2]).strip(), qty, price, total]
 
 
 _TABLES = {
@@ -143,15 +188,24 @@ def _replace_range(
     for row in existing:
         if not row or row[0] in (None, ""):
             continue
-        row_date = _serial_to_date(row[0])
-        if row_date is None:
-            kept.append(row)  # not one of ours (or malformed) — leave it alone
+        normalized = _normalize_row(row)
+        if normalized is None:
+            kept.append(row)  # not recoverable — leave it exactly as found
             continue
+        row_date = _serial_to_date(normalized[0])
         if not (start_date <= row_date <= end_date):
-            kept.append(row)
+            kept.append(normalized)
 
     merged = kept + _to_row_values(new_rows)
-    merged.sort(key=lambda r: (r[0], r[1] if len(r) > 1 else "", r[2] if len(r) > 2 else ""))
+    # type_rank keeps numeric dates and any (should be impossible) leftover
+    # non-numeric ones in separate comparison groups, so one bad row can
+    # never crash the sort for the whole table with an int-vs-str error.
+    merged.sort(key=lambda r: (
+        0 if isinstance(r[0], (int, float)) else 1,
+        r[0],
+        r[1] if len(r) > 1 else "",
+        r[2] if len(r) > 2 else "",
+    ))
 
     ws.batch_clear([f"{col_start}{r}:{col_end}{_MAX_ROWS}"])
     if merged:
