@@ -25,6 +25,13 @@ word "or", or "Buy...Get". Checked independently of, and takes priority
 over, the Power Deal / Deal of the Week price match — a bundle name never
 equals a single deal product's name, but this keeps it that way even if
 one ever coincidentally did.
+
+For a combo row, Quantity is rewritten to the actual number of bags in the
+bundle rather than the number of bundles sold: each "+"-separated segment
+of the name is one bag, and an "or" inside a segment is a choice of which
+ONE bag fills that slot, not an addition. "Safiri Travel + Standard Travel
+or Antitheft Backpack" is 2 bags — Safiri Travel, plus whichever of
+Standard/Antitheft was actually chosen — not 3.
 """
 from __future__ import annotations
 
@@ -65,6 +72,15 @@ def _is_discounted(price: float, original: float) -> bool:
 
 def _is_combo(product: str) -> bool:
     return "+" in product or " or " in product or bool(re.search(_COMBO_BUY_GET, product))
+
+
+def _combo_bag_count(product: str) -> int:
+    """How many bags one bundle actually contains — see module docstring."""
+    if "+" in product:
+        return len([segment for segment in product.split("+") if segment.strip()])
+    if re.search(_COMBO_BUY_GET, product):
+        return 2  # "Buy X Get Y Free" without a "+" is still two bags
+    return 1  # a plain "X or Y" choose-one bundle
 
 
 def classify(df: pd.DataFrame) -> pd.DataFrame:
@@ -129,4 +145,6 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     offer[is_power] = "Power Deal"  # power deal wins if a row somehow matches both
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     df["Offer Type"] = offer
+
+    df.loc[is_combo, "Quantity"] = df.loc[is_combo, "Quantity"] * df.loc[is_combo, "Product"].apply(_combo_bag_count)
     return df

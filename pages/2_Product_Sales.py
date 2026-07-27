@@ -249,19 +249,31 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     df = deals.classify(df)
 
     total_revenue = df["Total"].sum()
-    by_offer = df.groupby("Offer Type")["Total"].sum()
-    power_revenue = by_offer.get("Power Deal", 0.0)
-    dow_revenue = by_offer.get("Deal of the Week", 0.0)
+    total_qty = df["Quantity"].sum()
+    by_offer_revenue = df.groupby("Offer Type")["Total"].sum()
+    by_offer_qty = df.groupby("Offer Type")["Quantity"].sum()
+    power_revenue = by_offer_revenue.get("Power Deal", 0.0)
+    power_qty = by_offer_qty.get("Power Deal", 0.0)
+    dow_revenue = by_offer_revenue.get("Deal of the Week", 0.0)
+    dow_qty = by_offer_qty.get("Deal of the Week", 0.0)
+    combo_revenue = by_offer_revenue.get("Combo", 0.0)
+    combo_qty = by_offer_qty.get("Combo", 0.0)
     pct_on_offer = ((power_revenue + dow_revenue) / total_revenue * 100) if total_revenue else 0.0
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     with k1.container(border=True):
-        st.metric("Total Revenue", f"KES {total_revenue:,.0f}")
+        st.metric("Total Revenue", f"KES {total_revenue:,.0f}", f"{total_qty:,.0f} bags sold", delta_color="off")
     with k2.container(border=True):
-        st.metric("Power Deal Revenue", f"KES {power_revenue:,.0f}")
+        st.metric("Power Deal Revenue", f"KES {power_revenue:,.0f}", f"{power_qty:,.0f} bags sold", delta_color="off")
     with k3.container(border=True):
-        st.metric("Deal of the Week Revenue", f"KES {dow_revenue:,.0f}")
+        st.metric("Deal of the Week Revenue", f"KES {dow_revenue:,.0f}", f"{dow_qty:,.0f} bags sold", delta_color="off")
     with k4.container(border=True):
+        st.metric(
+            "Combo Revenue", f"KES {combo_revenue:,.0f}", f"{combo_qty:,.0f} bags sold", delta_color="off",
+            help="Bags sold counts each bag in the bundle, not each bundle — "
+                 "e.g. \"Safiri Travel + Standard Travel or Antitheft Backpack\" is 2 bags.",
+        )
+    with k5.container(border=True):
         st.metric("% of Sales on Offer", f"{pct_on_offer:,.1f}%")
 
     col_caption, col_sync = st.columns([3, 1])
