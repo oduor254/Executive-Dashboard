@@ -34,6 +34,8 @@ MAX_TABLE_ROWS = 5000
 OFFER_COLORS = {
     "Power Deal": theme.CATEGORICAL[0],
     "Deal of the Week": theme.CATEGORICAL[2],
+    "Singles": theme.CATEGORICAL[3],
+    "Special Offers": theme.CATEGORICAL[6],
     "Combo": theme.CATEGORICAL[4],
     "Regular": theme.TEXT_MUTED,
 }
@@ -258,7 +260,11 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     dow_qty = by_offer_qty.get("Deal of the Week", 0.0)
     combo_revenue = by_offer_revenue.get("Combo", 0.0)
     combo_qty = by_offer_qty.get("Combo", 0.0)
-    pct_on_offer = ((power_revenue + dow_revenue) / total_revenue * 100) if total_revenue else 0.0
+    regular_revenue = by_offer_revenue.get("Regular", 0.0)
+    # Anything that isn't a full-price sale or a bundle counts as "on offer" —
+    # covers Power Deal/Deal of the Week plus Uganda/Tanzania's Singles and
+    # Special Offers, without having to name every category here.
+    pct_on_offer = ((total_revenue - regular_revenue - combo_revenue) / total_revenue * 100) if total_revenue else 0.0
 
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1.container(border=True):
@@ -283,7 +289,9 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             "a sale only counts under an offer if the price actually charged is below "
             "that offer's original price — full-price sales of the same product are "
             "correctly excluded. Power Deals apply to Kenya-side shops only; Deals of "
-            "the Week vary by shop and are curated monthly."
+            "the Week vary by shop and are curated monthly. Uganda and Tanzania use "
+            "their own sheets' category names — Singles and Special Offers — rather "
+            "than Deal of the Week."
         )
     with col_sync:
         if st.button("📤 Sync to Sheet", key="sync_deals_sheet", width="stretch"):
@@ -298,7 +306,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 except Exception as exc:
                     st.error(f"Sync failed: {exc}")
 
-    order = ["Power Deal", "Deal of the Week", "Combo", "Regular"]
+    order = ["Power Deal", "Deal of the Week", "Singles", "Special Offers", "Combo", "Regular"]
     ordered = by_offer_revenue.reindex(order).fillna(0)
 
     with st.container(border=True):
@@ -314,7 +322,8 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     col_offer, col_country, col_location = st.columns(3)
     with col_offer:
         offer_choice = st.selectbox(
-            "Offer Type", ["All Offer Types", "Power Deal", "Deal of the Week", "Combo", "Regular"],
+            "Offer Type",
+            ["All Offer Types", "Power Deal", "Deal of the Week", "Singles", "Special Offers", "Combo", "Regular"],
             key="offer_type_filter",
         )
     with col_country:

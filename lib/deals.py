@@ -1,17 +1,21 @@
-"""Classify each sale line as a Power Deal, Deal of the Week, Combo, or
-Regular sale.
+"""Classify each sale line as a Power Deal, Deal of the Week, Singles,
+Special Offers, Combo, or Regular sale.
 
 Both are static, monthly-curated promotions — lib/data/power_deals.csv and
 lib/data/deals_of_week.csv need a manual update each month (new products,
 new prices), sourced from the shared deals spreadsheet's Kenya, Uganda, and
 Tanzania tabs. Power Deals are Kenya-only (the other two countries' sheets
 don't have a location/month-independent "standing discount" list — every
-Uganda/Tanzania row is itself month-specific, so it's Deal-of-the-Week
-shaped). Deal of the Week rows for Uganda ("Uganda") and Tanzania ("Sinza")
-carry prices already converted to KES-equivalent — Uganda ÷29, Tanzania
-÷25 — matching the same conversion PRODUCT_LINE_ITEMS applies to the
-actual sale price, so the comparison in _is_discounted stays apples to
-apples regardless of which country a sale happened in.
+Uganda/Tanzania row is itself month-specific, so it's shaped like Deal of
+the Week even though it isn't labeled that). deals_of_week.csv carries its
+own "type" per row so the output label matches each country's own naming
+rather than being forced into "Deal of the Week": Kenya rows are "Deal of
+the Week"; Uganda rows (its sheet has one undifferentiated list) and
+Tanzania's "Singles" section are "Singles"; Tanzania's "Special Offers"
+section is "Special Offers". Uganda/Tanzania prices are already converted
+to KES-equivalent — Uganda ÷29, Tanzania ÷25 — matching the same
+conversion PRODUCT_LINE_ITEMS applies to the actual sale price, so the
+comparison in _is_discounted stays apples to apples regardless of country.
 
 A sale counts under an offer if the product matches (and, for Deals of the
 Week, the location and the sale's month match too) AND the price actually
@@ -97,8 +101,9 @@ def country_of(location: str) -> str:
 
 
 def classify(df: pd.DataFrame) -> pd.DataFrame:
-    """Add "Offer Type" ("Power Deal", "Deal of the Week", "Combo", or
-    "Regular") and "Country" ("Kenya", "Uganda", or "Tanzania") columns.
+    """Add "Offer Type" ("Power Deal", "Deal of the Week", "Singles",
+    "Special Offers", "Combo", or "Regular") and "Country" ("Kenya",
+    "Uganda", or "Tanzania") columns.
 
     Expects one row per sold line with Date, Product, Location, Price
     (unit price) columns — matches lib.queries.PRODUCT_LINE_ITEMS.
@@ -124,38 +129,39 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         original = power_lookup.get(product)
         return original is not None and _is_discounted(price, original)
 
-    dow_lookup: dict[tuple[str, str, str], float] = {
-        (row["month"], row["product"].lower(), row["location"]): row["price_then"]
+    dow_lookup: dict[tuple[str, str, str], tuple[float, str]] = {
+        (row["month"], row["product"].lower(), row["location"]): (row["price_then"], row["type"])
         for _, row in dow.iterrows()
     }
 
-    def _dow_match(month: str, product: str, location: str, price: float) -> bool:
+    def _dow_match(month: str, product: str, location: str, price: float) -> str | None:
         candidates = [location]
         if location in NAIROBI_TOWN_SHOPS:
             candidates.append("Nairobi Town")
         for loc in candidates:
-            original = dow_lookup.get((month, product, loc))
-            if original is not None and _is_discounted(price, original):
-                return True
-        return False
+            entry = dow_lookup.get((month, product, loc))
+            if entry is not None and _is_discounted(price, entry[0]):
+                return entry[1]  # the row's own type: Deal of the Week / Singles / Special Offers
+        return None
 
     is_power = pd.Series(
         [_power_match(p, price) for p, price in zip(product_key, df["Price"])],
         index=df.index,
     ) & is_kenya
 
-    is_dow = pd.Series(
+    dow_type = pd.Series(
         [
             _dow_match(m, p, loc, price)
             for m, p, loc, price in zip(month_key, product_key, df["Location"], df["Price"])
         ],
         index=df.index,
     )
+    is_dow = dow_type.notna()
 
     is_combo = df["Product"].str.strip().str.lower().apply(_is_combo)
 
     offer = pd.Series("Regular", index=df.index)
-    offer[is_dow] = "Deal of the Week"
+    offer[is_dow] = dow_type[is_dow]
     offer[is_power] = "Power Deal"  # power deal wins if a row somehow matches both
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     df["Offer Type"] = offer

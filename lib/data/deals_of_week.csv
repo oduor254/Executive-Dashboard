@@ -1,284 +1,284 @@
-month,product,location,price_then,price_now
-April,Antitheft,Sinza,2700.0,2300.0
-April,Arm Band,Sinza,1300.0,900.0
-April,Big Man Bag,Sinza,2200.0,1800.0
-April,Cess HB,Sinza,3600.0,3200.0
-April,Claire Handbag,Sinza,3100.0,2700.0
-April,Double Press,Sinza,2700.0,2300.0
-April,Elyse,Sinza,3200.0,2800.0
-April,Kate,Sinza,1700.0,1300.0
-April,Lola,Sinza,2200.0,1800.0
-April,Mandy HB,Sinza,1600.0,1200.0
-April,Mega,Sinza,3500.0,3100.0
-April,Mini Manbag,Sinza,1700.0,1300.0
-April,Mini Umbra,Sinza,1700.0,1300.0
-April,Moon Bag,Sinza,1700.0,1300.0
-April,Standard Travel,Sinza,2700.0,2300.0
-April,Travolta,Sinza,3700.0,3300.0
-April,Trecento,Sinza,2200.0,1800.0
-April,Wander Luxe,Sinza,3200.0,2800.0
-April,Washbag,Sinza,1700.0,1300.0
-April,Zelus,Sinza,2700.0,2300.0
-February,Amaya,Sinza,3600.0,2600.0
-February,Antitheft,Sinza,2700.0,2300.0
-February,Arm Band,Sinza,1300.0,900.0
-February,Big Man Bag,Sinza,2200.0,1800.0
-February,Brief Case,Sinza,2900.0,2500.0
-February,Elyse,Sinza,3200.0,2800.0
-February,Fabela,Sinza,2500.0,2100.0
-February,Gym Bag,Sinza,2700.0,2300.0
-February,Jade,Sinza,3200.0,2800.0
-February,Jumbo,Sinza,3700.0,3300.0
-February,Kate,Sinza,1700.0,1300.0
-February,Man Bag,Sinza,1700.0,1300.0
-February,Mandy HB,Sinza,2100.0,1700.0
-February,Mega,Sinza,3100.0,2700.0
-February,Mini Umbra,Sinza,1700.0,1000.0
-February,Mini Zuri,Sinza,2700.0,2300.0
-February,Moon Bag,Sinza,1700.0,1300.0
-February,Nizana,Sinza,1700.0,1300.0
-February,Sleeve 2,Sinza,1700.0,800.0
-February,Standard Travel,Sinza,2700.0,2300.0
-January,Aria Sling,Sinza,1700.0,1300.0
-January,Avana HB,Sinza,2200.0,1800.0
-January,Bonita,Sinza,4000.0,3400.0
-January,Brief Case,Sinza,2900.0,2500.0
-January,Celine Sling Bag,Sinza,2200.0,1800.0
-January,Chase,Sinza,1600.0,1200.0
-January,Code 3,Sinza,2200.0,1800.0
-January,Elyse,Sinza,3100.0,2700.0
-January,Fabela,Sinza,2500.0,2100.0
-January,Jade,Sinza,3200.0,2800.0
-January,Mini Umbra,Sinza,1700.0,1300.0
-January,Monah BP,Sinza,2100.0,1700.0
-January,Moon Bag,Sinza,1700.0,1300.0
-January,Nizana,Sinza,1700.0,1300.0
-January,Remi,Sinza,2800.0,2400.0
-January,School Bag,Sinza,2200.0,1800.0
-January,Sleeve 2,Sinza,1700.0,1000.0
-January,Trecento,Sinza,2200.0,1800.0
-January,Voyage,Sinza,4000.0,3500.0
-January,Wander Luxe,Sinza,3200.0,2800.0
-July,Butterfly Sling,Busia,1600.0,1200.0
-July,Jamela,Busia,3600.0,3200.0
-July,Kai,Busia,2800.0,2400.0
-July,Liam,Busia,2100.0,1700.0
-July,Mini Zuri,Busia,2600.0,2200.0
-July,Moon Bag,Busia,1600.0,1200.0
-July,Oval Handbag,Busia,1600.0,1200.0
-July,Prime,Busia,2800.0,2400.0
-July,Remi,Busia,2700.0,2300.0
-July,Antitheft,Eldoret,2600.0,2200.0
-July,Avana,Eldoret,2100.0,1700.0
-July,Code 3,Eldoret,2100.0,1800.0
-July,Jade,Eldoret,3100.0,2700.0
-July,Kate,Eldoret,1600.0,1200.0
-July,Nizana,Eldoret,1600.0,1200.0
-July,Prime,Eldoret,2800.0,2400.0
-July,Reo Travel,Eldoret,2800.0,2400.0
-July,Sierra Handbag,Eldoret,2700.0,2300.0
-July,Trecento,Eldoret,2100.0,1700.0
-July,Antitheft,Kakamega,2600.0,2200.0
-July,Avana,Kakamega,2100.0,1700.0
-July,Belt Bag,Kakamega,1400.0,1000.0
-July,Bonita,Kakamega,3900.0,3500.0
-July,Briefcase,Kakamega,2800.0,2400.0
-July,Elyse,Kakamega,3100.0,2700.0
-July,Lola,Kakamega,2100.0,1800.0
-July,Mini Zuri,Kakamega,2600.0,2200.0
-July,Neo Man,Kakamega,1600.0,1200.0
-July,Nizana,Kakamega,1600.0,1200.0
-July,Antitheft,Kisii,2600.0,2200.0
-July,Belt Bag,Kisii,1400.0,1000.0
-July,Gym Bag,Kisii,2600.0,2200.0
-July,Jade,Kisii,3100.0,2700.0
-July,Lola,Kisii,2100.0,1800.0
-July,Mega,Kisii,3000.0,2600.0
-July,Mini Umbra,Kisii,1600.0,1200.0
-July,Moon Bag,Kisii,1600.0,1200.0
-July,Nizana,Kisii,1600.0,1200.0
-July,Reo Travel,Kisii,2800.0,2400.0
-July,Amaya,Kisumu,3500.0,3100.0
-July,Antitheft,Kisumu,2600.0,2200.0
-July,Belt Bag,Kisumu,1400.0,1000.0
-July,Jade,Kisumu,3100.0,2700.0
-July,Jamela,Kisumu,3600.0,3200.0
-July,Liam,Kisumu,2100.0,1700.0
-July,Nizana,Kisumu,1600.0,1200.0
-July,Oval Handbag,Kisumu,1600.0,1200.0
-July,Washbag,Kisumu,1600.0,1200.0
-July,Avana,Kitengela,2100.0,1700.0
-July,Baby Bag,Kitengela,4600.0,4200.0
-July,Imani,Kitengela,3000.0,2600.0
-July,Jamela,Kitengela,3600.0,3200.0
-July,Liam,Kitengela,2100.0,1700.0
-July,Nizana,Kitengela,1600.0,1200.0
-July,Prime,Kitengela,2800.0,2400.0
-July,Remi,Kitengela,2700.0,2300.0
-July,Sierra Handbag,Kitengela,2700.0,2300.0
-July,Standard Travel,Kitengela,2600.0,2200.0
-July,Briefcase,Meru,2800.0,2400.0
-July,Jamela,Meru,3600.0,3200.0
-July,Kai,Meru,2800.0,2400.0
-July,Kate,Meru,1600.0,1200.0
-July,Moon Bag,Meru,1600.0,1200.0
-July,Nizana,Meru,1600.0,1200.0
-July,Trecento,Meru,2100.0,1700.0
-July,Zipped Lunchset,Meru,1600.0,1200.0
-July,Antitheft,Mombasa,2600.0,2200.0
-July,Don,Mombasa,1600.0,1200.0
-July,Kate,Mombasa,1600.0,1200.0
-July,Liam,Mombasa,2100.0,1700.0
-July,Moon Bag,Mombasa,1600.0,1200.0
-July,Oval Handbag,Mombasa,1600.0,1200.0
-July,Remi,Mombasa,2700.0,2300.0
-July,Taji,Mombasa,3000.0,2600.0
-July,Trecento,Mombasa,2100.0,1700.0
-July,Antitheft,Nairobi Town,2600.0,2200.0
-July,Elyse,Nairobi Town,3100.0,2700.0
-July,Jamela,Nairobi Town,3600.0,3200.0
-July,Kai,Nairobi Town,2800.0,2400.0
-July,Lola,Nairobi Town,2100.0,1800.0
-July,Nizana,Nairobi Town,1600.0,1200.0
-July,Oval Handbag,Nairobi Town,1600.0,1200.0
-July,Reo Travel,Nairobi Town,2800.0,2400.0
-July,Safiri Travel,Nairobi Town,3600.0,3200.0
-July,Trecento,Nairobi Town,2100.0,1700.0
-July,Antitheft,Nakuru,2600.0,2200.0
-July,Avana,Nakuru,2100.0,1700.0
-July,Kate,Nakuru,1600.0,1200.0
-July,Mini Zuri,Nakuru,2600.0,2200.0
-July,Moon Bag,Nakuru,1600.0,1200.0
-July,Neo Man,Nakuru,1600.0,1200.0
-July,Nizana,Nakuru,1600.0,1200.0
-July,Sierra Handbag,Nakuru,2700.0,2300.0
-July,Antitheft,Nanyuki,2600.0,2200.0
-July,Cairo Bp,Nanyuki,2100.0,1700.0
-July,College Hb,Nanyuki,2600.0,2200.0
-July,Kate,Nanyuki,1600.0,1200.0
-July,Liam,Nanyuki,2100.0,1700.0
-July,Moon Bag,Nanyuki,1600.0,1200.0
-July,Oval Handbag,Nanyuki,1600.0,1200.0
-July,Reo Travel,Nanyuki,2800.0,2400.0
-July,Amaya,Rongai,3500.0,3100.0
-July,Antitheft,Rongai,2600.0,2200.0
-July,Aurora,Rongai,2100.0,1700.0
-July,Gym Bag,Rongai,2600.0,2200.0
-July,Jade,Rongai,3100.0,2700.0
-July,Moon Bag,Rongai,1600.0,1200.0
-July,Pocket Travel,Rongai,3600.0,3200.0
-July,Sierra Handbag,Rongai,2700.0,2300.0
-July,Zuri,Rongai,3600.0,3200.0
-July,Aurora,Sinza,2200.0,1800.0
-July,Bonita,Sinza,4000.0,3600.0
-July,Elyse,Sinza,3200.0,2800.0
-July,Fabela,Sinza,2500.0,2100.0
-July,Fanny Pack,Sinza,700.0,300.0
-July,Imani,Sinza,3100.0,2500.0
-July,Jade,Sinza,3200.0,2800.0
-July,Legacy,Sinza,3600.0,3200.0
-July,Mega,Sinza,3100.0,2700.0
-July,Washbag,Sinza,1700.0,1300.0
-July,Aurora,Thika,2100.0,1700.0
-July,Butterfly Sling,Thika,1600.0,1200.0
-July,Kate,Thika,1600.0,1200.0
-July,Mandy Hb,Thika,1500.0,1100.0
-July,Mini Zuri,Thika,2600.0,2200.0
-July,Moon Bag,Thika,1600.0,1200.0
-July,Prime,Thika,2800.0,2400.0
-July,Reo Travel,Thika,2800.0,2400.0
-July,Zoezi,Thika,3600.0,3200.0
-July,Antitheft,Uganda,3258.62,2327.59
-July,Avana HB,Uganda,2655.17,1896.55
-July,Big Man Bag,Uganda,2655.17,1896.55
-July,Jumbo,Uganda,4465.52,3465.52
-July,Kai,Uganda,3500.0,2844.83
-July,Kayla,Uganda,2534.48,1810.34
-July,Mandy HB,Uganda,1931.03,1379.31
-July,Mini School,Uganda,2293.1,1637.93
-July,Mini Zuri,Uganda,3258.62,2327.59
-July,Moon Bag,Uganda,2051.72,1465.52
-July,Neo Man,Uganda,2051.72,1465.52
-July,Nizana,Uganda,2051.72,1465.52
-July,Pioneer,Uganda,3258.62,2396.55
-July,Satchel,Uganda,3862.07,2931.03
-July,Skye HB,Uganda,2534.48,1810.34
-July,Zane Man,Uganda,2051.72,1465.52
-July,Antitheft,Website,2600.0,2200.0
-July,Fayola,Website,2100.0,1700.0
-July,Gym Bag,Website,2600.0,2200.0
-July,Jade,Website,3100.0,2700.0
-July,Kaz,Website,2000.0,1600.0
-July,Mini Umbra,Website,1600.0,1200.0
-July,Neo Man,Website,1600.0,1200.0
-July,Nizana,Website,1600.0,1200.0
-July,Remi,Website,2700.0,2300.0
-July,Sierra Handbag,Website,2700.0,2300.0
-June,Amaya,Sinza,3600.0,2600.0
-June,Antitheft,Sinza,2700.0,2300.0
-June,Arm Band,Sinza,1300.0,900.0
-June,Aurora,Sinza,2200.0,1800.0
-June,Avana HB,Sinza,2200.0,1800.0
-June,Belt Bag,Sinza,1500.0,1100.0
-June,Big Man Bag,Sinza,2200.0,1800.0
-June,Claire Handbag,Sinza,3100.0,2700.0
-June,Code 3,Sinza,2200.0,1800.0
-June,Elyse,Sinza,3200.0,2800.0
-June,Gym Bag,Sinza,2700.0,2300.0
-June,Kai,Sinza,2900.0,2500.0
-June,Kate,Sinza,1700.0,1300.0
-June,Lola,Sinza,2200.0,1800.0
-June,Mini Manbag,Sinza,1700.0,1300.0
-June,Nizana,Sinza,1700.0,1300.0
-June,Sierra Handbag,Sinza,2800.0,2400.0
-June,Wander Luxe,Sinza,3200.0,2800.0
-June,Zane Man,Sinza,1700.0,1300.0
-June,Zoezi,Sinza,3700.0,3300.0
-June,Code 3,Uganda,2655.17,2000.0
-June,Jumbo,Uganda,4465.52,3603.45
-June,Kai,Uganda,3500.0,2637.93
-June,Lola,Uganda,2655.17,2000.0
-June,Man Bag,Uganda,2051.72,1465.52
-June,Nizana,Uganda,2051.72,1465.52
-June,Satchel,Uganda,3862.07,3000.0
-June,Zane Man,Uganda,2051.72,1465.52
-March,Aria Sling,Sinza,1700.0,1300.0
-March,Aurora,Sinza,2200.0,1800.0
-March,Avana HB,Sinza,2200.0,1800.0
-March,Belt Bag,Sinza,1500.0,1100.0
-March,Bonita,Sinza,4000.0,3600.0
-March,Butterfly Sling,Sinza,1700.0,1300.0
-March,Cairo BP,Sinza,2200.0,1800.0
-March,Claire Handbag,Sinza,3100.0,2700.0
-March,Code 3,Sinza,2200.0,1800.0
-March,Feroz,Sinza,3200.0,2800.0
-March,Kate,Sinza,1700.0,1300.0
-March,Liam,Sinza,2200.0,1800.0
-March,Man Bag,Sinza,1700.0,1300.0
-March,Monah BP,Sinza,2100.0,1700.0
-March,Moon Bag,Sinza,1700.0,1300.0
-March,Nizana,Sinza,1700.0,1300.0
-March,Remi,Sinza,2800.0,2400.0
-March,Trecento,Sinza,2200.0,1800.0
-March,Zane Man,Sinza,1700.0,1300.0
-March,Zoezi,Sinza,3700.0,3300.0
-May,Aria Sling,Sinza,1700.0,1300.0
-May,Aurora,Sinza,2200.0,1800.0
-May,Avana HB,Sinza,2200.0,1800.0
-May,Belt Bag,Sinza,1500.0,1100.0
-May,Brief Case,Sinza,2900.0,2500.0
-May,Cairo BP,Sinza,2100.0,1700.0
-May,Code 3,Sinza,2200.0,1800.0
-May,Fabela,Sinza,2500.0,2100.0
-May,Fanny Pack,Sinza,1700.0,1300.0
-May,Feroz,Sinza,3200.0,2800.0
-May,Jamela,Sinza,3700.0,3300.0
-May,Jumbo,Sinza,3700.0,3300.0
-May,Kate,Sinza,1700.0,1300.0
-May,Mega,Sinza,3100.0,2700.0
-May,Mini Zuri,Sinza,2700.0,2300.0
-May,Nizana,Sinza,1700.0,1300.0
-May,Reo Travel,Sinza,2900.0,2500.0
-May,Sleeve 2,Sinza,1700.0,1000.0
-May,Splash Backpack,Sinza,2200.0,1600.0
-May,Zane Man,Sinza,1700.0,1300.0
+month,product,location,type,price_then,price_now
+April,Antitheft,Sinza,Singles,2700.0,2300.0
+April,Arm Band,Sinza,Singles,1300.0,900.0
+April,Big Man Bag,Sinza,Special Offers,2200.0,1800.0
+April,Cess HB,Sinza,Special Offers,3600.0,3200.0
+April,Claire Handbag,Sinza,Special Offers,3100.0,2700.0
+April,Double Press,Sinza,Singles,2700.0,2300.0
+April,Elyse,Sinza,Singles,3200.0,2800.0
+April,Kate,Sinza,Singles,1700.0,1300.0
+April,Lola,Sinza,Singles,2200.0,1800.0
+April,Mandy HB,Sinza,Singles,1600.0,1200.0
+April,Mega,Sinza,Special Offers,3500.0,3100.0
+April,Mini Manbag,Sinza,Singles,1700.0,1300.0
+April,Mini Umbra,Sinza,Special Offers,1700.0,1300.0
+April,Moon Bag,Sinza,Special Offers,1700.0,1300.0
+April,Standard Travel,Sinza,Special Offers,2700.0,2300.0
+April,Travolta,Sinza,Singles,3700.0,3300.0
+April,Trecento,Sinza,Special Offers,2200.0,1800.0
+April,Wander Luxe,Sinza,Special Offers,3200.0,2800.0
+April,Washbag,Sinza,Singles,1700.0,1300.0
+April,Zelus,Sinza,Special Offers,2700.0,2300.0
+February,Amaya,Sinza,Singles,3600.0,2600.0
+February,Antitheft,Sinza,Special Offers,2700.0,2300.0
+February,Arm Band,Sinza,Special Offers,1300.0,900.0
+February,Big Man Bag,Sinza,Singles,2200.0,1800.0
+February,Brief Case,Sinza,Singles,2900.0,2500.0
+February,Elyse,Sinza,Special Offers,3200.0,2800.0
+February,Fabela,Sinza,Special Offers,2500.0,2100.0
+February,Gym Bag,Sinza,Singles,2700.0,2300.0
+February,Jade,Sinza,Special Offers,3200.0,2800.0
+February,Jumbo,Sinza,Singles,3700.0,3300.0
+February,Kate,Sinza,Singles,1700.0,1300.0
+February,Man Bag,Sinza,Special Offers,1700.0,1300.0
+February,Mandy HB,Sinza,Special Offers,2100.0,1700.0
+February,Mega,Sinza,Singles,3100.0,2700.0
+February,Mini Umbra,Sinza,Special Offers,1700.0,1000.0
+February,Mini Zuri,Sinza,Singles,2700.0,2300.0
+February,Moon Bag,Sinza,Singles,1700.0,1300.0
+February,Nizana,Sinza,Special Offers,1700.0,1300.0
+February,Sleeve 2,Sinza,Singles,1700.0,800.0
+February,Standard Travel,Sinza,Special Offers,2700.0,2300.0
+January,Aria Sling,Sinza,Special Offers,1700.0,1300.0
+January,Avana HB,Sinza,Special Offers,2200.0,1800.0
+January,Bonita,Sinza,Special Offers,4000.0,3400.0
+January,Brief Case,Sinza,Special Offers,2900.0,2500.0
+January,Celine Sling Bag,Sinza,Special Offers,2200.0,1800.0
+January,Chase,Sinza,Singles,1600.0,1200.0
+January,Code 3,Sinza,Special Offers,2200.0,1800.0
+January,Elyse,Sinza,Singles,3100.0,2700.0
+January,Fabela,Sinza,Singles,2500.0,2100.0
+January,Jade,Sinza,Singles,3200.0,2800.0
+January,Mini Umbra,Sinza,Singles,1700.0,1300.0
+January,Monah BP,Sinza,Singles,2100.0,1700.0
+January,Moon Bag,Sinza,Special Offers,1700.0,1300.0
+January,Nizana,Sinza,Singles,1700.0,1300.0
+January,Remi,Sinza,Special Offers,2800.0,2400.0
+January,School Bag,Sinza,Singles,2200.0,1800.0
+January,Sleeve 2,Sinza,Special Offers,1700.0,1000.0
+January,Trecento,Sinza,Special Offers,2200.0,1800.0
+January,Voyage,Sinza,Singles,4000.0,3500.0
+January,Wander Luxe,Sinza,Singles,3200.0,2800.0
+July,Butterfly Sling,Busia,Deal of the Week,1600.0,1200.0
+July,Jamela,Busia,Deal of the Week,3600.0,3200.0
+July,Kai,Busia,Deal of the Week,2800.0,2400.0
+July,Liam,Busia,Deal of the Week,2100.0,1700.0
+July,Mini Zuri,Busia,Deal of the Week,2600.0,2200.0
+July,Moon Bag,Busia,Deal of the Week,1600.0,1200.0
+July,Oval Handbag,Busia,Deal of the Week,1600.0,1200.0
+July,Prime,Busia,Deal of the Week,2800.0,2400.0
+July,Remi,Busia,Deal of the Week,2700.0,2300.0
+July,Antitheft,Eldoret,Deal of the Week,2600.0,2200.0
+July,Avana,Eldoret,Deal of the Week,2100.0,1700.0
+July,Code 3,Eldoret,Deal of the Week,2100.0,1800.0
+July,Jade,Eldoret,Deal of the Week,3100.0,2700.0
+July,Kate,Eldoret,Deal of the Week,1600.0,1200.0
+July,Nizana,Eldoret,Deal of the Week,1600.0,1200.0
+July,Prime,Eldoret,Deal of the Week,2800.0,2400.0
+July,Reo Travel,Eldoret,Deal of the Week,2800.0,2400.0
+July,Sierra Handbag,Eldoret,Deal of the Week,2700.0,2300.0
+July,Trecento,Eldoret,Deal of the Week,2100.0,1700.0
+July,Antitheft,Kakamega,Deal of the Week,2600.0,2200.0
+July,Avana,Kakamega,Deal of the Week,2100.0,1700.0
+July,Belt Bag,Kakamega,Deal of the Week,1400.0,1000.0
+July,Bonita,Kakamega,Deal of the Week,3900.0,3500.0
+July,Briefcase,Kakamega,Deal of the Week,2800.0,2400.0
+July,Elyse,Kakamega,Deal of the Week,3100.0,2700.0
+July,Lola,Kakamega,Deal of the Week,2100.0,1800.0
+July,Mini Zuri,Kakamega,Deal of the Week,2600.0,2200.0
+July,Neo Man,Kakamega,Deal of the Week,1600.0,1200.0
+July,Nizana,Kakamega,Deal of the Week,1600.0,1200.0
+July,Antitheft,Kisii,Deal of the Week,2600.0,2200.0
+July,Belt Bag,Kisii,Deal of the Week,1400.0,1000.0
+July,Gym Bag,Kisii,Deal of the Week,2600.0,2200.0
+July,Jade,Kisii,Deal of the Week,3100.0,2700.0
+July,Lola,Kisii,Deal of the Week,2100.0,1800.0
+July,Mega,Kisii,Deal of the Week,3000.0,2600.0
+July,Mini Umbra,Kisii,Deal of the Week,1600.0,1200.0
+July,Moon Bag,Kisii,Deal of the Week,1600.0,1200.0
+July,Nizana,Kisii,Deal of the Week,1600.0,1200.0
+July,Reo Travel,Kisii,Deal of the Week,2800.0,2400.0
+July,Amaya,Kisumu,Deal of the Week,3500.0,3100.0
+July,Antitheft,Kisumu,Deal of the Week,2600.0,2200.0
+July,Belt Bag,Kisumu,Deal of the Week,1400.0,1000.0
+July,Jade,Kisumu,Deal of the Week,3100.0,2700.0
+July,Jamela,Kisumu,Deal of the Week,3600.0,3200.0
+July,Liam,Kisumu,Deal of the Week,2100.0,1700.0
+July,Nizana,Kisumu,Deal of the Week,1600.0,1200.0
+July,Oval Handbag,Kisumu,Deal of the Week,1600.0,1200.0
+July,Washbag,Kisumu,Deal of the Week,1600.0,1200.0
+July,Avana,Kitengela,Deal of the Week,2100.0,1700.0
+July,Baby Bag,Kitengela,Deal of the Week,4600.0,4200.0
+July,Imani,Kitengela,Deal of the Week,3000.0,2600.0
+July,Jamela,Kitengela,Deal of the Week,3600.0,3200.0
+July,Liam,Kitengela,Deal of the Week,2100.0,1700.0
+July,Nizana,Kitengela,Deal of the Week,1600.0,1200.0
+July,Prime,Kitengela,Deal of the Week,2800.0,2400.0
+July,Remi,Kitengela,Deal of the Week,2700.0,2300.0
+July,Sierra Handbag,Kitengela,Deal of the Week,2700.0,2300.0
+July,Standard Travel,Kitengela,Deal of the Week,2600.0,2200.0
+July,Briefcase,Meru,Deal of the Week,2800.0,2400.0
+July,Jamela,Meru,Deal of the Week,3600.0,3200.0
+July,Kai,Meru,Deal of the Week,2800.0,2400.0
+July,Kate,Meru,Deal of the Week,1600.0,1200.0
+July,Moon Bag,Meru,Deal of the Week,1600.0,1200.0
+July,Nizana,Meru,Deal of the Week,1600.0,1200.0
+July,Trecento,Meru,Deal of the Week,2100.0,1700.0
+July,Zipped Lunchset,Meru,Deal of the Week,1600.0,1200.0
+July,Antitheft,Mombasa,Deal of the Week,2600.0,2200.0
+July,Don,Mombasa,Deal of the Week,1600.0,1200.0
+July,Kate,Mombasa,Deal of the Week,1600.0,1200.0
+July,Liam,Mombasa,Deal of the Week,2100.0,1700.0
+July,Moon Bag,Mombasa,Deal of the Week,1600.0,1200.0
+July,Oval Handbag,Mombasa,Deal of the Week,1600.0,1200.0
+July,Remi,Mombasa,Deal of the Week,2700.0,2300.0
+July,Taji,Mombasa,Deal of the Week,3000.0,2600.0
+July,Trecento,Mombasa,Deal of the Week,2100.0,1700.0
+July,Antitheft,Nairobi Town,Deal of the Week,2600.0,2200.0
+July,Elyse,Nairobi Town,Deal of the Week,3100.0,2700.0
+July,Jamela,Nairobi Town,Deal of the Week,3600.0,3200.0
+July,Kai,Nairobi Town,Deal of the Week,2800.0,2400.0
+July,Lola,Nairobi Town,Deal of the Week,2100.0,1800.0
+July,Nizana,Nairobi Town,Deal of the Week,1600.0,1200.0
+July,Oval Handbag,Nairobi Town,Deal of the Week,1600.0,1200.0
+July,Reo Travel,Nairobi Town,Deal of the Week,2800.0,2400.0
+July,Safiri Travel,Nairobi Town,Deal of the Week,3600.0,3200.0
+July,Trecento,Nairobi Town,Deal of the Week,2100.0,1700.0
+July,Antitheft,Nakuru,Deal of the Week,2600.0,2200.0
+July,Avana,Nakuru,Deal of the Week,2100.0,1700.0
+July,Kate,Nakuru,Deal of the Week,1600.0,1200.0
+July,Mini Zuri,Nakuru,Deal of the Week,2600.0,2200.0
+July,Moon Bag,Nakuru,Deal of the Week,1600.0,1200.0
+July,Neo Man,Nakuru,Deal of the Week,1600.0,1200.0
+July,Nizana,Nakuru,Deal of the Week,1600.0,1200.0
+July,Sierra Handbag,Nakuru,Deal of the Week,2700.0,2300.0
+July,Antitheft,Nanyuki,Deal of the Week,2600.0,2200.0
+July,Cairo Bp,Nanyuki,Deal of the Week,2100.0,1700.0
+July,College Hb,Nanyuki,Deal of the Week,2600.0,2200.0
+July,Kate,Nanyuki,Deal of the Week,1600.0,1200.0
+July,Liam,Nanyuki,Deal of the Week,2100.0,1700.0
+July,Moon Bag,Nanyuki,Deal of the Week,1600.0,1200.0
+July,Oval Handbag,Nanyuki,Deal of the Week,1600.0,1200.0
+July,Reo Travel,Nanyuki,Deal of the Week,2800.0,2400.0
+July,Amaya,Rongai,Deal of the Week,3500.0,3100.0
+July,Antitheft,Rongai,Deal of the Week,2600.0,2200.0
+July,Aurora,Rongai,Deal of the Week,2100.0,1700.0
+July,Gym Bag,Rongai,Deal of the Week,2600.0,2200.0
+July,Jade,Rongai,Deal of the Week,3100.0,2700.0
+July,Moon Bag,Rongai,Deal of the Week,1600.0,1200.0
+July,Pocket Travel,Rongai,Deal of the Week,3600.0,3200.0
+July,Sierra Handbag,Rongai,Deal of the Week,2700.0,2300.0
+July,Zuri,Rongai,Deal of the Week,3600.0,3200.0
+July,Aurora,Sinza,Singles,2200.0,1800.0
+July,Bonita,Sinza,Singles,4000.0,3600.0
+July,Elyse,Sinza,Singles,3200.0,2800.0
+July,Fabela,Sinza,Singles,2500.0,2100.0
+July,Fanny Pack,Sinza,Singles,700.0,300.0
+July,Imani,Sinza,Singles,3100.0,2500.0
+July,Jade,Sinza,Singles,3200.0,2800.0
+July,Legacy,Sinza,Singles,3600.0,3200.0
+July,Mega,Sinza,Singles,3100.0,2700.0
+July,Washbag,Sinza,Singles,1700.0,1300.0
+July,Aurora,Thika,Deal of the Week,2100.0,1700.0
+July,Butterfly Sling,Thika,Deal of the Week,1600.0,1200.0
+July,Kate,Thika,Deal of the Week,1600.0,1200.0
+July,Mandy Hb,Thika,Deal of the Week,1500.0,1100.0
+July,Mini Zuri,Thika,Deal of the Week,2600.0,2200.0
+July,Moon Bag,Thika,Deal of the Week,1600.0,1200.0
+July,Prime,Thika,Deal of the Week,2800.0,2400.0
+July,Reo Travel,Thika,Deal of the Week,2800.0,2400.0
+July,Zoezi,Thika,Deal of the Week,3600.0,3200.0
+July,Antitheft,Uganda,Singles,3258.62,2327.59
+July,Avana HB,Uganda,Singles,2655.17,1896.55
+July,Big Man Bag,Uganda,Singles,2655.17,1896.55
+July,Jumbo,Uganda,Singles,4465.52,3465.52
+July,Kai,Uganda,Singles,3500.0,2844.83
+July,Kayla,Uganda,Singles,2534.48,1810.34
+July,Mandy HB,Uganda,Singles,1931.03,1379.31
+July,Mini School,Uganda,Singles,2293.1,1637.93
+July,Mini Zuri,Uganda,Singles,3258.62,2327.59
+July,Moon Bag,Uganda,Singles,2051.72,1465.52
+July,Neo Man,Uganda,Singles,2051.72,1465.52
+July,Nizana,Uganda,Singles,2051.72,1465.52
+July,Pioneer,Uganda,Singles,3258.62,2396.55
+July,Satchel,Uganda,Singles,3862.07,2931.03
+July,Skye HB,Uganda,Singles,2534.48,1810.34
+July,Zane Man,Uganda,Singles,2051.72,1465.52
+July,Antitheft,Website,Deal of the Week,2600.0,2200.0
+July,Fayola,Website,Deal of the Week,2100.0,1700.0
+July,Gym Bag,Website,Deal of the Week,2600.0,2200.0
+July,Jade,Website,Deal of the Week,3100.0,2700.0
+July,Kaz,Website,Deal of the Week,2000.0,1600.0
+July,Mini Umbra,Website,Deal of the Week,1600.0,1200.0
+July,Neo Man,Website,Deal of the Week,1600.0,1200.0
+July,Nizana,Website,Deal of the Week,1600.0,1200.0
+July,Remi,Website,Deal of the Week,2700.0,2300.0
+July,Sierra Handbag,Website,Deal of the Week,2700.0,2300.0
+June,Amaya,Sinza,Singles,3600.0,2600.0
+June,Antitheft,Sinza,Special Offers,2700.0,2300.0
+June,Arm Band,Sinza,Singles,1300.0,900.0
+June,Aurora,Sinza,Singles,2200.0,1800.0
+June,Avana HB,Sinza,Special Offers,2200.0,1800.0
+June,Belt Bag,Sinza,Singles,1500.0,1100.0
+June,Big Man Bag,Sinza,Special Offers,2200.0,1800.0
+June,Claire Handbag,Sinza,Special Offers,3100.0,2700.0
+June,Code 3,Sinza,Singles,2200.0,1800.0
+June,Elyse,Sinza,Special Offers,3200.0,2800.0
+June,Gym Bag,Sinza,Special Offers,2700.0,2300.0
+June,Kai,Sinza,Singles,2900.0,2500.0
+June,Kate,Sinza,Special Offers,1700.0,1300.0
+June,Lola,Sinza,Special Offers,2200.0,1800.0
+June,Mini Manbag,Sinza,Singles,1700.0,1300.0
+June,Nizana,Sinza,Singles,1700.0,1300.0
+June,Sierra Handbag,Sinza,Singles,2800.0,2400.0
+June,Wander Luxe,Sinza,Special Offers,3200.0,2800.0
+June,Zane Man,Sinza,Special Offers,1700.0,1300.0
+June,Zoezi,Sinza,Singles,3700.0,3300.0
+June,Code 3,Uganda,Singles,2655.17,2000.0
+June,Jumbo,Uganda,Singles,4465.52,3603.45
+June,Kai,Uganda,Singles,3500.0,2637.93
+June,Lola,Uganda,Singles,2655.17,2000.0
+June,Man Bag,Uganda,Singles,2051.72,1465.52
+June,Nizana,Uganda,Singles,2051.72,1465.52
+June,Satchel,Uganda,Singles,3862.07,3000.0
+June,Zane Man,Uganda,Singles,2051.72,1465.52
+March,Aria Sling,Sinza,Special Offers,1700.0,1300.0
+March,Aurora,Sinza,Singles,2200.0,1800.0
+March,Avana HB,Sinza,Singles,2200.0,1800.0
+March,Belt Bag,Sinza,Singles,1500.0,1100.0
+March,Bonita,Sinza,Special Offers,4000.0,3600.0
+March,Butterfly Sling,Sinza,Singles,1700.0,1300.0
+March,Cairo BP,Sinza,Special Offers,2200.0,1800.0
+March,Claire Handbag,Sinza,Singles,3100.0,2700.0
+March,Code 3,Sinza,Special Offers,2200.0,1800.0
+March,Feroz,Sinza,Special Offers,3200.0,2800.0
+March,Kate,Sinza,Singles,1700.0,1300.0
+March,Liam,Sinza,Special Offers,2200.0,1800.0
+March,Man Bag,Sinza,Special Offers,1700.0,1300.0
+March,Monah BP,Sinza,Singles,2100.0,1700.0
+March,Moon Bag,Sinza,Singles,1700.0,1300.0
+March,Nizana,Sinza,Singles,1700.0,1300.0
+March,Remi,Sinza,Special Offers,2800.0,2400.0
+March,Trecento,Sinza,Singles,2200.0,1800.0
+March,Zane Man,Sinza,Special Offers,1700.0,1300.0
+March,Zoezi,Sinza,Special Offers,3700.0,3300.0
+May,Aria Sling,Sinza,Singles,1700.0,1300.0
+May,Aurora,Sinza,Special Offers,2200.0,1800.0
+May,Avana HB,Sinza,Special Offers,2200.0,1800.0
+May,Belt Bag,Sinza,Singles,1500.0,1100.0
+May,Brief Case,Sinza,Special Offers,2900.0,2500.0
+May,Cairo BP,Sinza,Special Offers,2100.0,1700.0
+May,Code 3,Sinza,Singles,2200.0,1800.0
+May,Fabela,Sinza,Singles,2500.0,2100.0
+May,Fanny Pack,Sinza,Singles,1700.0,1300.0
+May,Feroz,Sinza,Singles,3200.0,2800.0
+May,Jamela,Sinza,Singles,3700.0,3300.0
+May,Jumbo,Sinza,Singles,3700.0,3300.0
+May,Kate,Sinza,Special Offers,1700.0,1300.0
+May,Mega,Sinza,Special Offers,3100.0,2700.0
+May,Mini Zuri,Sinza,Special Offers,2700.0,2300.0
+May,Nizana,Sinza,Singles,1700.0,1300.0
+May,Reo Travel,Sinza,Special Offers,2900.0,2500.0
+May,Sleeve 2,Sinza,Special Offers,1700.0,1000.0
+May,Splash Backpack,Sinza,Special Offers,2200.0,1600.0
+May,Zane Man,Sinza,Singles,1700.0,1300.0
