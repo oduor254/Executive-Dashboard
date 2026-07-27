@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
@@ -33,6 +34,7 @@ MAX_TABLE_ROWS = 5000
 OFFER_COLORS = {
     "Power Deal": theme.CATEGORICAL[0],
     "Deal of the Week": theme.CATEGORICAL[2],
+    "Combo": theme.CATEGORICAL[4],
     "Regular": theme.TEXT_MUTED,
 }
 
@@ -284,7 +286,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 except Exception as exc:
                     st.error(f"Sync failed: {exc}")
 
-    order = ["Power Deal", "Deal of the Week", "Regular"]
+    order = ["Power Deal", "Deal of the Week", "Combo", "Regular"]
     ordered = by_offer.reindex(order).fillna(0)
 
     with st.container(border=True):
@@ -297,11 +299,20 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         fig.update_layout(title="Revenue by Offer Type", height=360)
         st.plotly_chart(fig, width="stretch")
 
-    offer_choice = st.selectbox(
-        "Offer Type", ["All Offer Types", "Power Deal", "Deal of the Week", "Regular"],
-        key="offer_type_filter",
-    )
+    col_offer, col_location = st.columns(2)
+    with col_offer:
+        offer_choice = st.selectbox(
+            "Offer Type", ["All Offer Types", "Power Deal", "Deal of the Week", "Combo", "Regular"],
+            key="offer_type_filter",
+        )
+    with col_location:
+        locations = sorted(df["Location"].dropna().unique())
+        location_choice = st.selectbox(
+            "Location", ["All Locations"] + locations, key="offer_type_location_filter",
+        )
+
     filtered = df if offer_choice == "All Offer Types" else df[df["Offer Type"] == offer_choice]
+    filtered = filtered if location_choice == "All Locations" else filtered[filtered["Location"] == location_choice]
 
     if not filtered.empty and offer_choice != "All Offer Types":
         with st.container(border=True):
@@ -322,6 +333,24 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 height=max(360, 28 * len(top_products)),
             )
             st.plotly_chart(fig, width="stretch")
+
+    if not filtered.empty:
+        with st.container(border=True):
+            st.caption(
+                f"Bags sold — {offer_choice} · {location_choice} — with total quantity and revenue per bag."
+            )
+            bag_summary = (
+                filtered.groupby("Product", as_index=False)
+                .agg(Quantity=("Quantity", "sum"), Total=("Total", "sum"))
+                .sort_values("Total", ascending=False)
+            )
+            totals_row = pd.DataFrame([{
+                "Product": "TOTAL",
+                "Quantity": bag_summary["Quantity"].sum(),
+                "Total": bag_summary["Total"].sum(),
+            }])
+            bag_summary = pd.concat([bag_summary, totals_row], ignore_index=True)
+            grid.filterable_table(bag_summary, currency_columns=("Total",))
 
     with st.container(border=True):
         display_df = filtered.sort_values("Date", ascending=False)

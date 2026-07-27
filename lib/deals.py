@@ -1,4 +1,5 @@
-"""Classify each sale line as a Power Deal, Deal of the Week, or Regular sale.
+"""Classify each sale line as a Power Deal, Deal of the Week, Combo, or
+Regular sale.
 
 Both are static, monthly-curated promotions — lib/data/power_deals.csv and
 lib/data/deals_of_week.csv need a manual update each month (new products,
@@ -15,9 +16,19 @@ above) price_then is a regular, full-price sale and is excluded. A line
 priced at 0 is a product folded into a combo (its price lives on the
 combo's own line), not sold standalone at all, so it's always excluded
 regardless of product match.
+
+A "Combo" is a bundle line — more than one bag sold together as one
+listing, e.g. "Jumbo + Prime Combo" or "Antitheft Backpack + Man Bag or
+Nizana Sling". Detected the same way the rest of the app already
+recognizes bundles (see queries.py): the product name contains "+", the
+word "or", or "Buy...Get". Checked independently of, and takes priority
+over, the Power Deal / Deal of the Week price match — a bundle name never
+equals a single deal product's name, but this keeps it that way even if
+one ever coincidentally did.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -28,6 +39,8 @@ _DATA_DIR = Path(__file__).parent / "data"
 # Deals of the Week: these four Nairobi CBD shops share one set of deals.
 NAIROBI_TOWN_SHOPS = {"Hazina", "Hilton", "Ktda", "Starmall"}
 NON_KENYA_LOCATIONS = {"Uganda", "Sinza"}
+
+_COMBO_BUY_GET = r"buy.*get"
 
 # Original/full prices in the sheet match the POS almost exactly (clean,
 # tight clusters right at price_then for every product checked), so a small
@@ -50,8 +63,13 @@ def _is_discounted(price: float, original: float) -> bool:
     return 0 < price < (original - _FULL_PRICE_TOLERANCE)
 
 
+def _is_combo(product: str) -> bool:
+    return "+" in product or " or " in product or bool(re.search(_COMBO_BUY_GET, product))
+
+
 def classify(df: pd.DataFrame) -> pd.DataFrame:
-    """Add an "Offer Type" column: "Power Deal", "Deal of the Week", or "Regular".
+    """Add an "Offer Type" column: "Power Deal", "Deal of the Week", "Combo",
+    or "Regular".
 
     Expects one row per sold line with Date, Product, Location, Price
     (unit price) columns — matches lib.queries.PRODUCT_LINE_ITEMS.
@@ -104,8 +122,11 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         index=df.index,
     )
 
+    is_combo = df["Product"].str.strip().str.lower().apply(_is_combo)
+
     offer = pd.Series("Regular", index=df.index)
     offer[is_dow] = "Deal of the Week"
     offer[is_power] = "Power Deal"  # power deal wins if a row somehow matches both
+    offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     df["Offer Type"] = offer
     return df
