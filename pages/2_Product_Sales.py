@@ -40,8 +40,8 @@ OFFER_COLORS = {
     "Regular": theme.TEXT_MUTED,
 }
 
-tab_shop, tab_category, tab_value, tab_offers = st.tabs(
-    ["By Shop", "By Category", "Sales Value", "Offer Types"]
+tab_shop, tab_category, tab_value, tab_offers, tab_new_products = st.tabs(
+    ["By Shop", "By Category", "Sales Value", "Offer Types", "New Products"]
 )
 
 
@@ -389,6 +389,53 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         grid.filterable_table(display_df, currency_columns=("Price", "Total"))
 
 
+@st.fragment()
+def render_new_products() -> None:
+    df = db.run_query(queries.NEW_PRODUCTS)
+
+    if df.empty:
+        st.info("No new products introduced this year yet.")
+        return
+
+    total_products = len(df)
+    selling = df[df["Revenue"] > 0]
+    total_revenue = df["Revenue"].sum()
+    total_qty = df["Quantity Sold"].sum()
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1.container(border=True):
+        st.metric("New Products This Year", f"{total_products:,}")
+    with k2.container(border=True):
+        st.metric("Revenue So Far", f"KES {total_revenue:,.0f}")
+    with k3.container(border=True):
+        st.metric("Units Sold", f"{total_qty:,.0f}")
+    with k4.container(border=True):
+        st.metric("Not Yet Selling", f"{total_products - len(selling):,}")
+
+    st.caption(
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
+        "a product counts as \"new\" from the moment its first-ever sale happens this "
+        "year — picked up automatically as soon as it sells, no list to maintain by hand. "
+        "Combos and internal samples are excluded."
+    )
+
+    if not selling.empty:
+        with st.container(border=True):
+            top = selling.nlargest(15, "Revenue").sort_values("Revenue", ascending=True)
+            fig = go.Figure()
+            fig.add_bar(
+                y=top["Product"], x=top["Revenue"], orientation="h",
+                marker=dict(color=theme.sequential_colors(len(top)), cornerradius=4),
+            )
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="Top New Products by Revenue", height=max(360, 28 * len(top)))
+            st.plotly_chart(fig, width="stretch")
+
+    with st.container(border=True):
+        st.caption("Click a column header's filter icon to search or narrow that column.")
+        grid.filterable_table(df, currency_columns=("Revenue",))
+
+
 with tab_shop:
     render_by_shop(start_date, end_date)
 
@@ -400,3 +447,6 @@ with tab_value:
 
 with tab_offers:
     render_by_offer(start_date, end_date)
+
+with tab_new_products:
+    render_new_products()

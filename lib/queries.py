@@ -2274,3 +2274,150 @@ WHERE
 
 ORDER BY po.date_order DESC;
 """
+
+# A "new collection" is a product whose first-ever sale falls in the
+# current calendar year — no manually-maintained list, so a genuinely new
+# bag picked up automatically the moment it first sells. Deliberately
+# sales-based rather than catalog-based: product_template also holds
+# non-bag internal assets (equipment, supplies) with no reliable category
+# flag to exclude them, but those never appear in real POS sales, so
+# building this off actual sales sidesteps that noise entirely. Combos and
+# samples are excluded by name the same way PRODUCT_LINE_ITEMS excludes
+# other non-product lines. No date-range params — always "this year" as of
+# whenever the query runs, self-contained by design.
+NEW_PRODUCTS = """
+WITH color_list(color) AS (
+    VALUES
+        -- Multi-word colors (longest match wins)
+        ('Black TT'),('Grey TT'),('Beige TT'),('Green TT'),
+        ('Wooven Black'),('Wooven Maroon'),('Wooven Mustard'),('Wooven Purple'),
+        ('Wooven Cream'),('Wooven Brown'),('Wooven Lilac'),
+        ('Croc Black'),('Croc Brown'),('Croc Mustard'),('Croc Orange'),('Croc Pink'),
+        ('Dark Brown'),('Mint Green'),('Yellow Brown'),('Yellow Dotted'),('Navy Blue'),
+        ('Antelope Brown'),
+        ('Red.Pattern'),('Red Pattern'),
+        ('Pattern Pink'),('Pattern Blue'),('Pattern Red'),
+        ('Amapiano Black'),('Amapiano Brown'),('Amapiano Grey'),('Amapiano Nude'),
+        ('Ankara Black'),('Ankara Brown'),('Ankara Grey'),('Ankara Nude'),
+        ('Black X Red'),
+        ('Beige/Red'),('Black/Cracked'),('Black/Red'),('Green/Red'),('Maroon/Red'),
+        ('Black/Beige'),('Black/Choco'),('Black/D.Brown'),('Black/Grey'),('Black/Spice'),
+        ('Red/Black'),('Grey/Black'),('Spice/Black'),('Cracked/Black'),('Chocolate/Black'),
+        ('Black 018'),('Beige 018'),('Dark Brown 018'),('Maroon 018'),
+        ('Titan 1'),('Titan 3'),('Titan 5'),('Titan 6'),('Titan 11'),('Titan 14'),('Titan 15'),
+        ('Goyard 5'),
+        ('Start 20'),('Start 4'),('Start 8'),
+        ('Red P'),('Black B'),('N.Blue'),('D.Brown'),
+        ('Manyatta Dark Brown'),('Manyatta Dark Green'),('Manyatta Green'),('Manyatta Yellow'),
+        ('CN Black'),('CN Grey'),('CN Dark Brown'),
+        ('A3 Red'),('A3 Pink'),
+        ('A4 Red'),('A4 Pink'),
+        ('A5 Red'),('A5 Pink'),
+        ('A3'),('A4'),('A5'),
+        ('Crimson'),
+        ('Beige'),('Black'),('Blue'),('Brown'),('Chocolate'),('Choco'),
+        ('Cracked'),('Green'),('green'),('GREEN'),('Grey'),('Gold'),('Lilac'),('Maroon'),
+        ('Mustard'),('Nude'),('Orange'),('Pink'),('Purple'),
+        ('Red'),('Spice'),('White'),('Yellow')
+),
+
+product_color_split AS (
+    SELECT
+        pt.id AS product_tmpl_id,
+        pt.name AS full_name,
+        (
+            SELECT cl.color
+            FROM color_list cl
+            WHERE pt.name LIKE '% ' || cl.color
+               OR pt.name = cl.color
+            ORDER BY LENGTH(cl.color) DESC
+            LIMIT 1
+        ) AS matched_color
+    FROM product_template pt
+),
+
+sale_lines AS (
+    SELECT
+        po.date_order::DATE AS sale_date,
+        CASE
+            WHEN pcs.matched_color IS NULL
+                THEN TRIM(REGEXP_REPLACE(pcs.full_name, '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'))
+            WHEN pcs.full_name = pcs.matched_color
+                THEN pcs.full_name
+            ELSE TRIM(REGEXP_REPLACE(
+                    LEFT(
+                        pcs.full_name,
+                        LENGTH(pcs.full_name) - LENGTH(pcs.matched_color)
+                    ),
+                    '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'
+                ))
+        END AS product,
+        pol.qty AS quantity,
+        CASE
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+                THEN pol.price_subtotal_incl / 25
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
+                THEN pol.price_subtotal_incl / 29
+            ELSE pol.price_subtotal_incl
+        END AS total
+
+    FROM pos_order po
+    LEFT JOIN pos_order_line       pol   ON pol.order_id = po.id
+    LEFT JOIN product_product      pp    ON pp.id    = pol.product_id
+    LEFT JOIN product_template     pt    ON pt.id    = pp.product_tmpl_id
+    LEFT JOIN product_color_split  pcs   ON pcs.product_tmpl_id = pt.id
+    LEFT JOIN product_category     pc    ON pc.id    = pt.categ_id
+    LEFT JOIN pos_session          ps    ON ps.id    = po.session_id
+    LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
+    LEFT JOIN stock_picking_type   spt   ON spt.id   = pconf.picking_type_id
+    LEFT JOIN stock_warehouse      sw    ON sw.id    = spt.warehouse_id
+    LEFT JOIN stock_location       sl    ON sl.id    = spt.default_location_src_id
+
+    WHERE
+        po.state IN ('done', 'paid')
+        AND pt.name NOT ILIKE '%Delivery Fee%'
+        AND pt.name NOT ILIKE '%Gift Bag%'
+        AND pc.name NOT ILIKE '%Pos%'
+        AND pol.qty > 0
+        AND pt.name NOT ILIKE '%KES discount%'
+        AND pt.name NOT LIKE '%+%'
+        AND pt.name NOT ILIKE '% or %'
+        AND pt.name NOT ILIKE '%Buy%Get%'
+        AND pt.name NOT ILIKE '%Combo%'
+        AND pt.name NOT ILIKE '%Sample%'
+        AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'
+        AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
+),
+
+-- Unbounded: needs full history to know a product truly never sold before
+-- this year, not just within some recent window.
+all_time_first_sale AS (
+    SELECT product, MIN(sale_date) AS first_sold
+    FROM sale_lines
+    GROUP BY product
+),
+
+new_products AS (
+    SELECT product, first_sold
+    FROM all_time_first_sale
+    WHERE EXTRACT(YEAR FROM first_sold) = EXTRACT(YEAR FROM CURRENT_DATE)
+),
+
+-- Bounded to this year only — cheap, and a new product can't have prior
+-- sales anyway now that new_products already confirms first_sold is this year.
+this_year_sales AS (
+    SELECT product, quantity, total
+    FROM sale_lines
+    WHERE sale_date >= DATE_TRUNC('year', CURRENT_DATE)
+)
+
+SELECT
+    np.product                                  AS "Product",
+    np.first_sold                               AS "First Sold",
+    COALESCE(SUM(tys.quantity), 0)              AS "Quantity Sold",
+    ROUND(COALESCE(SUM(tys.total), 0)::NUMERIC, 2) AS "Revenue"
+FROM new_products np
+LEFT JOIN this_year_sales tys ON tys.product = np.product
+GROUP BY np.product, np.first_sold
+ORDER BY "Revenue" DESC;
+"""
