@@ -2275,16 +2275,27 @@ WHERE
 ORDER BY po.date_order DESC;
 """
 
-# A "new collection" is a product whose first-ever sale falls in the
-# current calendar year — no manually-maintained list, so a genuinely new
-# bag picked up automatically the moment it first sells. Deliberately
-# sales-based rather than catalog-based: product_template also holds
-# non-bag internal assets (equipment, supplies) with no reliable category
-# flag to exclude them, but those never appear in real POS sales, so
-# building this off actual sales sidesteps that noise entirely. Combos and
-# samples are excluded by name the same way PRODUCT_LINE_ITEMS excludes
-# other non-product lines. No date-range params — always "this year" as of
-# whenever the query runs, self-contained by design.
+# A "new collection" is a product whose first-ever sale falls within the
+# trailing 6 months — no manually-maintained list, so a genuinely new bag
+# is picked up automatically the moment it first sells, and ages out on
+# its own once it's no longer a recent launch. Deliberately sales-based
+# rather than catalog-based: product_template also holds non-bag internal
+# assets (equipment, supplies) with no reliable category flag to exclude
+# them, but those never appear in real POS sales, so building this off
+# actual sales sidesteps that noise entirely. Combos and samples are
+# excluded by name the same way PRODUCT_LINE_ITEMS excludes other
+# non-product lines.
+#
+# Two more filters separate genuine new collections from one-off corporate/
+# custom orders, which a raw first-sale date can't tell apart on its own:
+#   - at least 30 units sold — real retail adoption is repeat purchases
+#     across many transactions; a corporate bulk order is typically one
+#     line item, even if that line's revenue looks substantial.
+#   - average price >= KES 1,000/unit — excludes cheap consumables/
+#     accessories (e.g. a bag-cleaning product) that can rack up real
+#     volume without being an actual bag collection.
+# No date-range params — always "trailing 6 months as of today," self-
+# contained by design.
 NEW_PRODUCTS = """
 WITH color_list(color) AS (
     VALUES
@@ -2390,7 +2401,7 @@ sale_lines AS (
 ),
 
 -- Unbounded: needs full history to know a product truly never sold before
--- this year, not just within some recent window.
+-- the trailing-6-month window, not just within some recent slice.
 all_time_first_sale AS (
     SELECT product, MIN(sale_date) AS first_sold
     FROM sale_lines
@@ -2400,24 +2411,27 @@ all_time_first_sale AS (
 new_products AS (
     SELECT product, first_sold
     FROM all_time_first_sale
-    WHERE EXTRACT(YEAR FROM first_sold) = EXTRACT(YEAR FROM CURRENT_DATE)
+    WHERE first_sold >= CURRENT_DATE - INTERVAL '6 months'
 ),
 
--- Bounded to this year only — cheap, and a new product can't have prior
--- sales anyway now that new_products already confirms first_sold is this year.
-this_year_sales AS (
+-- Bounded to the same trailing 6 months — cheap, and a new product can't
+-- have prior sales anyway now that new_products already confirms that.
+recent_sales AS (
     SELECT product, quantity, total
     FROM sale_lines
-    WHERE sale_date >= DATE_TRUNC('year', CURRENT_DATE)
+    WHERE sale_date >= CURRENT_DATE - INTERVAL '6 months'
 )
 
 SELECT
-    np.product                                  AS "Product",
-    np.first_sold                               AS "First Sold",
-    COALESCE(SUM(tys.quantity), 0)              AS "Quantity Sold",
-    ROUND(COALESCE(SUM(tys.total), 0)::NUMERIC, 2) AS "Revenue"
+    np.product                                     AS "Product",
+    np.first_sold                                  AS "First Sold",
+    COALESCE(SUM(rs.quantity), 0)                  AS "Quantity Sold",
+    ROUND(COALESCE(SUM(rs.total), 0)::NUMERIC, 2)  AS "Revenue"
 FROM new_products np
-LEFT JOIN this_year_sales tys ON tys.product = np.product
+LEFT JOIN recent_sales rs ON rs.product = np.product
 GROUP BY np.product, np.first_sold
+HAVING
+    COALESCE(SUM(rs.quantity), 0) >= 30
+    AND COALESCE(SUM(rs.total), 0) / NULLIF(SUM(rs.quantity), 0) >= 1000
 ORDER BY "Revenue" DESC;
 """
