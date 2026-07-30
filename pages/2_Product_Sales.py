@@ -390,8 +390,11 @@ def render_by_offer(start_date: date, end_date: date) -> None:
 
 
 @st.fragment()
-def render_new_products() -> None:
-    df = db.run_query(queries.NEW_PRODUCTS)
+def render_new_products(start_date: date, end_date: date) -> None:
+    df = db.run_query(
+        queries.NEW_PRODUCTS,
+        {"start_date": start_date, "end_date": end_date},
+    )
 
     if df.empty:
         st.info("No new collections in the last 6 months that meet the volume/price bar yet.")
@@ -405,29 +408,33 @@ def render_new_products() -> None:
     with k1.container(border=True):
         st.metric("New Collections", f"{total_products:,}")
     with k2.container(border=True):
-        st.metric("Revenue So Far", f"KES {total_revenue:,.0f}")
+        st.metric("Revenue", f"KES {total_revenue:,.0f}")
     with k3.container(border=True):
         st.metric("Units Sold", f"{total_qty:,.0f}")
 
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "a product counts as a new collection once its first-ever sale falls within the "
-        "last 6 months, it has sold at least 30 units, and averages at least KES 1,000/unit "
-        "— separates genuine new collections from one-off corporate/custom orders and cheap "
-        "accessories, picked up and aged out automatically, no list to maintain by hand. "
-        "Combos and internal samples are excluded."
+        "Quantity Sold and Revenue reflect the date range selected above. Which products "
+        "qualify as a new collection doesn't change with that range, though — a product "
+        "counts as new once its first-ever sale falls within the last 6 months, it has sold "
+        "at least 30 units, and averages at least KES 1,000/unit, all measured over the full "
+        "6 months — separates genuine new collections from one-off corporate/custom orders "
+        "and cheap accessories, picked up and aged out automatically, no list to maintain by "
+        "hand. Combos and internal samples are excluded."
     )
 
-    with st.container(border=True):
-        top = df.nlargest(15, "Revenue").sort_values("Revenue", ascending=True)
-        fig = go.Figure()
-        fig.add_bar(
-            y=top["Product"], x=top["Revenue"], orientation="h",
-            marker=dict(color=theme.sequential_colors(len(top)), cornerradius=4),
-        )
-        theme.apply_layout(fig, show_legend=False)
-        fig.update_layout(title="New Collections by Revenue", height=max(360, 28 * len(top)))
-        st.plotly_chart(fig, width="stretch")
+    selling = df[df["Revenue"] > 0]
+    if not selling.empty:
+        with st.container(border=True):
+            top = selling.nlargest(15, "Revenue").sort_values("Revenue", ascending=True)
+            fig = go.Figure()
+            fig.add_bar(
+                y=top["Product"], x=top["Revenue"], orientation="h",
+                marker=dict(color=theme.sequential_colors(len(top)), cornerradius=4),
+            )
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="New Collections by Revenue", height=max(360, 28 * len(top)))
+            st.plotly_chart(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")
@@ -447,4 +454,4 @@ with tab_offers:
     render_by_offer(start_date, end_date)
 
 with tab_new_products:
-    render_new_products()
+    render_new_products(start_date, end_date)

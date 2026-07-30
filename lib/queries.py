@@ -2294,8 +2294,14 @@ ORDER BY po.date_order DESC;
 #   - average price >= KES 1,000/unit — excludes cheap consumables/
 #     accessories (e.g. a bag-cleaning product) that can rack up real
 #     volume without being an actual bag collection.
-# No date-range params — always "trailing 6 months as of today," self-
-# contained by design.
+#
+# Qualification (which products count as "new") always looks at the full
+# trailing 6 months, independent of :start_date/:end_date — whether a
+# collection is genuinely new shouldn't flip depending on which day the
+# page's date picker happens to be set to. Quantity Sold/Revenue in the
+# result, however, ARE scoped to :start_date/:end_date, so switching the
+# page to "Today" or "Yesterday" shows that day's actual performance for
+# each qualifying collection.
 NEW_PRODUCTS = """
 WITH color_list(color) AS (
     VALUES
@@ -2408,30 +2414,44 @@ all_time_first_sale AS (
     GROUP BY product
 ),
 
-new_products AS (
-    SELECT product, first_sold
-    FROM all_time_first_sale
-    WHERE first_sold >= CURRENT_DATE - INTERVAL '6 months'
-),
-
--- Bounded to the same trailing 6 months — cheap, and a new product can't
--- have prior sales anyway now that new_products already confirms that.
-recent_sales AS (
+-- Qualification always looks at the full trailing 6 months, independent of
+-- whatever date range the page's picker is set to — "is this a genuine new
+-- collection" shouldn't flip on and off depending on which day you're
+-- looking at.
+trailing_6mo_sales AS (
     SELECT product, quantity, total
     FROM sale_lines
     WHERE sale_date >= CURRENT_DATE - INTERVAL '6 months'
+),
+
+new_products AS (
+    SELECT af.product, af.first_sold
+    FROM all_time_first_sale af
+    JOIN trailing_6mo_sales t6 ON t6.product = af.product
+    WHERE af.first_sold >= CURRENT_DATE - INTERVAL '6 months'
+    GROUP BY af.product, af.first_sold
+    HAVING
+        SUM(t6.quantity) >= 30
+        AND SUM(t6.total) / NULLIF(SUM(t6.quantity), 0) >= 1000
+),
+
+-- Bounded to whatever the page's date picker is set to — this is what
+-- actually gets displayed (Quantity Sold / Revenue), separate from
+-- qualification above.
+period_sales AS (
+    SELECT product, quantity, total
+    FROM sale_lines
+    WHERE sale_date >= CAST(:start_date AS DATE)
+      AND sale_date < CAST(:end_date AS DATE) + INTERVAL '1 day'
 )
 
 SELECT
     np.product                                     AS "Product",
     np.first_sold                                  AS "First Sold",
-    COALESCE(SUM(rs.quantity), 0)                  AS "Quantity Sold",
-    ROUND(COALESCE(SUM(rs.total), 0)::NUMERIC, 2)  AS "Revenue"
+    COALESCE(SUM(ps.quantity), 0)                  AS "Quantity Sold",
+    ROUND(COALESCE(SUM(ps.total), 0)::NUMERIC, 2)  AS "Revenue"
 FROM new_products np
-LEFT JOIN recent_sales rs ON rs.product = np.product
+LEFT JOIN period_sales ps ON ps.product = np.product
 GROUP BY np.product, np.first_sold
-HAVING
-    COALESCE(SUM(rs.quantity), 0) >= 30
-    AND COALESCE(SUM(rs.total), 0) / NULLIF(SUM(rs.quantity), 0) >= 1000
 ORDER BY "Revenue" DESC;
 """
