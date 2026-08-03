@@ -168,7 +168,12 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     df["Offer Type"] = offer
 
-    df.loc[is_combo, "Quantity"] = df.loc[is_combo, "Quantity"] * df.loc[is_combo, "Product"].apply(_combo_bag_count)
+    if is_combo.any():
+        # .apply() on an empty slice can't infer a numeric result dtype and
+        # falls back to the input's (string) dtype, which then fails to
+        # multiply against Quantity — guard skips that empty case entirely.
+        bag_counts = df.loc[is_combo, "Product"].apply(_combo_bag_count).astype(int)
+        df.loc[is_combo, "Quantity"] = df.loc[is_combo, "Quantity"] * bag_counts
 
     df["Country"] = df["Location"].apply(country_of)
     return df
