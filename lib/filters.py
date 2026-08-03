@@ -52,3 +52,27 @@ def date_range_control(key_prefix: str, default: str = "Today") -> tuple[date, d
     if isinstance(picked, tuple) and len(picked) == 1:
         return picked[0], picked[0]
     return picked, picked
+
+
+def resolve_range(key_prefix: str, default: str = "Today") -> tuple[date, date]:
+    """Read the current date range from session state without rendering the
+    picker widget — lets a page kick off its data fetch before drawing any
+    chrome, then call date_range_control with the same key_prefix later in
+    the same run to actually draw the widget (bound to the same keys, so it
+    reflects whatever this returned). Mirrors date_range_control's own
+    resolution logic exactly; keep the two in sync if either changes.
+    """
+    today = date.today()
+    preset = st.session_state.get(f"{key_prefix}_preset") or default
+
+    if preset != "Custom":
+        return _preset_range(preset, today)
+
+    picked = st.session_state.get(f"{key_prefix}_custom")
+    if isinstance(picked, tuple) and len(picked) == 2:
+        return picked
+    if isinstance(picked, tuple) and len(picked) == 1:
+        return picked[0], picked[0]
+    if picked is None:
+        return today, today  # widget hasn't rendered yet this session
+    return picked, picked
