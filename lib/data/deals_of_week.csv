@@ -1,6 +1,6 @@
 month,product,location,type,price_then,price_now
 April,Antitheft,Sinza,Singles,2700.0,2300.0
-April,Arm Band,Sinza,Singles,1300.0,900.0
+April,Arm band,Sinza,Singles,1300.0,900.0
 April,Big Man Bag,Sinza,Special Offers,2200.0,1800.0
 April,Cess HB,Sinza,Special Offers,3600.0,3200.0
 April,Claire Handbag,Sinza,Special Offers,3100.0,2700.0
@@ -34,13 +34,13 @@ August,Cess HB,Kakamega,Deal of the Week,3500.0,3100.0
 August,Jamela,Kakamega,Deal of the Week,3600.0,3200.0
 August,Kate,Kakamega,Deal of the Week,1600.0,1200.0
 August,Neo Man,Kakamega,Deal of the Week,1600.0,1200.0
-August,Briefcase,Kisii,Deal of the Week,2800.0,2400.0
+August,Brief Case,Kisii,Deal of the Week,2800.0,2400.0
 August,Lola,Kisii,Deal of the Week,2100.0,1800.0
 August,Mega,Kisii,Deal of the Week,3000.0,2600.0
 August,Moon Bag,Kisii,Deal of the Week,1600.0,1200.0
 August,Zane Man,Kisii,Deal of the Week,1600.0,1200.0
 August,Aurora,Kisumu,Deal of the Week,2100.0,1700.0
-August,Briefcase,Kisumu,Deal of the Week,2800.0,2400.0
+August,Brief Case,Kisumu,Deal of the Week,2800.0,2400.0
 August,Lola,Kisumu,Deal of the Week,2100.0,1800.0
 August,Mini Umbra,Kisumu,Deal of the Week,1600.0,1200.0
 August,Trecento,Kisumu,Deal of the Week,2100.0,1700.0
@@ -60,7 +60,7 @@ August,Luna,Mombasa,Deal of the Week,1600.0,1200.0
 August,Remi,Mombasa,Deal of the Week,2700.0,2300.0
 August,Trecento,Mombasa,Deal of the Week,2100.0,1700.0
 August,Aurora,Nairobi Town,Deal of the Week,2100.0,1700.0
-August,Briefcase,Nairobi Town,Deal of the Week,2800.0,2400.0
+August,Brief Case,Nairobi Town,Deal of the Week,2800.0,2400.0
 August,Jamela,Nairobi Town,Deal of the Week,3600.0,3200.0
 August,Kai,Nairobi Town,Deal of the Week,2800.0,2400.0
 August,Liam,Nairobi Town,Deal of the Week,2100.0,1700.0
@@ -101,7 +101,7 @@ August,Remi,Website,Deal of the Week,2700.0,2300.0
 August,Sierra Handbag,Website,Deal of the Week,2700.0,2300.0
 February,Amaya,Sinza,Singles,3600.0,2600.0
 February,Antitheft,Sinza,Special Offers,2700.0,2300.0
-February,Arm Band,Sinza,Special Offers,1300.0,900.0
+February,Arm band,Sinza,Special Offers,1300.0,900.0
 February,Big Man Bag,Sinza,Singles,2200.0,1800.0
 February,Brief Case,Sinza,Singles,2900.0,2500.0
 February,Elyse,Sinza,Special Offers,3200.0,2800.0
@@ -159,10 +159,10 @@ July,Reo Travel,Eldoret,Deal of the Week,2800.0,2400.0
 July,Sierra Handbag,Eldoret,Deal of the Week,2700.0,2300.0
 July,Trecento,Eldoret,Deal of the Week,2100.0,1700.0
 July,Antitheft,Kakamega,Deal of the Week,2600.0,2200.0
-July,Avana,Kakamega,Deal of the Week,2100.0,1700.0
+July,Avana HB,Kakamega,Deal of the Week,2100.0,1700.0
 July,Belt Bag,Kakamega,Deal of the Week,1400.0,1000.0
 July,Bonita,Kakamega,Deal of the Week,3900.0,3500.0
-July,Briefcase,Kakamega,Deal of the Week,2800.0,2400.0
+July,Brief Case,Kakamega,Deal of the Week,2800.0,2400.0
 July,Elyse,Kakamega,Deal of the Week,3100.0,2700.0
 July,Lola,Kakamega,Deal of the Week,2100.0,1800.0
 July,Mini Zuri,Kakamega,Deal of the Week,2600.0,2200.0
@@ -197,7 +197,7 @@ July,Prime,Kitengela,Deal of the Week,2800.0,2400.0
 July,Remi,Kitengela,Deal of the Week,2700.0,2300.0
 July,Sierra Handbag,Kitengela,Deal of the Week,2700.0,2300.0
 July,Standard Travel,Kitengela,Deal of the Week,2600.0,2200.0
-July,Briefcase,Meru,Deal of the Week,2800.0,2400.0
+July,Brief Case,Meru,Deal of the Week,2800.0,2400.0
 July,Jamela,Meru,Deal of the Week,3600.0,3200.0
 July,Kai,Meru,Deal of the Week,2800.0,2400.0
 July,Kate,Meru,Deal of the Week,1600.0,1200.0
@@ -225,7 +225,7 @@ July,Reo Travel,Nairobi Town,Deal of the Week,2800.0,2400.0
 July,Safiri Travel,Nairobi Town,Deal of the Week,3600.0,3200.0
 July,Trecento,Nairobi Town,Deal of the Week,2100.0,1700.0
 July,Antitheft,Nakuru,Deal of the Week,2600.0,2200.0
-July,Avana,Nakuru,Deal of the Week,2100.0,1700.0
+July,Avana HB,Nakuru,Deal of the Week,2100.0,1700.0
 July,Kate,Nakuru,Deal of the Week,1600.0,1200.0
 July,Mini Zuri,Nakuru,Deal of the Week,2600.0,2200.0
 July,Moon Bag,Nakuru,Deal of the Week,1600.0,1200.0
@@ -281,9 +281,9 @@ July,Moon Bag,Uganda,Singles,2051.72,1465.52
 July,Neo Man,Uganda,Singles,2051.72,1465.52
 July,Nizana,Uganda,Singles,2051.72,1465.52
 July,Pioneer,Uganda,Singles,3258.62,2396.55
-July,Satchel,Uganda,Singles,3862.07,2931.03
 July,Skye HB,Uganda,Singles,2534.48,1810.34
 July,Zane Man,Uganda,Singles,2051.72,1465.52
+July,satchel,Uganda,Singles,3862.07,2931.03
 July,Antitheft,Website,Deal of the Week,2600.0,2200.0
 July,Fayola,Website,Deal of the Week,2100.0,1700.0
 July,Gym Bag,Website,Deal of the Week,2600.0,2200.0
@@ -296,7 +296,7 @@ July,Remi,Website,Deal of the Week,2700.0,2300.0
 July,Sierra Handbag,Website,Deal of the Week,2700.0,2300.0
 June,Amaya,Sinza,Singles,3600.0,2600.0
 June,Antitheft,Sinza,Special Offers,2700.0,2300.0
-June,Arm Band,Sinza,Singles,1300.0,900.0
+June,Arm band,Sinza,Singles,1300.0,900.0
 June,Aurora,Sinza,Singles,2200.0,1800.0
 June,Avana HB,Sinza,Special Offers,2200.0,1800.0
 June,Belt Bag,Sinza,Singles,1500.0,1100.0
@@ -320,8 +320,8 @@ June,Kai,Uganda,Singles,3500.0,2637.93
 June,Lola,Uganda,Singles,2655.17,2000.0
 June,Man Bag,Uganda,Singles,2051.72,1465.52
 June,Nizana,Uganda,Singles,2051.72,1465.52
-June,Satchel,Uganda,Singles,3862.07,3000.0
 June,Zane Man,Uganda,Singles,2051.72,1465.52
+June,satchel,Uganda,Singles,3862.07,3000.0
 March,Aria Sling,Sinza,Special Offers,1700.0,1300.0
 March,Aurora,Sinza,Singles,2200.0,1800.0
 March,Avana HB,Sinza,Singles,2200.0,1800.0

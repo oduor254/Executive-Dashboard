@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, deals, filters, grid, queries, sheets_sync, theme
+from lib import auth, db, deals, deals_sync, filters, grid, queries, sheets_sync, theme
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
 
@@ -282,7 +282,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     with k5.container(border=True):
         st.metric("% of Sales on Offer", f"{pct_on_offer:,.1f}%")
 
-    col_caption, col_sync = st.columns([3, 1])
+    col_caption, col_sync_offers, col_sync = st.columns([2.2, 1.4, 1])
     with col_caption:
         st.caption(
             f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
@@ -293,6 +293,30 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             "their own sheets' category names — Singles and Special Offers — rather "
             "than Deal of the Week."
         )
+    with col_sync_offers:
+        if st.button("📥 Sync Offers from Sheet", key="sync_offers_from_sheet", width="stretch",
+                      help="Pulls the latest Power Deal / Deal of the Week / Singles / Special Offers "
+                           "definitions from the deals spreadsheet (Kenya, Uganda, Tanzania tabs). "
+                           "Updates local files only — still needs review and a push to reach the "
+                           "deployed app."):
+            with st.spinner("Pulling offers from the deals spreadsheet…"):
+                try:
+                    result = deals_sync.sync()
+                    st.success(
+                        f"Kenya: {result['kenya_dow']} Deal of the Week, {result['kenya_power']} "
+                        f"Power Deal row(s). Uganda: {result['uganda']} row(s). Sinza: "
+                        f"{result['tanzania']} row(s). Written: {result['dow_rows_written']} "
+                        f"Deal-of-the-Week-style + {result['power_rows_written']} Power Deal product(s)."
+                    )
+                    if result["unresolved"]:
+                        st.warning(
+                            f"{len(result['unresolved'])} product name(s) couldn't be auto-matched "
+                            "and were skipped — add these to MANUAL_ALIASES in lib/deals_sync.py:"
+                        )
+                        st.dataframe(pd.DataFrame(result["unresolved"]), width="stretch", hide_index=True)
+                    st.info("Local files updated — review the diff (git diff lib/data/) and push to ship this.")
+                except Exception as exc:
+                    st.error(f"Sync failed: {exc}")
     with col_sync:
         if st.button("📤 Sync to Sheet", key="sync_deals_sheet", width="stretch"):
             with st.spinner("Writing to the deals tracker sheet…"):
