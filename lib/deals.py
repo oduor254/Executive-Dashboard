@@ -163,8 +163,15 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     is_combo = df["Product"].str.strip().str.lower().apply(_is_combo)
 
     offer = pd.Series("Regular", index=df.index)
+    offer[is_power] = "Power Deal"
+    # Deal of the Week wins if a row matches both: it's the more specific,
+    # deliberately-curated designation (a particular product at a particular
+    # location for a particular month), while Power Deal is a generic
+    # nationwide fallback — specific overrides general. Confirmed against a
+    # real case: Meru's August Aria Sling listing shares the same price as
+    # the nationwide Power Deal entry, so it matched both, and the sheet's
+    # own Deal of the Week label for that row should win.
     offer[is_dow] = dow_type[is_dow]
-    offer[is_power] = "Power Deal"  # power deal wins if a row somehow matches both
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     df["Offer Type"] = offer
 
