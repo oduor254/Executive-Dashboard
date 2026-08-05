@@ -183,7 +183,10 @@ def _parse_kenya(sh, families_lower: dict[str, str], unresolved: list[dict]) -> 
                 "price_then": price_then, "price_now": price_now, "type": "Deal of the Week",
             })
         elif offer_type == "power deals":
-            power_rows.append({"product": product, "price_then": price_then, "price_now": price_now})
+            power_rows.append({
+                "month": row["Month"].strip(), "product": product,
+                "price_then": price_then, "price_now": price_now,
+            })
     return dow_rows, power_rows
 
 
@@ -254,9 +257,9 @@ def sync() -> dict:
     )
     power_df = (
         pd.DataFrame(kenya_power)
-        .groupby("product", as_index=False)
+        .groupby(["month", "product"], as_index=False)
         .agg(price_then=("price_then", "first"), price_now=("price_now", "first"))
-        .sort_values("product")
+        .sort_values(["month", "product"])
     )
 
     all_dow.to_csv(_DATA_DIR / "deals_of_week.csv", index=False)

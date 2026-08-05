@@ -1,13 +1,16 @@
 """Classify each sale line as a Power Deal, Deal of the Week, Singles,
 Special Offers, Combo, or Regular sale.
 
-Both are static, monthly-curated promotions — lib/data/power_deals.csv and
+Both are monthly-curated promotions — lib/data/power_deals.csv and
 lib/data/deals_of_week.csv need a manual update each month (new products,
 new prices), sourced from the shared deals spreadsheet's Kenya, Uganda, and
-Tanzania tabs. Power Deals are Kenya-only (the other two countries' sheets
-don't have a location/month-independent "standing discount" list — every
-Uganda/Tanzania row is itself month-specific, so it's shaped like Deal of
-the Week even though it isn't labeled that). deals_of_week.csv carries its
+Tanzania tabs. Power Deals are Kenya-only, and — like Deal of the Week —
+month-specific: the sheet re-lists Power Deals every month (sometimes the
+same products at the same price, sometimes not), so a product only counts
+as a Power Deal in the months it's actually listed for, not forever once
+seen. Uganda/Tanzania have no separate Power Deal list at all — every one
+of their rows is itself month-specific, so it's shaped like Deal of the
+Week even though it isn't labeled that. deals_of_week.csv carries its
 own "type" per row so the output label matches each country's own naming
 rather than being forced into "Deal of the Week": Kenya rows are "Deal of
 the Week"; Uganda rows (its sheet has one undifferentiated list) and
@@ -17,8 +20,8 @@ to KES-equivalent — Uganda ÷29, Tanzania ÷25 — matching the same
 conversion PRODUCT_LINE_ITEMS applies to the actual sale price, so the
 comparison in _is_discounted stays apples to apples regardless of country.
 
-A sale counts under an offer if the product matches (and, for Deals of the
-Week, the location and the sale's month match too) AND the price actually
+A sale counts under an offer if the product matches, the sale's month
+matches (and, for Deals of the Week, the location too), AND the price actually
 charged is clearly below the offer's recorded original price (price_then) —
 not just an exact match to the promotional price_now. Real-world price
 adjustments (order top-ups, partial refunds, other combo interactions) mean
@@ -123,12 +126,13 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     month_key = pd.to_datetime(df["Date"]).dt.strftime("%B")
     is_kenya = ~df["Location"].isin(NON_KENYA_LOCATIONS)
 
-    power_lookup = {
-        p.lower(): then for p, then in zip(power["product"], power["price_then"])
+    power_lookup: dict[tuple[str, str], float] = {
+        (row["month"], row["product"].lower()): row["price_then"]
+        for _, row in power.iterrows()
     }
 
-    def _power_match(product: str, price: float) -> bool:
-        original = power_lookup.get(product)
+    def _power_match(month: str, product: str, price: float) -> bool:
+        original = power_lookup.get((month, product))
         return original is not None and _is_discounted(price, original)
 
     dow_lookup: dict[tuple[str, str, str], tuple[float, str]] = {
@@ -147,7 +151,7 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         return None
 
     is_power = pd.Series(
-        [_power_match(p, price) for p, price in zip(product_key, df["Price"])],
+        [_power_match(m, p, price) for m, p, price in zip(month_key, product_key, df["Price"])],
         index=df.index,
     ) & is_kenya
 
