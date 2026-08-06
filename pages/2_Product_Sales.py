@@ -143,8 +143,9 @@ def render_by_category(start_date: date, end_date: date) -> None:
 
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "excludes combo/bundle products, and only counts products matching a known "
-        "bag category name — both make this total read lower than Sales Performance."
+        "grouped by Odoo's own bag category (Travel Bags, Backpacks, Handbags, ...) · "
+        "excludes combo/bundle products, which makes this total read lower than "
+        "Sales Performance, which counts them."
     )
 
     if category_totals.empty:

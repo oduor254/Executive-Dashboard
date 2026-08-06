@@ -1042,45 +1042,14 @@ WITH date_params AS (
     CAST(:end_date AS DATE) AS end_date
 ),
 
-bag_categories AS (
-  SELECT UPPER(category) AS category FROM (VALUES
-    ('ACE'),('ADRIAN'),('ALPHA TRAVEL'),('AMARI'),('AMAYA'),
-    ('AMORA'),('ANA'),('ANKARA TRAVEL'),('ANTITHEFT'),('ARIA PRO'),
-    ('ARIA SLING'),('ARLO MAN BAG'),('ARM BAND'),('ATLAS'),('AURORA'),
-    ('AVANA HB'),('BABY BAG'),('BELLO'),('BELT BAG'),('BIG MAN BAG'),
-    ('BLISS'),('BONITA'),('BRIEF CASE'),('BUTTERFLY SLING'),('CAIRO BP'),
-    ('CALLISTA'),('CATHY HANDBAG'),('CELINE SLING BAG'),('CESS'),('CHARLOTTE'),
-    ('CHASE'),('CLAIRE HANDBAG'),('CLEO'),('CODE 3'),('CODE 4 ANKARA'),
-    ('CODE 9'),('COLLEGE HB'),('COSMO'),('DARIA'),('DELICA'),
-    ('DIAPER BAG'),('DON'),('DOUBLE PRESS'),('ELEKTRA'),('ELLA SLING'),
-    ('ELYSE'),('ESMERALDA'),('FABELA'),('FANNY AMAPIANO'),('FANNY PACK'),
-    ('FAYOLA'),('FEROZ'),('FOXY'),('GIFT BAG'),('GYM BAG'),
-    ('HOOD'),('ICON'),('IMANI'),('JABARI'),('JADE'),
-    ('JAMELA'),('JAYDEN MAN'),('JUMBO'),('KAI'),('KANJI'),
-    ('KAOS'),('KARINA'),('KATE'),('KAYLA'),('KAZ'),
-    ('LADONA'),('LANKA'),('LEGACY'),('LEILA'),('LIAM'),
-    ('LITE'),('LOLA'),('LOOP BP'),('LOTUS'),('LUCA'),
-    ('LUNA'),('LUNA AMAPIANO'),('LUNCHSET'),('MAKE UP POUCH'),('MAN BAG'),
-    ('MANDY HB'),('MARLEY'),('MAYA'),('MEGA'),('MINI MANBAG'),
-    ('MINI MAYA'),('MINI SCHOOL'),('MINI UMBRA'),('MINI ZURI'),('MODERN TRAVEL'),
-    ('MONAH BP'),('MONTANA'),('MOON BAG'),('MRADI TRAVEL'),('MYSTIQUE'),
-    ('NALA'),('NEO MAN'),('NINA'),('NIZANA'),('NOVA'),
-    ('NYLA BP'),('OVAL HANDBAG'),('PIONEER'),('POCKET TRAVEL'),('POH HAIRISTIC'),
-    ('PRIME'),('REESTO CHEST'),('REMI'),('REO TRAVEL'),('ROZA'),
-    ('SAFIRI BP'),('SAFIRI TRAVEL'),('SANTANA'),('SARAI'),('SATCHEL'),
-    ('SATIS'),('SAVANNAH SLING'),('SCARLET'),('SCHOOL BAG'),('SCOOBY'),
-    ('SHUGLI BACKPACK'),('SIERRA HANDBAG'),('SKYE HB'),('SLEEVE 1'),('SLEEVE 2'),
-    ('SPARK'),('SPLASH BACKPACK'),('TAJI'),('TITAN TRAVEL'),('STANDARD TRAVEL'),
-    ('TRAVOLTA'),('TRECENTO'),('TRIO MIO'),('TWAIN TRAVEL'),('TYLER'),
-    ('UMBRA'),('VAL'),('VANITY'),('VOYAGE'),('WANDER LUXE'),
-    ('WASHBAG'),('YARA'),('ZANE MAN'),('ZELUS'),('ZENO'),
-    ('ZIARA MAN BAG'),('ZING SLING'),('ZIPPED LUNCHSET'),('ZOEZI'),('ZULA'),('ZURI')
-  ) AS t(category)
-),
-
 raw_sales AS (
   SELECT
     COALESCE(pt."name", '<<unknown>>') AS product_name,
+    -- Odoo's own category tree ("Bags / Travel Bags", "Bags / Backpacks", ...)
+    -- rather than a hand-maintained per-product-name list: picks up new
+    -- products automatically and groups by the actual bag type instead of
+    -- one category per product family.
+    TRIM(REGEXP_REPLACE(COALESCE(pcat."name", ''), '^Bags\\s*/\\s*', '')) AS category,
     SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'starmall')     AS starmall,
     SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'mombasa')      AS mombasa,
     SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'nakuru')       AS nakuru,
@@ -1120,16 +1089,7 @@ raw_sales AS (
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
-  GROUP BY product_name
-),
-
-categorized AS (
-  SELECT
-    rs.*,
-    (SELECT category FROM bag_categories bc
-     WHERE rs.product_name ILIKE bc.category || '%'
-     ORDER BY LENGTH(bc.category) DESC LIMIT 1) AS category
-  FROM raw_sales rs
+  GROUP BY product_name, category
 ),
 
 product_details AS (
@@ -1140,8 +1100,8 @@ product_details AS (
     uganda, kisii, ktda, busia, rongai, total,
     category,
     0 AS sort_priority
-  FROM categorized
-  WHERE category IS NOT NULL
+  FROM raw_sales
+  WHERE category <> ''
 ),
 
 category_totals AS (
@@ -1169,8 +1129,8 @@ category_totals AS (
     SUM(total) AS total,
     category,
     1 AS sort_priority
-  FROM categorized
-  WHERE category IS NOT NULL
+  FROM raw_sales
+  WHERE category <> ''
   GROUP BY category
 ),
 
