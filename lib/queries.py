@@ -14,6 +14,14 @@ WITH date_range AS (
 branch_totals AS (
     SELECT
         CASE
+            -- Website/Jumia orders are keyed by POS config, not warehouse — some
+            -- route through a fulfillment stock location (e.g. "Accessories &
+            -- Materials Store") that isn't a real retail branch and isn't in
+            -- branch_mapping below, which would silently drop them from the
+            -- grand total. Bucket by config name first, same as
+            -- PRODUCT_SALES_BY_SHOP/BAGS_SOLD_BY_CATEGORY already do.
+            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+                THEN 'Website'
             WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
                 THEN 'Sinza'
             ELSE INITCAP(
@@ -74,6 +82,8 @@ branch_totals AS (
 
     GROUP BY
         CASE
+            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+                THEN 'Website'
             WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
                 THEN 'Sinza'
             ELSE INITCAP(
@@ -542,7 +552,19 @@ shop_sales AS (
       ELSE UPPER(pc."name")
     END AS shop,
     COALESCE(pt."name", '<<unknown>>') AS product_name,
-    SUM(pl.qty) AS qty_sold
+    -- A combo bundle line sold once is more than one bag: "+"-separated
+    -- segments are each one bag, same rule BAGS_SOLD_BY_CATEGORY and the
+    -- Offer Types combo handling (lib/deals.py) use, so a bundle line counts
+    -- as the bags actually inside it rather than as one bag sold.
+    SUM(
+        pl.qty * CASE
+            WHEN COALESCE(pt."name", '') LIKE '%+%'
+                THEN (LENGTH(pt."name") - LENGTH(REPLACE(pt."name", '+', ''))) + 1
+            WHEN COALESCE(pt."name", '') ~* 'buy.*get'
+                THEN 2
+            ELSE 1
+        END
+    ) AS qty_sold
   FROM pos_order p
   JOIN pos_order_line pl ON pl.order_id = p.id
   LEFT JOIN pos_session ps ON p.session_id = ps.id
@@ -553,9 +575,7 @@ shop_sales AS (
   CROSS JOIN date_range dr
   WHERE p.date_order::date BETWEEN dr.start_date AND dr.end_date
     AND p.state IN ('done', 'paid')
-    AND COALESCE(pt."name", '') NOT LIKE '%+%'
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
-    AND COALESCE(pt."name", '') NOT ILIKE '%Gift Bag%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
@@ -1042,34 +1062,36 @@ WITH date_params AS (
     CAST(:end_date AS DATE) AS end_date
 ),
 
-raw_sales AS (
+lines AS (
   SELECT
     COALESCE(pt."name", '<<unknown>>') AS product_name,
     -- Odoo's own category tree ("Bags / Travel Bags", "Bags / Backpacks", ...)
     -- rather than a hand-maintained per-product-name list: picks up new
     -- products automatically and groups by the actual bag type instead of
-    -- one category per product family.
-    TRIM(REGEXP_REPLACE(COALESCE(pcat."name", ''), '^Bags\\s*/\\s*', '')) AS category,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'starmall')     AS starmall,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'mombasa')      AS mombasa,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'nakuru')       AS nakuru,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'eldoret')      AS eldoret,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'kisumu')       AS kisumu,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'meru')         AS meru,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'thika')        AS thika,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'hazina')       AS hazina,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'kitengela')    AS kitengela,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") IN ('website sales','website','jumia') OR p.session_id IS NULL) AS website,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'nanyuki')      AS nanyuki,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'kakamega')     AS kakamega,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'hilton')       AS hilton,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") IN ('sinza','dar-es-alam')) AS sinza,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'uganda')       AS uganda,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'kisii')        AS kisii,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") IN ('ktda','ktda shop')) AS ktda,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'busia')        AS busia,
-    SUM(pl.qty) FILTER (WHERE lower(pc."name") = 'rongai')       AS rongai,
-    SUM(pl.qty) AS total
+    -- one category per product family. Gift Bag A3/A4/A5 (and their color
+    -- variants) live under Odoo's generic "All" category rather than a Bags
+    -- subcategory, and combo/bundle names ("Jumbo + Prime Combo") are only
+    -- ~93% consistently tagged "Combos" in Odoo's own category field, so
+    -- both are assigned by name here instead of trusting that fallback.
+    CASE
+        WHEN pt."name" ILIKE '%Gift Bag%' THEN 'Gift Bags'
+        WHEN COALESCE(pt."name", '') LIKE '%+%' OR COALESCE(pt."name", '') ~* 'buy.*get' THEN 'Combos'
+        ELSE TRIM(REGEXP_REPLACE(COALESCE(pcat."name", ''), '^Bags\\s*/\\s*', ''))
+    END AS category,
+    pc."name" AS shop_name,
+    p.session_id AS session_id,
+    -- A combo bundle sold once is more than one bag: "+"-separated segments
+    -- are each one bag (an "or" inside a segment is a choice of which ONE bag
+    -- fills that slot, not an addition), same rule PRODUCT_SALES_BY_SHOP and
+    -- the Offer Types combo handling (lib/deals.py) already use, so a bundle
+    -- line counts as the bags actually inside it rather than as one bag sold.
+    pl.qty * CASE
+        WHEN COALESCE(pt."name", '') LIKE '%+%'
+            THEN (LENGTH(pt."name") - LENGTH(REPLACE(pt."name", '+', ''))) + 1
+        WHEN COALESCE(pt."name", '') ~* 'buy.*get'
+            THEN 2
+        ELSE 1
+    END AS bag_qty
   FROM pos_order p
   CROSS JOIN date_params dp
   JOIN pos_order_line pl ON pl.order_id = p.id
@@ -1080,15 +1102,40 @@ raw_sales AS (
   LEFT JOIN product_category pcat ON pcat.id = pt.categ_id
   WHERE p.date_order::date BETWEEN dp.start_date AND dp.end_date
     AND p.state IN ('done', 'paid')
-    AND COALESCE(pt."name", '') NOT LIKE '%+%'
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
-    AND COALESCE(pt."name", '') NOT ILIKE '%Gift Bag%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
+),
+
+raw_sales AS (
+  SELECT
+    product_name,
+    category,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'starmall')     AS starmall,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'mombasa')      AS mombasa,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'nakuru')       AS nakuru,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'eldoret')      AS eldoret,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kisumu')       AS kisumu,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'meru')         AS meru,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'thika')        AS thika,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'hazina')       AS hazina,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kitengela')    AS kitengela,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('website sales','website','jumia') OR session_id IS NULL) AS website,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'nanyuki')      AS nanyuki,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kakamega')     AS kakamega,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'hilton')       AS hilton,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('sinza','dar-es-alam')) AS sinza,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'uganda')       AS uganda,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kisii')        AS kisii,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('ktda','ktda shop')) AS ktda,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'busia')        AS busia,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'rongai')       AS rongai,
+    SUM(bag_qty) AS total
+  FROM lines
   GROUP BY product_name, category
 ),
 

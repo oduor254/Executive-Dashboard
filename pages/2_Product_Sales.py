@@ -79,8 +79,9 @@ def render_by_shop(start_date: date, end_date: date) -> None:
 
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "excludes combo/bundle products entirely, so totals here read lower than "
-        "Sales Performance, which counts them."
+        "combo/bundle products count as the bags actually inside the bundle, not "
+        "one unit per bundle sold, and file under Off-Catalog since the bundle "
+        "name itself isn't a masterfile product."
     )
 
     if detail.empty:
@@ -143,9 +144,9 @@ def render_by_category(start_date: date, end_date: date) -> None:
 
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "grouped by Odoo's own bag category (Travel Bags, Backpacks, Handbags, ...) · "
-        "excludes combo/bundle products, which makes this total read lower than "
-        "Sales Performance, which counts them."
+        "grouped by Odoo's own bag category (Travel Bags, Backpacks, Handbags, ...), "
+        "plus Gift Bags and Combos as their own categories · combo/bundle products "
+        "count as the bags actually inside the bundle, not one unit per bundle sold."
     )
 
     if category_totals.empty:
