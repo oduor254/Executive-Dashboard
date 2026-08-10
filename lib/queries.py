@@ -552,19 +552,7 @@ shop_sales AS (
       ELSE UPPER(pc."name")
     END AS shop,
     COALESCE(pt."name", '<<unknown>>') AS product_name,
-    -- A combo bundle line sold once is more than one bag: "+"-separated
-    -- segments are each one bag, same rule BAGS_SOLD_BY_CATEGORY and the
-    -- Offer Types combo handling (lib/deals.py) use, so a bundle line counts
-    -- as the bags actually inside it rather than as one bag sold.
-    SUM(
-        pl.qty * CASE
-            WHEN COALESCE(pt."name", '') LIKE '%+%'
-                THEN (LENGTH(pt."name") - LENGTH(REPLACE(pt."name", '+', ''))) + 1
-            WHEN COALESCE(pt."name", '') ~* 'buy.*get'
-                THEN 2
-            ELSE 1
-        END
-    ) AS qty_sold
+    SUM(pl.qty) AS qty_sold
   FROM pos_order p
   JOIN pos_order_line pl ON pl.order_id = p.id
   LEFT JOIN pos_session ps ON p.session_id = ps.id
@@ -579,6 +567,13 @@ shop_sales AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
+    -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
+    -- Travel Free") is a pricing container, not a bag itself — Odoo already
+    -- records the actual bag(s) inside it as separate, normally-named
+    -- sub_product_line rows (price 0, real product), which flow through
+    -- this same query on their own. Excluding by Odoo's own is_combo_line
+    -- flag catches every combo shape without parsing the bundle name.
+    AND COALESCE(pl.is_combo_line, FALSE) = FALSE
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
@@ -1070,28 +1065,21 @@ lines AS (
     -- products automatically and groups by the actual bag type instead of
     -- one category per product family. Gift Bag A3/A4/A5 (and their color
     -- variants) live under Odoo's generic "All" category rather than a Bags
-    -- subcategory, and combo/bundle names ("Jumbo + Prime Combo") are only
-    -- ~93% consistently tagged "Combos" in Odoo's own category field, so
-    -- both are assigned by name here instead of trusting that fallback.
+    -- subcategory, so they're assigned by name here instead. "Accessories"
+    -- (buckles, zips, locks, rivets, adjusters, ...) is production/repair
+    -- component stock, not bags sold to customers, so it's dropped entirely
+    -- except Straps, which are genuinely sold as their own retail item.
+    -- "All" is Odoo's uncategorized catch-all (stationery, samples, other
+    -- non-bag items) and is dropped the same way.
     CASE
         WHEN pt."name" ILIKE '%Gift Bag%' THEN 'Gift Bags'
-        WHEN COALESCE(pt."name", '') LIKE '%+%' OR COALESCE(pt."name", '') ~* 'buy.*get' THEN 'Combos'
+        WHEN COALESCE(pcat."name", '') = 'Accessories' AND pt."name" ILIKE '%Strap%' THEN 'Straps'
+        WHEN COALESCE(pcat."name", '') IN ('Accessories', 'All') THEN ''
         ELSE TRIM(REGEXP_REPLACE(COALESCE(pcat."name", ''), '^Bags\\s*/\\s*', ''))
     END AS category,
     pc."name" AS shop_name,
     p.session_id AS session_id,
-    -- A combo bundle sold once is more than one bag: "+"-separated segments
-    -- are each one bag (an "or" inside a segment is a choice of which ONE bag
-    -- fills that slot, not an addition), same rule PRODUCT_SALES_BY_SHOP and
-    -- the Offer Types combo handling (lib/deals.py) already use, so a bundle
-    -- line counts as the bags actually inside it rather than as one bag sold.
-    pl.qty * CASE
-        WHEN COALESCE(pt."name", '') LIKE '%+%'
-            THEN (LENGTH(pt."name") - LENGTH(REPLACE(pt."name", '+', ''))) + 1
-        WHEN COALESCE(pt."name", '') ~* 'buy.*get'
-            THEN 2
-        ELSE 1
-    END AS bag_qty
+    pl.qty AS bag_qty
   FROM pos_order p
   CROSS JOIN date_params dp
   JOIN pos_order_line pl ON pl.order_id = p.id
@@ -1106,6 +1094,14 @@ lines AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     AND pl.qty > 0
+    -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
+    -- Travel Free") is a pricing container, not a bag itself — Odoo already
+    -- records the actual bag(s) inside it as separate, normally-named
+    -- sub_product_line rows (price 0, real product/category), which flow
+    -- through this same query on their own. So only the container line
+    -- needs excluding here; excluding by Odoo's own is_combo_line flag
+    -- catches every combo shape without needing to parse the bundle name.
+    AND COALESCE(pl.is_combo_line, FALSE) = FALSE
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
