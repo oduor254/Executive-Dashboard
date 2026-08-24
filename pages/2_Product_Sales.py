@@ -145,8 +145,10 @@ def render_by_category(start_date: date, end_date: date) -> None:
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
         "grouped by Odoo's own bag category (Travel Bags, Backpacks, Handbags, ...), "
-        "plus Gift Bags and Combos as their own categories · combo/bundle products "
-        "count as the bags actually inside the bundle, not one unit per bundle sold."
+        "plus Gift Bags and Straps as their own categories · excludes Accessories "
+        "(production components) and uncategorized items · combo/bundle products "
+        "count as the individual bags actually sold inside the bundle, not the "
+        "bundle itself."
     )
 
     if category_totals.empty:
@@ -320,12 +322,27 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 except Exception as exc:
                     st.error(f"Sync failed: {exc}")
     with col_sync:
-        if st.button("📤 Sync to Sheet", key="sync_deals_sheet", width="stretch"):
+        if st.button("📤 Sync to Sheet", key="sync_deals_sheet", width="stretch",
+                      help="Syncs the whole current year, regardless of the date filter above — "
+                           "not just prior years' matches, deals.classify() matches by month name "
+                           "only (no year), so this stays capped to this year rather than pulling "
+                           "in every year that ever had a July/August."):
             with st.spinner("Writing to the deals tracker sheet…"):
                 try:
-                    written = sheets_sync.sync(df, start_date, end_date)
+                    # Always the full current year, independent of the page's date
+                    # filter — deals.classify() matches by month name only, not
+                    # year, so widening this to all-time would relabel prior
+                    # years' July/August sales as this year's promotions too.
+                    sync_start = date(date.today().year, 1, 1)
+                    sync_end = date(date.today().year, 12, 31)
+                    full_df = db.run_query(
+                        queries.PRODUCT_LINE_ITEMS,
+                        {"start_date": sync_start, "end_date": sync_end},
+                    )
+                    classified_full = deals.classify(full_df)
+                    written = sheets_sync.sync(classified_full, sync_start, sync_end)
                     st.success(
-                        f"Synced {start_date:%b %d} – {end_date:%b %d}: "
+                        f"Synced {sync_start:%b %d} – {sync_end:%b %d}: "
                         f"{written['Power Deal']} Power Deal row(s), "
                         f"{written['Deal of the Week']} Deal of the Week row(s)."
                     )
