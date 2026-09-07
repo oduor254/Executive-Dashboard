@@ -69,10 +69,22 @@ _COMBO_BUY_GET = r"buy.*get"
 # tolerance is enough to recognize "this is a full-price sale, not a deal."
 _FULL_PRICE_TOLERANCE = 1.0  # KES
 
-# The promotions programme began in 2026 — there were no Power Deals or Deals
-# of the Week before it. Earlier sales classify as Regular, which is the truth
-# rather than a gap, so periods_without_definitions stays quiet about them.
-OFFERS_START_YEAR = 2026
+# When each list started being kept, as (year, month). Before its start date a
+# list has no records because the tracking did not exist yet — zero deals is
+# the fact of the matter, not a gap, so periods_without_definitions stays quiet
+# rather than crying wolf on every historical range.
+#
+# The two started at different times, so this is per list rather than one
+# programme-wide date: Kenya's Power Deal and Deal of the Week sections began
+# in July 2026, while Sinza's Singles and Special Offers were already being
+# kept from January — its Jan-Jun sections hold a genuinely different product
+# list each month, not one list repeated.
+#
+# Combos are deliberately absent here. They are recognised from the product
+# name itself (see _is_combo), never from these files, so they classify for
+# every period on record and can never be missing a definition.
+_POWER_DEALS_START = (2026, 7)
+_DEALS_OF_WEEK_START = (2026, 1)
 
 
 @st.cache_data(show_spinner=False)
@@ -113,14 +125,12 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
     zero that looks like a fact is worse than an obvious gap, so the page says
     which months it is blind to rather than quietly showing them as nothing.
 
-    Nothing before OFFERS_START_YEAR is reported: the promotions programme
-    began in 2026, so zero offers in 2025 is the fact of the matter, not a
-    missing record, and flagging it would cry wolf on every historical range.
-
-    Checked per list, not across both: the two are curated separately, and a
-    month can easily have Tanzania's Singles recorded while Kenya's Power Deal
-    section for the same month was never captured. Treating "some list exists"
-    as coverage would hide exactly that.
+    Each list is only checked from its own start date (see _POWER_DEALS_START
+    / _DEALS_OF_WEEK_START), and checked separately rather than across both:
+    they are curated apart, started at different times, and a month can easily
+    have Sinza's Singles recorded while Kenya's Power Deal section for the
+    same month was never captured. Treating "some list exists" as coverage
+    would hide exactly that.
     """
     def recorded(frame: pd.DataFrame) -> set[tuple[int, str]]:
         return {(int(r["year"]), r["month"]) for _, r in frame.iterrows()}
@@ -130,12 +140,13 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
 
     out: list[str] = []
     for p in pd.period_range(pd.Timestamp(start_date), pd.Timestamp(end_date), freq="M"):
-        if p.year < OFFERS_START_YEAR:
-            continue
         period = (p.year, p.strftime("%B"))
         label = f"{p.strftime('%B')} {p.year}"
-        missing_power = period not in has_power
-        missing_dow = period not in has_dow
+        tracked = (p.year, p.month)
+
+        missing_power = tracked >= _POWER_DEALS_START and period not in has_power
+        missing_dow = tracked >= _DEALS_OF_WEEK_START and period not in has_dow
+
         if missing_power and missing_dow:
             out.append(f"{label} — no offer lists recorded")
         elif missing_power:
