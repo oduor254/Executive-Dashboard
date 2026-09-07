@@ -98,6 +98,43 @@ def _combo_bag_count(product: str) -> int:
     return 1  # a plain "X or Y" choose-one bundle
 
 
+def periods_without_definitions(start_date, end_date) -> list[str]:
+    """Months in [start_date, end_date] missing an offer list, as readable
+    strings: "August 2025 — no offer lists recorded", "March 2026 — no Power
+    Deal list recorded".
+
+    Without this, a month the sheet never covered reports zero Power Deals and
+    zero Deals of the Week — which reads as "we ran no promotions that month"
+    when it actually means "we have no record of what was on promotion". A
+    zero that looks like a fact is worse than an obvious gap, so the page says
+    which months it is blind to rather than quietly showing them as nothing.
+
+    Checked per list, not across both: the two are curated separately, and a
+    month can easily have Tanzania's Singles recorded while Kenya's Power Deal
+    section for the same month was never captured. Treating "some list exists"
+    as coverage would hide exactly that.
+    """
+    def recorded(frame: pd.DataFrame) -> set[tuple[int, str]]:
+        return {(int(r["year"]), r["month"]) for _, r in frame.iterrows()}
+
+    has_power = recorded(_load_power_deals())
+    has_dow = recorded(_load_deals_of_week())
+
+    out: list[str] = []
+    for p in pd.period_range(pd.Timestamp(start_date), pd.Timestamp(end_date), freq="M"):
+        period = (p.year, p.strftime("%B"))
+        label = f"{p.strftime('%B')} {p.year}"
+        missing_power = period not in has_power
+        missing_dow = period not in has_dow
+        if missing_power and missing_dow:
+            out.append(f"{label} — no offer lists recorded")
+        elif missing_power:
+            out.append(f"{label} — no Power Deal list recorded")
+        elif missing_dow:
+            out.append(f"{label} — no Deal of the Week list recorded")
+    return out
+
+
 def country_of(location: str) -> str:
     # Uganda and Sinza are each their own single-shop country label; every
     # other location rolls up into "Kenya". "Sinza" (not "Tanzania") for
@@ -123,42 +160,53 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     dow = _load_deals_of_week()
 
     product_key = df["Product"].str.strip().str.lower()
-    month_key = pd.to_datetime(df["Date"]).dt.strftime("%B")
+    sold_on = pd.to_datetime(df["Date"])
+    month_key = sold_on.dt.strftime("%B")
+    # Matching on month name alone scored every past year against the current
+    # year's offer list — August 2024's sales came back with 3,068 "Power
+    # Deals" taken from the August 2026 sheet, for promotions that never ran
+    # that year. The period is (year, month), never the month by itself.
+    year_key = sold_on.dt.year
     is_kenya = ~df["Location"].isin(NON_KENYA_LOCATIONS)
 
-    power_lookup: dict[tuple[str, str], float] = {
-        (row["month"], row["product"].lower()): row["price_then"]
+    power_lookup: dict[tuple[int, str, str], float] = {
+        (int(row["year"]), row["month"], row["product"].lower()): row["price_then"]
         for _, row in power.iterrows()
     }
 
-    def _power_match(month: str, product: str, price: float) -> bool:
-        original = power_lookup.get((month, product))
+    def _power_match(year: int, month: str, product: str, price: float) -> bool:
+        original = power_lookup.get((year, month, product))
         return original is not None and _is_discounted(price, original)
 
-    dow_lookup: dict[tuple[str, str, str], tuple[float, str]] = {
-        (row["month"], row["product"].lower(), row["location"]): (row["price_then"], row["type"])
+    dow_lookup: dict[tuple[int, str, str, str], tuple[float, str]] = {
+        (int(row["year"]), row["month"], row["product"].lower(), row["location"]):
+            (row["price_then"], row["type"])
         for _, row in dow.iterrows()
     }
 
-    def _dow_match(month: str, product: str, location: str, price: float) -> str | None:
+    def _dow_match(year: int, month: str, product: str, location: str, price: float) -> str | None:
         candidates = [location]
         if location in NAIROBI_TOWN_SHOPS:
             candidates.append("Nairobi Town")
         for loc in candidates:
-            entry = dow_lookup.get((month, product, loc))
+            entry = dow_lookup.get((year, month, product, loc))
             if entry is not None and _is_discounted(price, entry[0]):
                 return entry[1]  # the row's own type: Deal of the Week / Singles / Special Offers
         return None
 
     is_power = pd.Series(
-        [_power_match(m, p, price) for m, p, price in zip(month_key, product_key, df["Price"])],
+        [
+            _power_match(y, m, p, price)
+            for y, m, p, price in zip(year_key, month_key, product_key, df["Price"])
+        ],
         index=df.index,
     ) & is_kenya
 
     dow_type = pd.Series(
         [
-            _dow_match(m, p, loc, price)
-            for m, p, loc, price in zip(month_key, product_key, df["Location"], df["Price"])
+            _dow_match(y, m, p, loc, price)
+            for y, m, p, loc, price in zip(
+                year_key, month_key, product_key, df["Location"], df["Price"])
         ],
         index=df.index,
     )

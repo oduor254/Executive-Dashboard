@@ -24,6 +24,7 @@ revenue.
 """
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -236,6 +237,34 @@ def _parse_tanzania(sh, families_lower: dict[str, str], unresolved: list[dict]) 
     return parse_section(0, 1, 2, 4, "Singles") + parse_section(7, 8, 9, 11, "Special Offers")
 
 
+def _merge_with_existing(fresh: pd.DataFrame, filename: str, key: list[str]) -> pd.DataFrame:
+    """Fresh rows layered over whatever the file already holds.
+
+    A period the sheet still carries is refreshed from the sheet; a period it
+    has rolled past is kept as previously recorded. This is what makes past
+    months answerable at all — the sheet is a working document for the current
+    month, so it is the CSV, not the sheet, that has to be the archive.
+    """
+    path = _DATA_DIR / filename
+    if not path.exists():
+        return fresh
+
+    existing = pd.read_csv(path)
+    if existing.empty or not set(key).issubset(existing.columns):
+        return fresh
+
+    # Only whole periods the sheet re-stated are replaced — dropping a single
+    # product from a month the sheet still lists means it stopped being on
+    # offer, and that should be reflected rather than kept alive forever.
+    restated = set(zip(*(fresh[c] for c in ("year", "month"))))
+    kept = existing[
+        ~existing.apply(lambda r: (r["year"], r["month"]) in restated, axis=1)
+    ]
+
+    merged = pd.concat([kept, fresh], ignore_index=True)
+    return merged.drop_duplicates(subset=key, keep="last").sort_values(key)
+
+
 def sync() -> dict:
     """Fetch the sheet, resolve product names, and rewrite
     lib/data/power_deals.csv and deals_of_week.csv. Returns a summary for
@@ -249,18 +278,38 @@ def sync() -> dict:
     uganda_rows = _parse_uganda(sh, families_lower, unresolved)
     tanzania_rows = _parse_tanzania(sh, families_lower, unresolved)
 
+    # The sheet's sections are month names with no year on them, so the year
+    # is stamped here from the calendar: it is the current year's tracker
+    # being read. Without it every past year gets scored against this year's
+    # offers — see deals.classify.
+    sheet_year = date.today().year
+
     all_dow = pd.DataFrame(kenya_dow + uganda_rows + tanzania_rows)
+    all_dow["year"] = sheet_year
     all_dow = (
-        all_dow.groupby(["month", "product", "location", "type"], as_index=False)
+        all_dow.groupby(["year", "month", "product", "location", "type"], as_index=False)
         .agg(price_then=("price_then", "first"), price_now=("price_now", "first"))
-        .sort_values(["month", "location", "product"])
+        .sort_values(["year", "month", "location", "product"])
     )
+    power_df = pd.DataFrame(kenya_power)
+    power_df["year"] = sheet_year
     power_df = (
-        pd.DataFrame(kenya_power)
-        .groupby(["month", "product"], as_index=False)
+        power_df
+        .groupby(["year", "month", "product"], as_index=False)
         .agg(price_then=("price_then", "first"), price_now=("price_now", "first"))
-        .sort_values(["month", "product"])
+        .sort_values(["year", "month", "product"])
     )
+
+    # Merged with what is already on disk, not written over it. A sync used to
+    # replace both files wholesale, so the moment the sheet rolled forward and
+    # dropped an old month, that month's history disappeared from the
+    # dashboard and past periods retroactively changed. Existing rows for a
+    # period the sheet still carries are refreshed; periods it no longer
+    # carries are kept.
+    all_dow = _merge_with_existing(
+        all_dow, "deals_of_week.csv", ["year", "month", "product", "location", "type"])
+    power_df = _merge_with_existing(
+        power_df, "power_deals.csv", ["year", "month", "product"])
 
     all_dow.to_csv(_DATA_DIR / "deals_of_week.csv", index=False)
     power_df.to_csv(_DATA_DIR / "power_deals.csv", index=False)

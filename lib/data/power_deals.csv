@@ -1,21 +1,21 @@
-month,product,price_then,price_now
-August,Avana HB,2100.0,1700.0
-August,Cathy Handbag,2000.0,1600.0
-August,Fabela,2400.0,2000.0
-August,Gym Bag,2600.0,2200.0
-August,Jumbo,3600.0,2600.0
-August,Mini Maya,1600.0,1200.0
-August,Mini Zuri,2600.0,2000.0
-August,Monah BP,2000.0,1600.0
-August,Prime,2800.0,2400.0
-August,Reo Travel,2800.0,2400.0
-July,Aria Sling,1600.0,1200.0
-July,Big Man Bag,2100.0,1700.0
-July,Cathy Handbag,2000.0,1600.0
-July,Claire Handbag,3000.0,2700.0
-July,Fabela,2400.0,2000.0
-July,Jumbo,3600.0,2600.0
-July,Mini Maya,1600.0,1200.0
-July,Monah BP,2000.0,1600.0
-July,Pioneer,2600.0,2200.0
-July,Zane Man,1600.0,1200.0
+year,month,product,price_then,price_now
+2026,August,Avana HB,2100.0,1700.0
+2026,August,Cathy Handbag,2000.0,1600.0
+2026,August,Fabela,2400.0,2000.0
+2026,August,Gym Bag,2600.0,2200.0
+2026,August,Jumbo,3600.0,2600.0
+2026,August,Mini Maya,1600.0,1200.0
+2026,August,Mini Zuri,2600.0,2000.0
+2026,August,Monah BP,2000.0,1600.0
+2026,August,Prime,2800.0,2400.0
+2026,August,Reo Travel,2800.0,2400.0
+2026,July,Aria Sling,1600.0,1200.0
+2026,July,Big Man Bag,2100.0,1700.0
+2026,July,Cathy Handbag,2000.0,1600.0
+2026,July,Claire Handbag,3000.0,2700.0
+2026,July,Fabela,2400.0,2000.0
+2026,July,Jumbo,3600.0,2600.0
+2026,July,Mini Maya,1600.0,1200.0
+2026,July,Monah BP,2000.0,1600.0
+2026,July,Pioneer,2600.0,2200.0
+2026,July,Zane Man,1600.0,1200.0

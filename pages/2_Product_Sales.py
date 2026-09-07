@@ -264,6 +264,21 @@ def render_by_offer(start_date: date, end_date: date) -> None:
 
     df = deals.classify(df)
 
+    # A month with no recorded offer list reports zero deals, which reads as
+    # "nothing was on promotion" rather than "we don't know what was". Say so.
+    missing = deals.periods_without_definitions(start_date, end_date)
+    if missing:
+        shown = missing[:6]
+        more = f"\n\n…and {len(missing) - 6} more month(s)." if len(missing) > 6 else ""
+        st.warning(
+            "Offer records are missing for part of this range, so sales there "
+            "fall through to Regular — a zero below is a gap in the records, "
+            "not a month without promotions:\n\n"
+            + "\n".join(f"- {m}" for m in shown)
+            + more,
+            icon="⚠️",
+        )
+
     total_revenue = df["Total"].sum()
     total_qty = df["Quantity"].sum()
     by_offer_revenue = df.groupby("Offer Type")["Total"].sum()
