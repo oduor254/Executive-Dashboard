@@ -22,7 +22,11 @@ def render_tracking() -> None:
     # Menu and range are read from session state BEFORE anything is drawn, so
     # the fetch can happen behind the skeleton and the whole page — chrome
     # included — swaps in at once.
-    view = st.session_state.get("tracking_view") or views.VIEWS[0]
+    # resolve_view maps a retired tab name from an older session onto the view
+    # that absorbed it, rather than silently falling back to the first one.
+    view = views.resolve_view(st.session_state.get("tracking_view"))
+    if st.session_state.get("tracking_view") not in (None, view):
+        st.session_state["tracking_view"] = view
     start_date, end_date = filters.resolve_range("tracking")
 
     slot = ui.loading_slot()

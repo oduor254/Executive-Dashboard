@@ -5,6 +5,13 @@ import streamlit as st
 
 from lib import theme
 
+# Brand accent — theme.CATEGORICAL[0] is the one hue every decorative visual
+# in this app uses (see lib/auth.py's login screen), so widget chrome outside
+# the chart layer borrows it here rather than picking its own color.
+TEXT_MUTED = theme.TEXT_MUTED
+ACCENT = theme.CATEGORICAL[0]
+ACCENT_SOFT = f"{ACCENT}26"  # ~15% opacity, for a selected-state background
+
 
 def loading_slot():
     """An st.empty() placeholder pre-filled with a lightweight skeleton, so a

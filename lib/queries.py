@@ -996,57 +996,9 @@ FROM breakdown
 ORDER BY metric_order, "Quantity" DESC;
 """
 
-# Goods in transit to the two international channels (Sinza/Tanzania, Uganda),
-# pivoted by bag product with a GRAND TOTAL row.
-GOODS_IN_TRANSIT = """
-WITH date_range AS (
-  SELECT
-    CAST(:start_date AS DATE) AS start_date,
-    CAST(:end_date AS DATE) AS end_date
-),
-moves AS (
-  SELECT
-    COALESCE(pt."name", pp.id::text) AS bag_name,
-    CASE
-      WHEN rp."name" ILIKE '%Luggageware Uganda%' THEN 'UGANDA'
-      ELSE 'SINZA'                       -- Bagware Tanzania = Sinza channel
-    END AS dest_name,
-    sol.product_uom_qty AS qty,         -- ordered qty; use sol.qty_delivered for delivered
-    DATE(so.date_order) AS order_date
-  FROM sale_order so
-  JOIN sale_order_line sol ON sol.order_id = so.id
-  JOIN res_partner rp ON so.partner_id = rp.id
-  JOIN product_product pp ON sol.product_id = pp.id
-  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
-  CROSS JOIN date_range dr
-  WHERE (rp."name" ILIKE '%Bagware Tanzania%' OR rp."name" ILIKE '%Luggageware Uganda%')
-    AND so.state IN ('sale','done')
-    AND DATE(so.date_order) BETWEEN dr.start_date AND dr.end_date
-    AND COALESCE(sol.product_uom_qty,0) <> 0
-),
-pivoted AS (
-  SELECT
-    bag_name,
-    STRING_AGG(DISTINCT TO_CHAR(order_date, 'YYYY-MM-DD'), ', ' ORDER BY TO_CHAR(order_date, 'YYYY-MM-DD')) AS "Dates",
-    SUM(CASE WHEN dest_name = 'SINZA'  THEN qty ELSE 0 END) AS "SINZA",
-    SUM(CASE WHEN dest_name = 'UGANDA' THEN qty ELSE 0 END) AS "UGANDA"
-  FROM moves
-  GROUP BY bag_name
-),
-combined AS (
-  SELECT bag_name, "Dates", "SINZA", "UGANDA", 0 AS sort_order FROM pivoted
-  UNION ALL
-  SELECT 'GRAND TOTAL', NULL, SUM("SINZA"), SUM("UGANDA"), 1 FROM pivoted
-)
-SELECT
-  "Dates",
-  bag_name AS "Product",
-  "SINZA",
-  "UGANDA",
-  ("SINZA" + "UGANDA") AS "TOTAL"
-FROM combined
-ORDER BY sort_order, bag_name;
-"""
+# Retired: the international-channel transit report is now TRANSIT_BALANCE
+# (a stock_quant balance) plus SHOPS_RECEIVING_* (dispatch-vs-receipt timing),
+# both further down this file, next to COMBINED_DISTRIBUTION.
 
 # Bags sold pivoted by category (bag style) x store, with per-category subtotal
 # rows and a grand total. Wide-format companion to PRODUCT_SALES_BY_SHOP.
@@ -1714,15 +1666,869 @@ GROUP BY sl.complete_name, COALESCE(pt."name", pp.id::text)
 ORDER BY "Location", "Product";
 """
 
-# Combined distribution report: stock moves (FINWH + CBD inventory transfers,
-# shop transit dispatches, internal CBD<->KTDA moves) plus sales-order
-# dispatch to Sinza/Uganda, pivoted by destination with product-family
-# subtotals and a grand total.
-DISPATCH_COMBINED = """
+# What each shop RECEIVED — received basis: a bag lands in a shop column only
+# once its move into that shop's own stock is state='done'. STARMALL, HAZINA,
+# KTDA and HILTON are the exception (see v2_arrivals/ktda_receipts/v2_cbd_*/
+# v2_hilton_* below): they run on the hub-redistribution basis instead, where
+# arrival is counted as the bag LEAVES FINWH, because CBD/Hilton redistribute
+# from their own stock rather than through a per-shop transit node Odoo can
+# report a receipt against.
+COMBINED_DISTRIBUTION = """
 WITH params AS (
   SELECT
     CAST(:start_date AS DATE) AS start_date,
     CAST(:end_date AS DATE) AS end_date
+),
+
+-- One pass over stock_move for the whole report — see DISPATCH_COMBINED's
+-- STREAM comments for why this is MATERIALIZED once rather than scanned
+-- per consumer. SUNDAY IS NOT FILTERED HERE: the warehouse does not dispatch
+-- on a Sunday, so ordinary shop receipt legs apply that filter themselves,
+-- but CBD/Hilton hub forwards do move stock on a Sunday and must not drop it.
+moves AS MATERIALIZED (
+  SELECT
+    m.id,
+    m.state,
+    m.product_qty            AS qty,
+    DATE(m."date")           AS move_date,
+    EXTRACT(DOW FROM m."date") = 0 AS is_sunday,
+    src.id                   AS src_id,
+    dest.id                  AS dest_id,
+    src.complete_name        AS src_path,
+    dest.complete_name       AS dest_path,
+    src."name"               AS src_short,
+    dest."name"              AS dest_short,
+    COALESCE(pt."name", pp.id::text) AS bag_name
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE DATE(m."date") BETWEEN p.start_date AND p.end_date
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+),
+
+code_mapping AS (
+  SELECT 'STAR' AS code, 'STARMALL' AS full_name
+  UNION ALL SELECT 'STARMALL', 'STARMALL'
+  UNION ALL SELECT 'MSA', 'MOMBASA'
+  UNION ALL SELECT 'MOMBASA', 'MOMBASA'
+  UNION ALL SELECT 'NAKS', 'NAKURU'
+  UNION ALL SELECT 'NAKURU', 'NAKURU'
+  UNION ALL SELECT 'ELD', 'ELDORET'
+  UNION ALL SELECT 'ELDORET', 'ELDORET'
+  UNION ALL SELECT 'KSM', 'KISUMU'
+  UNION ALL SELECT 'KISUMU', 'KISUMU'
+  UNION ALL SELECT 'MERU', 'MERU'
+  UNION ALL SELECT 'THK', 'THIKA'
+  UNION ALL SELECT 'THIKA', 'THIKA'
+  UNION ALL SELECT 'HAZ', 'HAZINA'
+  UNION ALL SELECT 'HAZINA', 'HAZINA'
+  UNION ALL SELECT 'KITE', 'KITENGELA'
+  UNION ALL SELECT 'KITENGELA', 'KITENGELA'
+  UNION ALL SELECT 'RONG', 'RONGAI'
+  UNION ALL SELECT 'RONGAI', 'RONGAI'
+  UNION ALL SELECT 'NAN', 'NANYUKI'
+  UNION ALL SELECT 'NANYUKI', 'NANYUKI'
+  UNION ALL SELECT 'KAK', 'KAKAMEGA'
+  UNION ALL SELECT 'KAKAMEGA', 'KAKAMEGA'
+  UNION ALL SELECT 'HTN', 'HILTON'
+  UNION ALL SELECT 'HILTON', 'HILTON'
+  UNION ALL SELECT 'DAR', 'SINZA'
+  UNION ALL SELECT 'SINZA', 'SINZA'
+  UNION ALL SELECT 'UG', 'UGANDA'
+  UNION ALL SELECT 'UGANDA', 'UGANDA'
+  UNION ALL SELECT 'KSI', 'KISII'
+  UNION ALL SELECT 'KISII', 'KISII'
+  UNION ALL SELECT 'BUSIA', 'BUSIA'
+  UNION ALL SELECT 'WEBSITE', 'WEBSITE'
+  UNION ALL SELECT 'WEB', 'WEBSITE'
+  UNION ALL SELECT 'JUMIA', 'JUMIA'
+  UNION ALL SELECT 'JMA', 'JUMIA'
+  UNION ALL SELECT 'MRKT', 'MRKT'
+  UNION ALL SELECT 'MKT', 'MRKT'
+  UNION ALL SELECT 'MARKET', 'MRKT'
+),
+
+-- RECEIPTS (leg 2): stock RECEIVED out of a Goods-in-Transit node into the
+-- final /Stock location, state='done'. This is the "received basis": a bag
+-- populates a shop column only when this leg-2 receipt is done. SINZA/UGANDA
+-- excluded here (own pool, see su_receipts), as are the four v2-basis shops.
+receipts_raw AS (
+  SELECT
+    m.bag_name AS bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG/Stock%'   THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN m.dest_path ILIKE '%CORP/Stock%'   THEN 'CORPORATE'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%WEB/Stock%' OR m.dest_path ILIKE '%WEBSITE%' THEN 'WEBSITE'
+      ELSE NULL
+    END AS dest_name,
+    m.qty,
+    m.move_date
+  FROM moves m
+  WHERE m.src_path ILIKE 'FINWH/Goods in Transit/%'
+    AND m.state = 'done'
+    AND NOT m.is_sunday
+    AND m.dest_path NOT ILIKE '%DAR%'
+    AND m.dest_path NOT ILIKE '%SINZA%'
+    AND m.dest_path NOT ILIKE '%UG/Stock%'
+    AND m.dest_path NOT ILIKE '%UGANDA%'
+    AND m.dest_path NOT ILIKE '%CBD/Stock%'
+    AND m.dest_path NOT ILIKE '%KTDA/Stock%'
+    AND m.dest_path NOT ILIKE '%HTN/Stock%'
+),
+arrivals_dedup AS (
+  SELECT DISTINCT bag_name, dest_name, qty, move_date, 'Direct' AS src, NULL::int AS dedup_key
+  FROM receipts_raw
+  WHERE dest_name IS NOT NULL
+),
+
+-- STARMALL and HAZINA on the v2 (hub-redistribution) basis: arrival is
+-- counted as the bag LEAVES FINWH's own stock, matching the "How each column
+-- is counted" note on the page and the same dispatch-basis pattern
+-- DISPATCH_COMBINED's finwh_filtered stream already uses for these two shops.
+-- KTDA and HILTON have their own dedicated v2 handling below (ktda_receipts /
+-- v2_cbd_* / v2_hilton_*) since they also receive CBD/Hilton forwards, which
+-- STARMALL/HAZINA do not.
+v2_arrivals AS (
+  SELECT
+    m.bag_name AS bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%STAR%' THEN 'STARMALL'
+      WHEN m.dest_path ILIKE '%HAZ%'  THEN 'HAZINA'
+      ELSE NULL
+    END AS dest_name,
+    m.qty AS qty,
+    m.move_date AS move_date,
+    'Direct' AS src,
+    m.id AS dedup_key
+  FROM moves m
+  WHERE m.src_path ILIKE 'FINWH%'
+    AND m.src_path NOT ILIKE '%Goods in Transit%'
+    AND m.dest_path NOT ILIKE '%Goods in Transit%'
+    AND (m.dest_path ILIKE '%STAR%' OR m.dest_path ILIKE '%HAZ%')
+    AND m.state != 'cancel'
+    AND NOT m.is_sunday
+),
+
+-- KTDA — the receipt leg only: FINWH/Goods in Transit/... -> CBD/Stock, done.
+ktda_receipts AS (
+  SELECT
+    m.bag_name AS bag_name,
+    'KTDA' AS dest_name,
+    m.qty AS qty,
+    m.move_date AS move_date,
+    'Direct' AS src,
+    m.id AS dedup_key
+  FROM moves m
+  WHERE m.src_path  ILIKE 'FINWH/Goods in Transit%'
+    AND m.dest_path ILIKE '%CBD/Stock%'
+    AND m.state = 'done'
+),
+
+-- CBD forwards, done-only. Added to the receiving shop, deducted from KTDA.
+cbd_out_to_shops_raw AS (
+  SELECT
+    m.bag_name AS bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG/Stock%' OR m.dest_path ILIKE '%RONG%' THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN m.dest_path ILIKE '%HTN/Stock%'    THEN 'HILTON'
+      WHEN m.dest_path ILIKE '%CORP/Stock%'   THEN 'CORPORATE'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%WEB/Stock%' OR m.dest_path ILIKE '%WEBSITE%' THEN 'WEBSITE'
+      ELSE NULL
+    END AS dest_name,
+    m.qty AS qty,
+    m.state AS move_state,
+    m.move_date AS move_date,
+    'CBD' AS src,
+    m.id AS dedup_key
+  FROM moves m
+  WHERE m.src_path ILIKE '%CBD/Stock%'
+    AND m.dest_path NOT ILIKE '%CBD/Stock%'
+    AND m.dest_path NOT ILIKE '%KTDA/Stock%'
+    AND m.dest_path NOT ILIKE '%SINZA%'
+    AND m.dest_path NOT ILIKE '%DAR%'
+    AND m.dest_path NOT ILIKE '%UGANDA%'
+    AND m.dest_path NOT ILIKE '%UG/Stock%'
+    AND m.state != 'cancel'
+),
+cbd_out_to_shops AS (
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM cbd_out_to_shops_raw
+  WHERE dest_name IS NOT NULL
+),
+
+-- SINZA / UGANDA — counted on the RECEIVED basis, exactly like MERU:
+--   the bag lands in the column when it arrives in the shop's own stock
+--   (DAR/Stock or UG/Stock) with the move done.
+--
+-- Both are fed mostly DIRECTLY from FINWH/Stock rather than through a
+-- Goods-in-Transit node — UG/Stock in particular receives nothing from
+-- FINWH/Goods in Transit/UGANDA — so this cannot reuse receipts_raw, which
+-- only looks at transit-node sources. Filtering on the DESTINATION instead
+-- means the two-leg case can't double count: only the move that actually
+-- lands in DAR/Stock or UG/Stock is counted, never the leg into transit.
+--
+-- Customer returns are excluded: that is not stock being distributed to the
+-- shop. Inventory adjustments are excluded too, with ONE exception — Uganda,
+-- which has no transit receipt leg at all and books arrivals that way. See the
+-- WHERE clause below.
+-- ============================================================
+su_receipts AS (
+  SELECT
+    m.bag_name AS bag_name,
+    CASE
+      WHEN m.dest_path ILIKE 'DAR/Stock%' THEN 'SINZA'
+      WHEN m.dest_path ILIKE 'UG/Stock%'  THEN 'UGANDA'
+      WHEN m.src_path  ILIKE 'UG/Stock%'  THEN 'UGANDA'   -- adjustment reversal
+    END AS dest_name,
+    -- Adjustments are netted, not just credited. Uganda writes stock on AND off
+    -- constantly (1,745 in, 1,607 out over 90 days), so counting only the
+    -- inbound side credited them with ~1,200 bags they never received and drove
+    -- their in-transit balance to -733.
+    CASE WHEN m.src_path ILIKE 'UG/Stock%' THEN -m.qty ELSE m.qty END AS qty,
+    m.move_date AS move_date,
+    'Direct' AS src,
+    -- Move id for the same reason as ktda_receipts: these are single-source
+    -- rows, so two identical receipts on one day are two deliveries, not a
+    -- duplicate to be collapsed.
+    m.id AS dedup_key
+  FROM moves m
+  WHERE m.state = 'done'
+    AND (
+      -- The normal case, and the only one that applies to Sinza. Sundays are
+      -- excluded HERE ONLY: warehouse deliveries follow the warehouse week.
+      ( (m.dest_path ILIKE 'DAR/Stock%' OR m.dest_path ILIKE 'UG/Stock%')
+        AND (m.src_path ILIKE '%FINWH%' OR m.src_path ILIKE '%CBD/Stock%')
+        AND NOT m.is_sunday )
+      OR
+      -- UGANDA ONLY. The direct FINWH -> UG/Stock route stopped on 17 Jun 2026;
+      -- since then everything routes through FINWH/Goods in Transit/UGANDA and
+      -- NOTHING has ever moved out of that node into UG/Stock — Uganda books
+      -- the arrival as an inventory adjustment at their end. Without this the
+      -- column reads zero received while dispatch keeps counting sends, so the
+      -- in-transit balance only ever grows.
+      --
+      -- Deliberately NOT extended to the other shops: they all have a real
+      -- transit receipt leg AND routine stock-count adjustments (Starmall took
+      -- 2,041 from its node and 2,060 by adjustment over 120 days), so counting
+      -- adjustments there would roughly double what they appear to receive.
+      ( m.dest_path ILIKE 'UG/Stock%'
+        AND m.src_path ILIKE '%Inventory adjustment%' )
+      OR
+      -- Both adjustment legs ignore the Sunday rule, and must: Uganda runs its
+      -- stock count on a Sunday, so 1,529 of the 1,607 write-offs land on one.
+      -- Dropping those while keeping the weekday write-ons credited Uganda with
+      -- ~1,200 phantom bags.
+      ( m.src_path  ILIKE 'UG/Stock%'
+        AND m.dest_path ILIKE '%Inventory adjustment%' )
+    )
+),
+v2_cbd_forward AS (
+  -- Feeds the shop COLUMNS. WEBSITE stays out: website arrivals fold into
+  -- KTDA elsewhere, so adding them here would report the same bags twice.
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM cbd_out_to_shops_raw
+  WHERE dest_name IS NOT NULL
+    AND dest_name <> 'WEBSITE'
+    AND move_state = 'done'
+),
+-- Everything CBD handed on, website included. Separate from v2_cbd_forward
+-- because this one only feeds the DENRI SHOPS roll-up, which is a reference
+-- figure in no total — so counting website here cannot double-report it, and
+-- leaving it out understated the column by every website order.
+cbd_gave_out AS (
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM cbd_out_to_shops_raw
+  WHERE dest_name IS NOT NULL
+    AND move_state = 'done'
+),
+v2_cbd_add AS (
+  -- CBD forwards land in whichever shop received them, not just the four on
+  -- the v2 basis — this is the single path by which any CBD onward send
+  -- reaches a shop column.
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM v2_cbd_forward
+),
+v2_cbd_deduct AS (
+  SELECT bag_name, 'KTDA' AS dest_name, -qty AS qty, move_date, src, dedup_key
+  FROM v2_cbd_forward
+),
+
+-- Hilton forwards out of HTN/Stock. Everything except the SINZA/UGANDA export
+-- is deducted from HILTON; only the in-scope columns receive the matching add,
+-- because the rest still run on the received basis.
+v2_hilton_forward AS (
+  SELECT
+    m.bag_name AS bag_name,
+    -- Full shop mapping, not just the in-scope four: an unmapped destination
+    -- (customer sales, inventory adjustments, warehouse returns) is NOT a
+    -- forward and must not be deducted from HILTON.
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG%'         THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN m.dest_path ILIKE '%CORP/Stock%'   THEN 'CORPORATE'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%CBD/Stock%'
+        OR m.dest_path ILIKE '%KTDA%'
+        OR m.dest_path ILIKE '%WEB/Stock%'
+        OR m.dest_path ILIKE '%WEBSITE%'      THEN 'KTDA'
+      ELSE NULL
+    END AS dest_name,
+    m.qty AS qty,
+    m.move_date AS move_date,
+    'HTN' AS src,
+    m.id AS dedup_key
+  FROM moves m
+  WHERE m.src_path ILIKE '%HTN/Stock%'
+    AND m.dest_path NOT ILIKE '%HTN/Stock%'
+    AND m.dest_path NOT ILIKE '%SINZA%'
+    AND m.dest_path NOT ILIKE '%DAR%'
+    AND m.dest_path NOT ILIKE '%UGANDA%'
+    AND m.dest_path NOT ILIKE '%UG/Stock%'
+    AND m.state != 'cancel'
+),
+v2_hilton_add AS (
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM v2_hilton_forward
+  WHERE dest_name IS NOT NULL
+    AND dest_name <> 'KTDA'
+),
+v2_hilton_deduct AS (
+  SELECT bag_name, 'HILTON' AS dest_name, -qty AS qty, move_date, src, dedup_key
+  FROM v2_hilton_forward
+  WHERE dest_name IS NOT NULL
+),
+
+-- KTDA NEW = (CBD/Stock -> KTDA/Stock)  minus  (KTDA/Stock -> CBD/Stock returns only)
+ktda_new AS (
+  SELECT
+    m.bag_name AS bag_name,
+    'KTDA NEW' AS dest_name,
+    SUM(CASE
+          WHEN m.dest_path ILIKE '%KTDA/Stock%'
+           AND m.src_path  ILIKE '%CBD/Stock%'  THEN  m.qty
+          WHEN m.src_path  ILIKE '%KTDA/Stock%'
+           AND m.dest_path ILIKE '%CBD/Stock%'  THEN -m.qty
+          ELSE 0 END) AS qty
+  FROM moves m
+  WHERE ( (m.dest_path ILIKE '%KTDA/Stock%' AND m.src_path ILIKE '%CBD/Stock%')
+          OR (m.src_path ILIKE '%KTDA/Stock%' AND m.dest_path ILIKE '%CBD/Stock%') )
+    AND m.src_id != m.dest_id
+    AND m.state != 'cancel'
+  GROUP BY m.bag_name
+),
+
+-- DENRI SHOPS = everything CBD forwarded on, website included.
+denri_shops AS (
+  SELECT bag_name, SUM(qty) AS denri_qty
+  FROM cbd_gave_out
+  GROUP BY bag_name
+),
+
+all_moves AS (
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM (
+    SELECT bag_name,
+           CASE WHEN dest_name = 'WEBSITE' THEN 'KTDA' ELSE dest_name END AS dest_name,
+           qty, move_date, src, dedup_key
+    FROM arrivals_dedup
+  ) v1_legs
+  WHERE dest_name NOT IN ('STARMALL','HAZINA','KTDA','HILTON')
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key FROM su_receipts
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key FROM v2_arrivals
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key FROM ktda_receipts
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key FROM v2_cbd_add
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key FROM v2_hilton_add
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, src, dedup_key FROM v2_hilton_deduct
+),
+distinct_moves AS (
+  SELECT DISTINCT bag_name, dest_name, qty, move_date, src, dedup_key
+  FROM all_moves
+),
+shop_agg AS (
+  SELECT bag_name, dest_name, SUM(qty) AS qty
+  FROM distinct_moves
+  GROUP BY bag_name, dest_name
+),
+aggregated_moves AS (
+  SELECT bag_name, dest_name, qty FROM shop_agg
+  UNION ALL
+  SELECT bag_name, dest_name, qty FROM ktda_new WHERE qty <> 0
+),
+
+jumia_src AS (
+  SELECT bag_name,
+         STRING_AGG(src || ': ' || s_qty, ', ' ORDER BY src) AS src_txt
+  FROM (
+    SELECT bag_name, src, SUM(qty) AS s_qty
+    FROM distinct_moves
+    WHERE dest_name = 'JUMIA'
+    GROUP BY bag_name, src
+    HAVING SUM(qty) <> 0
+  ) z
+  GROUP BY bag_name
+),
+mrkt_src AS (
+  SELECT bag_name,
+         STRING_AGG(src || ': ' || s_qty, ', ' ORDER BY src) AS src_txt
+  FROM (
+    SELECT bag_name, src, SUM(qty) AS s_qty
+    FROM distinct_moves
+    WHERE dest_name = 'MRKT'
+    GROUP BY bag_name, src
+    HAVING SUM(qty) <> 0
+  ) z
+  GROUP BY bag_name
+),
+
+bag_universe AS (
+  SELECT bag_name FROM aggregated_moves
+  UNION
+  SELECT bag_name FROM denri_shops
+),
+pivoted_detail AS (
+  SELECT
+    b.bag_name,
+    SUM(CASE WHEN dest_name = 'STARMALL' THEN qty ELSE 0 END)   AS "STARMALL",
+    SUM(CASE WHEN dest_name = 'MOMBASA' THEN qty ELSE 0 END)    AS "MOMBASA",
+    SUM(CASE WHEN dest_name = 'NAKURU' THEN qty ELSE 0 END)     AS "NAKURU",
+    SUM(CASE WHEN dest_name = 'ELDORET' THEN qty ELSE 0 END)    AS "ELDORET",
+    SUM(CASE WHEN dest_name = 'KISUMU' THEN qty ELSE 0 END)     AS "KISUMU",
+    SUM(CASE WHEN dest_name = 'MERU' THEN qty ELSE 0 END)       AS "MERU",
+    SUM(CASE WHEN dest_name = 'THIKA' THEN qty ELSE 0 END)      AS "THIKA",
+    SUM(CASE WHEN dest_name = 'HAZINA' THEN qty ELSE 0 END)     AS "HAZINA",
+    SUM(CASE WHEN dest_name = 'KITENGELA' THEN qty ELSE 0 END)  AS "KITENGELA",
+    SUM(CASE WHEN dest_name = 'WEBSITE' THEN qty ELSE 0 END)    AS "WEBSITE",
+    SUM(CASE WHEN dest_name = 'NANYUKI' THEN qty ELSE 0 END)    AS "NANYUKI",
+    SUM(CASE WHEN dest_name = 'KAKAMEGA' THEN qty ELSE 0 END)   AS "KAKAMEGA",
+    SUM(CASE WHEN dest_name = 'HILTON' THEN qty ELSE 0 END)     AS "HILTON",
+    SUM(CASE WHEN dest_name = 'JUMIA' THEN qty ELSE 0 END)      AS "JUMIA",
+    SUM(CASE WHEN dest_name = 'MRKT' THEN qty ELSE 0 END)       AS "MRKT",
+    SUM(CASE WHEN dest_name = 'SINZA' THEN qty ELSE 0 END)      AS "SINZA",
+    SUM(CASE WHEN dest_name = 'UGANDA' THEN qty ELSE 0 END)     AS "UGANDA",
+    SUM(CASE WHEN dest_name = 'KISII' THEN qty ELSE 0 END)      AS "KISII",
+    SUM(CASE WHEN dest_name = 'KTDA' THEN qty ELSE 0 END)       AS "KTDA",
+    SUM(CASE WHEN dest_name = 'KTDA NEW' THEN qty ELSE 0 END)   AS "KTDA NEW",
+    SUM(CASE WHEN dest_name = 'BUSIA' THEN qty ELSE 0 END)      AS "BUSIA",
+    SUM(CASE WHEN dest_name = 'RONGAI' THEN qty ELSE 0 END)     AS "RONGAI",
+    SUM(CASE WHEN dest_name = 'CORPORATE' THEN qty ELSE 0 END)  AS "CORPORATE",
+    COALESCE(ds.denri_qty,0)                                    AS "DENRI SHOPS"
+  FROM bag_universe b
+  LEFT JOIN aggregated_moves a ON a.bag_name = b.bag_name
+  LEFT JOIN denri_shops ds     ON ds.bag_name = b.bag_name
+  GROUP BY b.bag_name, ds.denri_qty
+),
+
+pivoted_valued AS (
+  SELECT *
+  FROM pivoted_detail
+  WHERE ("STARMALL" <> 0 OR "MOMBASA" <> 0 OR "NAKURU" <> 0 OR "ELDORET" <> 0
+      OR "KISUMU" <> 0 OR "MERU" <> 0 OR "THIKA" <> 0 OR "HAZINA" <> 0
+      OR "KITENGELA" <> 0 OR "NANYUKI" <> 0 OR "KAKAMEGA" <> 0 OR "HILTON" <> 0
+      OR "JUMIA" <> 0 OR "MRKT" <> 0 OR "SINZA" <> 0 OR "UGANDA" <> 0
+      OR "KISII" <> 0 OR "KTDA" <> 0 OR "KTDA NEW" <> 0 OR "BUSIA" <> 0
+      OR "RONGAI" <> 0 OR "CORPORATE" <> 0 OR "DENRI SHOPS" <> 0)
+),
+
+family_map AS (
+  SELECT DISTINCT bag_name, SPLIT_PART(bag_name, ' ', 1) AS family
+  FROM pivoted_valued
+),
+family_subtotals AS (
+  SELECT
+    f.family || ' TOTAL' AS bag_name,
+    SUM(p."STARMALL")   AS "STARMALL", SUM(p."MOMBASA")  AS "MOMBASA",
+    SUM(p."NAKURU")     AS "NAKURU",   SUM(p."ELDORET")  AS "ELDORET",
+    SUM(p."KISUMU")     AS "KISUMU",   SUM(p."MERU")     AS "MERU",
+    SUM(p."THIKA")      AS "THIKA",    SUM(p."HAZINA")   AS "HAZINA",
+    SUM(p."KITENGELA")  AS "KITENGELA",SUM(p."WEBSITE")  AS "WEBSITE",
+    SUM(p."NANYUKI")    AS "NANYUKI",  SUM(p."KAKAMEGA") AS "KAKAMEGA",
+    SUM(p."HILTON")     AS "HILTON",   SUM(p."JUMIA")    AS "JUMIA",
+    SUM(p."MRKT")       AS "MRKT",     SUM(p."SINZA")    AS "SINZA",
+    SUM(p."UGANDA")     AS "UGANDA",   SUM(p."KISII")    AS "KISII",
+    SUM(p."KTDA")       AS "KTDA",     SUM(p."KTDA NEW") AS "KTDA NEW",
+    SUM(p."BUSIA")      AS "BUSIA",    SUM(p."RONGAI")   AS "RONGAI",
+    SUM(p."CORPORATE")  AS "CORPORATE",
+    SUM(p."DENRI SHOPS") AS "DENRI SHOPS"
+  FROM pivoted_valued p
+  JOIN family_map f ON p.bag_name = f.bag_name
+  GROUP BY f.family
+),
+grand_total AS (
+  SELECT
+    'GRAND TOTAL' AS bag_name,
+    SUM("STARMALL")   AS "STARMALL", SUM("MOMBASA")  AS "MOMBASA",
+    SUM("NAKURU")     AS "NAKURU",   SUM("ELDORET")  AS "ELDORET",
+    SUM("KISUMU")     AS "KISUMU",   SUM("MERU")     AS "MERU",
+    SUM("THIKA")      AS "THIKA",    SUM("HAZINA")   AS "HAZINA",
+    SUM("KITENGELA")  AS "KITENGELA",SUM("WEBSITE")  AS "WEBSITE",
+    SUM("NANYUKI")    AS "NANYUKI",  SUM("KAKAMEGA") AS "KAKAMEGA",
+    SUM("HILTON")     AS "HILTON",   SUM("JUMIA")    AS "JUMIA",
+    SUM("MRKT")       AS "MRKT",     SUM("SINZA")    AS "SINZA",
+    SUM("UGANDA")     AS "UGANDA",   SUM("KISII")    AS "KISII",
+    SUM("KTDA")       AS "KTDA",     SUM("KTDA NEW") AS "KTDA NEW",
+    SUM("BUSIA")      AS "BUSIA",    SUM("RONGAI")   AS "RONGAI",
+    SUM("CORPORATE")  AS "CORPORATE",
+    SUM("DENRI SHOPS") AS "DENRI SHOPS"
+  FROM pivoted_valued
+),
+combined AS (
+  SELECT p.bag_name,
+    "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
+    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+    "KISII","KTDA","KTDA NEW","BUSIA","RONGAI","CORPORATE","DENRI SHOPS",
+    js.src_txt AS jumia_src_txt, ms.src_txt AS mrkt_src_txt,
+    SPLIT_PART(p.bag_name, ' ', 1) AS family, 0 AS sort_order
+  FROM pivoted_valued p
+  LEFT JOIN jumia_src js ON js.bag_name = p.bag_name
+  LEFT JOIN mrkt_src  ms ON ms.bag_name = p.bag_name
+  UNION ALL
+  SELECT bag_name,
+    "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
+    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+    "KISII","KTDA","KTDA NEW","BUSIA","RONGAI","CORPORATE","DENRI SHOPS",
+    NULL, NULL,
+    bag_name AS family, 1 AS sort_order
+  FROM family_subtotals
+  UNION ALL
+  SELECT bag_name,
+    "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
+    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+    "KISII","KTDA","KTDA NEW","BUSIA","RONGAI","CORPORATE","DENRI SHOPS",
+    NULL, NULL,
+    '~~~~' AS family, 2 AS sort_order
+  FROM grand_total
+)
+
+SELECT
+  bag_name AS "Product",
+  "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
+  "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+  "KISII","KTDA","KTDA NEW","BUSIA","RONGAI",
+  ("STARMALL"+"MOMBASA"+"NAKURU"+"ELDORET"+"KISUMU"+"MERU"+"THIKA"+"HAZINA"+
+   "KITENGELA"+"WEBSITE"+"NANYUKI"+"KAKAMEGA"+"HILTON"+"JUMIA"+"MRKT"+"SINZA"+"UGANDA"+
+   "KISII"+"KTDA"+"KTDA NEW"+"BUSIA"+"RONGAI") AS "TOTAL",
+  "CORPORATE",
+  "DENRI SHOPS",
+  CASE WHEN "JUMIA" <> 0 THEN "JUMIA" || ' (' || COALESCE(jumia_src_txt,'') || ')' END AS "JUMIA SRC",
+  CASE WHEN "MRKT"  <> 0 THEN "MRKT"  || ' (' || COALESCE(mrkt_src_txt,'')  || ')' END AS "MRKT SRC",
+  family AS "Family",
+  sort_order
+FROM combined
+ORDER BY family, sort_order, bag_name;
+"""
+
+# Destination x source split behind COMBINED_DISTRIBUTION's shop totals — one
+# row per bag/destination/source, so the page can chart who supplied each
+# shop (Direct from the warehouse, or via CBD/HTN) without a second round
+# trip. Reuses the exact same receipt/forward CTEs COMBINED_DISTRIBUTION
+# builds its pivoted totals from, just left in long form instead of pivoted —
+# the same moves counted the same way, so the two queries cannot disagree.
+# Starmall/Hazina are absent on purpose: they run on the v2 basis and are not
+# part of the Direct/CBD/HTN chart (see views.py's chart_cols).
+COMBINED_DISTRIBUTION_BREAKDOWN = """
+WITH params AS (
+  SELECT
+    CAST(:start_date AS DATE) AS start_date,
+    CAST(:end_date AS DATE) AS end_date
+),
+moves AS MATERIALIZED (
+  SELECT
+    m.id, m.state, m.product_qty AS qty, DATE(m."date") AS move_date,
+    EXTRACT(DOW FROM m."date") = 0 AS is_sunday,
+    src.complete_name AS src_path, dest.complete_name AS dest_path,
+    COALESCE(pt."name", pp.id::text) AS bag_name
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE DATE(m."date") BETWEEN p.start_date AND p.end_date
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+),
+receipts_raw AS (
+  SELECT
+    m.bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG/Stock%'   THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      WHEN m.dest_path ILIKE '%WEB/Stock%' OR m.dest_path ILIKE '%WEBSITE%' THEN 'WEBSITE'
+      ELSE NULL
+    END AS dest_name,
+    m.qty, m.move_date
+  FROM moves m
+  WHERE m.src_path ILIKE 'FINWH/Goods in Transit/%'
+    AND m.state = 'done'
+    AND NOT m.is_sunday
+    AND m.dest_path NOT ILIKE '%DAR%' AND m.dest_path NOT ILIKE '%SINZA%'
+    AND m.dest_path NOT ILIKE '%UG/Stock%' AND m.dest_path NOT ILIKE '%UGANDA%'
+    AND m.dest_path NOT ILIKE '%CBD/Stock%' AND m.dest_path NOT ILIKE '%KTDA/Stock%'
+    AND m.dest_path NOT ILIKE '%HTN/Stock%'
+),
+ktda_receipts AS (
+  SELECT m.bag_name, 'KTDA' AS dest_name, m.qty, m.move_date
+  FROM moves m
+  WHERE m.src_path ILIKE 'FINWH/Goods in Transit%' AND m.dest_path ILIKE '%CBD/Stock%' AND m.state = 'done'
+),
+cbd_out_to_shops_raw AS (
+  SELECT
+    m.bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG%'         THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%HTN/Stock%'    THEN 'HILTON'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      ELSE NULL
+    END AS dest_name,
+    m.qty, m.state AS move_state, m.move_date
+  FROM moves m
+  WHERE m.src_path ILIKE '%CBD/Stock%'
+    AND m.dest_path NOT ILIKE '%CBD/Stock%' AND m.dest_path NOT ILIKE '%KTDA/Stock%'
+    AND m.dest_path NOT ILIKE '%SINZA%' AND m.dest_path NOT ILIKE '%DAR%'
+    AND m.dest_path NOT ILIKE '%UGANDA%' AND m.dest_path NOT ILIKE '%UG/Stock%'
+    AND m.state != 'cancel'
+),
+v2_hilton_forward AS (
+  SELECT
+    m.bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG%'         THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%CBD/Stock%' OR m.dest_path ILIKE '%KTDA%'
+        OR m.dest_path ILIKE '%WEB/Stock%' OR m.dest_path ILIKE '%WEBSITE%' THEN 'KTDA'
+      ELSE NULL
+    END AS dest_name,
+    m.qty, m.move_date
+  FROM moves m
+  WHERE m.src_path ILIKE '%HTN/Stock%'
+    AND m.dest_path NOT ILIKE '%HTN/Stock%' AND m.dest_path NOT ILIKE '%SINZA%'
+    AND m.dest_path NOT ILIKE '%DAR%' AND m.dest_path NOT ILIKE '%UGANDA%'
+    AND m.dest_path NOT ILIKE '%UG/Stock%' AND m.state != 'cancel'
+),
+breakdown_moves AS (
+  SELECT bag_name, dest_name, 'Direct' AS source, qty FROM receipts_raw WHERE dest_name IS NOT NULL
+  UNION ALL
+  SELECT bag_name, dest_name, 'Direct', qty FROM ktda_receipts
+  UNION ALL
+  SELECT bag_name, dest_name, 'CBD', qty FROM cbd_out_to_shops_raw WHERE dest_name IS NOT NULL AND move_state = 'done'
+  UNION ALL
+  SELECT bag_name, dest_name, 'HTN', qty FROM v2_hilton_forward WHERE dest_name IS NOT NULL
+)
+SELECT
+  bag_name AS "Product",
+  dest_name AS "Destination",
+  source AS "Source",
+  SUM(qty) AS "Qty"
+FROM breakdown_moves
+GROUP BY bag_name, dest_name, source
+HAVING SUM(qty) <> 0;
+"""
+
+# What CBD and HTN each handed on, at bag grain — one row per bag/destination
+# they forwarded to. Reuses the same cbd_out_to_shops_raw / v2_hilton_forward
+# CTEs as COMBINED_DISTRIBUTION_BREAKDOWN so the hub tally on the Combined
+# Distribution page can never disagree with the shop-level source split above.
+HUB_OUTFLOW = """
+WITH params AS (
+  SELECT
+    CAST(:start_date AS DATE) AS start_date,
+    CAST(:end_date AS DATE) AS end_date
+),
+moves AS MATERIALIZED (
+  SELECT
+    m.id, m.state, m.product_qty AS qty, DATE(m."date") AS move_date,
+    src.complete_name AS src_path, dest.complete_name AS dest_path,
+    COALESCE(pt."name", pp.id::text) AS bag_name
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE DATE(m."date") BETWEEN p.start_date AND p.end_date
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+),
+cbd_out_to_shops_raw AS (
+  SELECT
+    m.bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG%'         THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN m.dest_path ILIKE '%HTN/Stock%'    THEN 'HILTON'
+      WHEN m.dest_path ILIKE '%CORP/Stock%'   THEN 'CORPORATE'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%WEB/Stock%' OR m.dest_path ILIKE '%WEBSITE%' THEN 'WEBSITE'
+      ELSE NULL
+    END AS dest_name,
+    m.qty, m.state AS move_state
+  FROM moves m
+  WHERE m.src_path ILIKE '%CBD/Stock%'
+    AND m.dest_path NOT ILIKE '%CBD/Stock%' AND m.dest_path NOT ILIKE '%KTDA/Stock%'
+    AND m.dest_path NOT ILIKE '%SINZA%' AND m.dest_path NOT ILIKE '%DAR%'
+    AND m.dest_path NOT ILIKE '%UGANDA%' AND m.dest_path NOT ILIKE '%UG/Stock%'
+    AND m.state != 'cancel'
+),
+v2_hilton_forward AS (
+  SELECT
+    m.bag_name,
+    CASE
+      WHEN m.dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN m.dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN m.dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN m.dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN m.dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN m.dest_path ILIKE '%RONG%'         THEN 'RONGAI'
+      WHEN m.dest_path ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN m.dest_path ILIKE '%CORP/Stock%'   THEN 'CORPORATE'
+      WHEN m.dest_path ILIKE '%MRKT%' OR m.dest_path ILIKE '%MARKET%' THEN 'MRKT'
+      WHEN m.dest_path ILIKE '%JUMIA%'        THEN 'JUMIA'
+      WHEN m.dest_path ILIKE '%CBD/Stock%' OR m.dest_path ILIKE '%KTDA%'
+        OR m.dest_path ILIKE '%WEB/Stock%' OR m.dest_path ILIKE '%WEBSITE%' THEN 'KTDA'
+      ELSE NULL
+    END AS dest_name,
+    m.qty
+  FROM moves m
+  WHERE m.src_path ILIKE '%HTN/Stock%'
+    AND m.dest_path NOT ILIKE '%HTN/Stock%' AND m.dest_path NOT ILIKE '%SINZA%'
+    AND m.dest_path NOT ILIKE '%DAR%' AND m.dest_path NOT ILIKE '%UGANDA%'
+    AND m.dest_path NOT ILIKE '%UG/Stock%' AND m.state != 'cancel'
+),
+hub_moves AS (
+  SELECT bag_name, dest_name, 'CBD' AS source, qty FROM cbd_out_to_shops_raw
+  WHERE dest_name IS NOT NULL AND move_state = 'done'
+  UNION ALL
+  SELECT bag_name, dest_name, 'HTN' AS source, qty FROM v2_hilton_forward
+  WHERE dest_name IS NOT NULL
+)
+SELECT
+  bag_name AS "Product",
+  dest_name AS "Sent to",
+  source AS "Source",
+  SUM(qty) AS "Qty"
+FROM hub_moves
+GROUP BY bag_name, dest_name, source
+HAVING SUM(qty) <> 0;
+"""
+
+# What LEFT the warehouse: stock moves (FINWH inventory transfers, shop
+# transit dispatches, internal CBD<->KTDA moves), CBD's onward sends to shops
+# (toggled by :include_cbd), and sales-order dispatch to Sinza/Uganda, pivoted
+# by destination with product-family subtotals and a grand total. Sundays are
+# excluded from the warehouse streams but not the CBD stream — CBD does hand
+# stock on a Sunday, and dropping it would make Goods in Transit go negative
+# for every bag CBD moved on one.
+DISPATCH_COMBINED = """
+WITH params AS (
+  SELECT
+    CAST(:start_date AS DATE) AS start_date,
+    CAST(:end_date AS DATE) AS end_date,
+    CAST(:include_cbd AS BOOLEAN) AS include_cbd
 ),
 
 code_mapping AS (
@@ -1801,6 +2607,7 @@ finwh_inventory AS (
   LEFT JOIN code_mapping cm ON UPPER(SPLIT_PART(COALESCE(m.reference, m."name"), '/', 1)) = cm.code
   CROSS JOIN params p
   WHERE (UPPER(src."name") IN ('FINWH', 'FINWH/STOCK') OR src.complete_name ILIKE '%FINWH%')
+    AND src.complete_name NOT ILIKE '%Goods in Transit%'
     AND (
       UPPER(dest."name") IN (
         'STARMALL','MOMBASA','NAKURU','ELDORET','KISUMU','MERU','THIKA','HAZINA',
@@ -1822,8 +2629,8 @@ finwh_inventory AS (
 finwh_filtered AS (
   SELECT bag_name, dest_name, qty, move_date, NULL::int AS dedup_key
   FROM finwh_inventory
-  WHERE (dest_name IN ('SINZA', 'UGANDA') AND move_state = 'done')
-     OR (dest_name NOT IN ('SINZA', 'UGANDA') AND move_state != 'cancel')
+  WHERE dest_name NOT IN ('SINZA', 'UGANDA')
+    AND move_state != 'cancel'
 ),
 
 -- STREAM 2 — SHOP TRANSIT DISPATCHES
@@ -1875,80 +2682,75 @@ transit_moves AS (
 transit_filtered AS (
   SELECT bag_name, dest_name, qty, move_date, NULL::int AS dedup_key
   FROM transit_moves
-  WHERE (dest_name IN ('SINZA', 'UGANDA') AND transit_state = 'done')
-     OR (dest_name NOT IN ('SINZA', 'UGANDA'))
+  WHERE dest_name NOT IN ('SINZA', 'UGANDA')
 ),
 
--- STREAM 3 — CBD INVENTORY MOVES (only 'done' moves)
-cbd_inventory AS (
+-- STREAM 3 — CBD/Stock onward sends to shops, RECEIVED only. Switched on or
+-- off by :include_cbd, so the same report reads as pure warehouse dispatch or
+-- as dispatch plus hub redistribution. No Sunday filter: CBD is a hub and
+-- does hand stock on a Sunday, matching Combined Distribution, which counts
+-- the same moves — dropping Sundays here would make Goods in Transit
+-- (dispatch minus combined) go negative for every bag CBD moved on one.
+cbd_sends AS (
   SELECT
     COALESCE(pt."name", pp.id::text) AS bag_name,
-    COALESCE(
-      cm.full_name,
-      CASE
-        WHEN dest.complete_name ILIKE '%CBD%' OR UPPER(dest."name") IN ('CBD', 'CBD/STOCK', 'KTDA') THEN 'KTDA'
-        WHEN dest.complete_name ILIKE '%RONG%' OR UPPER(dest."name") IN ('RONGAI', 'RONG/STOCK') THEN 'RONGAI'
-        WHEN UPPER(dest."name") = 'STARMALL' THEN 'STARMALL'
-        WHEN UPPER(dest."name") = 'MOMBASA' THEN 'MOMBASA'
-        WHEN UPPER(dest."name") = 'NAKURU' THEN 'NAKURU'
-        WHEN UPPER(dest."name") = 'ELDORET' THEN 'ELDORET'
-        WHEN UPPER(dest."name") = 'KISUMU' THEN 'KISUMU'
-        WHEN UPPER(dest."name") = 'MERU' THEN 'MERU'
-        WHEN UPPER(dest."name") = 'THIKA' THEN 'THIKA'
-        WHEN UPPER(dest."name") = 'HAZINA' THEN 'HAZINA'
-        WHEN UPPER(dest."name") = 'KITENGELA' THEN 'KITENGELA'
-        WHEN UPPER(dest."name") = 'NANYUKI' THEN 'NANYUKI'
-        WHEN UPPER(dest."name") = 'KAKAMEGA' THEN 'KAKAMEGA'
-        WHEN UPPER(dest."name") = 'HILTON' THEN 'HILTON'
-        WHEN UPPER(dest."name") = 'SINZA' THEN 'SINZA'
-        WHEN UPPER(dest."name") = 'UGANDA' THEN 'UGANDA'
-        WHEN UPPER(dest."name") = 'KISII' THEN 'KISII'
-        WHEN UPPER(dest."name") = 'BUSIA' THEN 'BUSIA'
-        ELSE dest."name"
-      END
-    ) AS dest_name,
+    CASE
+      WHEN dest.complete_name ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN dest.complete_name ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN dest.complete_name ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN dest.complete_name ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN dest.complete_name ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN dest.complete_name ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN dest.complete_name ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN dest.complete_name ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN dest.complete_name ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN dest.complete_name ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN dest.complete_name ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN dest.complete_name ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN dest.complete_name ILIKE '%RONG%'         THEN 'RONGAI'
+      WHEN dest.complete_name ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN dest.complete_name ILIKE '%HTN/Stock%'    THEN 'HILTON'
+      ELSE NULL
+    END AS dest_name,
     m.product_qty AS qty,
-    m.state AS move_state,
-    DATE(m."date") AS move_date
+    DATE(m."date") AS move_date,
+    m.id AS dedup_key
   FROM stock_move m
-  JOIN stock_location src ON m.location_id = src.id
+  JOIN stock_location src  ON m.location_id = src.id
   JOIN stock_location dest ON m.location_dest_id = dest.id
-  JOIN product_product pp ON m.product_id = pp.id
+  JOIN product_product pp  ON m.product_id = pp.id
   LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
-  LEFT JOIN code_mapping cm ON UPPER(SPLIT_PART(COALESCE(m.reference, m."name"), '/', 1)) = cm.code
   CROSS JOIN params p
-  WHERE (UPPER(src."name") IN ('CBD', 'CBD/STOCK') OR src.complete_name ILIKE '%CBD%')
-    AND (
-      UPPER(dest."name") IN (
-        'STARMALL','MOMBASA','NAKURU','ELDORET','KISUMU','MERU','THIKA','HAZINA',
-        'KITENGELA','WEBSITE','NANYUKI','KAKAMEGA','HILTON','SINZA','UGANDA',
-        'KISII','CBD','CBD/STOCK','BUSIA','RONGAI'
-      )
-      OR dest.complete_name ILIKE '%CBD%'
-      OR dest.complete_name ILIKE '%RONG%'
-      OR UPPER(SPLIT_PART(COALESCE(m.reference, m."name"), '/', 1)) IN (
-        'STAR','MSA','NAKS','ELD','KSM','MERU','THK','HAZ','KITE','RONG','NAN',
-        'KAK','HTN','DAR','UG','KSI','KTDA','BUSIA','CBD','STARMALL','MOMBASA',
-        'NAKURU','ELDORET','KISUMU','THIKA','HAZINA','KITENGELA','RONGAI',
-        'NANYUKI','KAKAMEGA','HILTON','SINZA','UGANDA','KISII'
-      )
-    )
+  WHERE src.complete_name ILIKE '%CBD/Stock%'
+    AND dest.complete_name NOT ILIKE '%CBD/Stock%'
+    AND dest.complete_name NOT ILIKE '%KTDA%'
+    AND dest.complete_name NOT ILIKE '%SINZA%'
+    AND dest.complete_name NOT ILIKE '%DAR%'
+    AND dest.complete_name NOT ILIKE '%UGANDA%'
+    AND dest.complete_name NOT ILIKE '%UG/Stock%'
+    AND m.state = 'done'
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
     AND DATE(m."date") BETWEEN p.start_date AND p.end_date
-    AND EXTRACT(DOW FROM m."date") != 0
 ),
 cbd_filtered AS (
-  SELECT bag_name, dest_name, qty, move_date, NULL::int AS dedup_key
-  FROM cbd_inventory
-  WHERE move_state = 'done'
-    AND dest_name NOT IN ('KTDA', 'WEBSITE')
+  SELECT bag_name, dest_name, qty, move_date, dedup_key
+  FROM cbd_sends, params p
+  WHERE dest_name IS NOT NULL
+    AND p.include_cbd
 ),
 
--- STREAM 4 — INTERNAL CBD <-> KTDA MOVES
+-- STREAM 4 — INTERNAL CBD <-> KTDA MOVES. Deliberately narrow: CBD/Stock <->
+-- KTDA/Stock and nothing else, matching ktda_new in COMBINED_DISTRIBUTION so
+-- the two sides measure one thing. A wildcard on '%CBD%' would also match the
+-- RECEIPT leg of every warehouse delivery to KTDA, already counted in
+-- Combined Distribution's KTDA column via ktda_receipts, and counting it
+-- again here would report the same bags twice.
 ktda_internal AS (
   SELECT
     COALESCE(pt."name", pp.id::text) AS bag_name,
     'KTDA NEW' AS dest_name,
-    m.product_qty AS qty,
+    CASE WHEN src.complete_name ILIKE '%KTDA/Stock%'
+         THEN -m.product_qty ELSE m.product_qty END AS qty,
     DATE(m."date") AS move_date,
     m.id AS dedup_key
   FROM stock_move m
@@ -1957,26 +2759,80 @@ ktda_internal AS (
   JOIN product_product pp ON m.product_id = pp.id
   LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
   CROSS JOIN params p
-  WHERE (src.complete_name ILIKE '%CBD%' OR src.complete_name ILIKE '%KTDA%'
-         OR UPPER(src."name") IN ('CBD', 'CBD/STOCK', 'KTDA', 'KTDA SHOP'))
-    AND (dest.complete_name ILIKE '%CBD%' OR dest.complete_name ILIKE '%KTDA%'
-         OR UPPER(dest."name") IN ('CBD', 'CBD/STOCK', 'KTDA', 'KTDA SHOP'))
+  WHERE ( (src.complete_name  ILIKE '%CBD/Stock%'
+           AND dest.complete_name ILIKE '%KTDA/Stock%')
+       OR (src.complete_name  ILIKE '%KTDA/Stock%'
+           AND dest.complete_name ILIKE '%CBD/Stock%') )
     AND src.id != dest.id
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
     AND DATE(m."date") BETWEEN p.start_date AND p.end_date
     AND m.state != 'cancel'
 ),
 
 -- STREAM 5 — SALES-ORDER DISPATCH (Bagware Tanzania / Luggageware Uganda)
-sale_dispatch AS (
+-- SINZA / UGANDA — pooled from three sources, then deduped WITHOUT the date,
+-- since the same consignment is recorded as a stock move, a transit dispatch
+-- and a sale order and rarely carries the same date on all three. Uganda
+-- takes the stock-move leg alone, not the pool: it reconciles exactly against
+-- FINWH/Goods in Transit/UGANDA's own balance, and the pooled dedup key
+-- (bag+destination+quantity, no date) is too blunt for it — two genuine sends
+-- of the same bag and quantity on different days collapsed into one.
+su_finwh AS (
   SELECT
     COALESCE(pt."name", pp.id::text) AS bag_name,
     CASE
-      WHEN rp."name" ILIKE '%Luggageware Uganda%' THEN 'UGANDA'
-      ELSE 'SINZA'
+      WHEN dest.complete_name ILIKE '%UGANDA%' OR dest.complete_name ILIKE 'UG/Stock%'
+        THEN 'UGANDA' ELSE 'SINZA'
     END AS dest_name,
+    m.product_qty AS qty,
+    DATE(m."date") AS move_date,
+    m.id AS dedup_key
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE (UPPER(src."name") IN ('FINWH','FINWH/STOCK') OR src.complete_name ILIKE '%FINWH%')
+    AND src.complete_name NOT ILIKE '%Goods in Transit%'
+    AND ( dest.complete_name ILIKE '%Goods in Transit/DAR-ES-ALAM%'
+       OR dest.complete_name ILIKE '%Goods in Transit/UGANDA%'
+       OR dest.complete_name ILIKE 'DAR/Stock%'
+       OR dest.complete_name ILIKE 'UG/Stock%'
+       OR dest.complete_name ILIKE '%SINZA%'
+       OR dest.complete_name ILIKE '%UGANDA%'
+       OR UPPER(dest."name") IN ('DAR','SINZA','UG','UGANDA','DAR-ES-ALAM') )
+    AND m.state != 'cancel'
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+    AND DATE(m."date") BETWEEN p.start_date AND p.end_date
+),
+su_transit AS (
+  SELECT
+    COALESCE(pt."name", pp.id::text) AS bag_name,
+    CASE
+      WHEN s."name" ILIKE '%UGANDA%' OR UPPER(s."name") = 'UG'
+        THEN 'UGANDA' ELSE 'SINZA'
+    END AS dest_name,
+    l.qty_dispatched AS qty,
+    DATE(t.dispatch_date) AS move_date
+  FROM denri_dispatch_transit_line l
+  JOIN denri_dispatch_transit t ON l.transit_id = t.id
+  JOIN denri_dispatch_shop s ON t.shop_id = s.id
+  JOIN product_product pp ON l.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE (s."name" ILIKE '%SINZA%' OR s."name" ILIKE '%DAR%'
+      OR s."name" ILIKE '%UGANDA%' OR UPPER(s."name") IN ('UG','DAR','SINZA','UGANDA'))
+    AND t.state != 'cancel'
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+    AND DATE(t.dispatch_date) BETWEEN p.start_date AND p.end_date
+),
+su_sales AS (
+  SELECT
+    COALESCE(pt."name", pp.id::text) AS bag_name,
+    CASE WHEN rp."name" ILIKE '%Luggageware Uganda%' THEN 'UGANDA' ELSE 'SINZA' END AS dest_name,
     sol.product_uom_qty AS qty,
-    DATE(so.date_order) AS move_date,
-    NULL::int AS dedup_key
+    DATE(so.date_order) AS move_date
   FROM sale_order so
   JOIN sale_order_line sol ON sol.order_id = so.id
   JOIN res_partner rp ON so.partner_id = rp.id
@@ -1985,20 +2841,74 @@ sale_dispatch AS (
   CROSS JOIN params p
   WHERE (rp."name" ILIKE '%Bagware Tanzania%' OR rp."name" ILIKE '%Luggageware Uganda%')
     AND so.state IN ('sale','done')
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
     AND DATE(so.date_order) BETWEEN p.start_date AND p.end_date
     AND COALESCE(sol.product_uom_qty,0) <> 0
+),
+su_pool AS (
+  SELECT bag_name, dest_name, qty, move_date FROM su_finwh
+  UNION ALL SELECT bag_name, dest_name, qty, move_date FROM su_transit
+  UNION ALL SELECT bag_name, dest_name, qty, move_date FROM su_sales
+),
+sinza_dispatch AS (
+  SELECT bag_name, dest_name, qty, MIN(move_date) AS move_date, NULL::int AS dedup_key
+  FROM su_pool
+  WHERE dest_name = 'SINZA'
+  GROUP BY bag_name, dest_name, qty
+),
+sale_dispatch AS (
+  SELECT bag_name, dest_name, qty, move_date, dedup_key
+  FROM su_finwh
+  WHERE dest_name = 'UGANDA'
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, dedup_key
+  FROM sinza_dispatch
+),
+
+-- STREAM 6 — RETURNS OUT OF A TRANSIT NODE. A bag booked into a shop's
+-- Goods-in-Transit node and then sent back to the warehouse or to purchasing
+-- never reached the shop, so it is not dispatched and it is not in transit —
+-- negative quantities, netted off the destination the bag was originally
+-- routed to.
+transit_returns AS (
+  SELECT
+    COALESCE(pt."name", pp.id::text) AS bag_name,
+    CASE UPPER(SPLIT_PART(src.complete_name, '/', 3))
+      WHEN 'CBD STOCKS'    THEN 'KTDA'
+      WHEN 'KTDA SHOP'     THEN 'KTDA'
+      WHEN 'DAR-ES-ALAM'   THEN 'SINZA'
+      WHEN 'WEBSITE STORE' THEN 'WEBSITE'
+      ELSE UPPER(SPLIT_PART(src.complete_name, '/', 3))
+    END AS dest_name,
+    -m.product_qty AS qty,
+    DATE(m."date") AS move_date,
+    m.id AS dedup_key
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE src.complete_name ILIKE 'FINWH/Goods in Transit/%'
+    AND (dest.complete_name ILIKE 'FINWH%' OR dest.complete_name ILIKE 'PURCH%')
+    AND dest.complete_name NOT ILIKE '%Goods in Transit%'
+    AND m.state = 'done'
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+    AND DATE(m."date") BETWEEN p.start_date AND p.end_date
 ),
 
 all_moves AS (
   SELECT bag_name, dest_name, qty, move_date, dedup_key FROM finwh_filtered
   UNION ALL
-  SELECT bag_name, dest_name, qty, move_date, dedup_key FROM transit_filtered WHERE dest_name != 'SINZA'
+  SELECT bag_name, dest_name, qty, move_date, dedup_key FROM transit_filtered
   UNION ALL
   SELECT bag_name, dest_name, qty, move_date, dedup_key FROM cbd_filtered
   UNION ALL
   SELECT bag_name, dest_name, qty, move_date, dedup_key FROM ktda_internal
   UNION ALL
   SELECT bag_name, dest_name, qty, move_date, dedup_key FROM sale_dispatch
+  UNION ALL
+  SELECT bag_name, dest_name, qty, move_date, dedup_key FROM transit_returns
 ),
 
 distinct_moves AS (
@@ -2136,6 +3046,203 @@ SELECT
   sort_order
 FROM combined
 ORDER BY family, sort_order, bag_name;
+"""
+
+# The transit balance, straight from Odoo: a QUANT BALANCE out of
+# FINWH/Goods in Transit/*, not dispatched-minus-received over a window. A
+# flow reading (two date-ranged reports subtracted) gave Sinza 322 over a
+# week, 267 over a month and -843 over a year against a true balance of 322 —
+# a window only ever sees the transactions inside it, not the running balance
+# they left behind. No date params: "what is in transit" is a question about
+# now, and this deliberately does not follow the page's date range.
+TRANSIT_BALANCE = """
+WITH quant_balance AS (
+  SELECT
+    COALESCE(pt."name", pp.id::text) AS bag_name,
+    sl.complete_name AS location_path,
+    sq.quantity AS qty
+  FROM stock_quant sq
+  JOIN stock_location sl ON sl.id = sq.location_id
+  JOIN product_product pp ON pp.id = sq.product_id
+  LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+  WHERE sl.complete_name ILIKE 'FINWH/Goods in Transit/%'
+    AND sq.quantity <> 0
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+),
+code_mapping AS (
+  SELECT 'STAR' AS code, 'STARMALL' AS full_name
+  UNION ALL SELECT 'MSA', 'MOMBASA'
+  UNION ALL SELECT 'NAKS', 'NAKURU'
+  UNION ALL SELECT 'ELD', 'ELDORET'
+  UNION ALL SELECT 'KSM', 'KISUMU'
+  UNION ALL SELECT 'MERU', 'MERU'
+  UNION ALL SELECT 'THK', 'THIKA'
+  UNION ALL SELECT 'HAZ', 'HAZINA'
+  UNION ALL SELECT 'KITE', 'KITENGELA'
+  UNION ALL SELECT 'WEB', 'WEBSITE'
+  UNION ALL SELECT 'WEBSITE', 'WEBSITE'
+  UNION ALL SELECT 'NAN', 'NANYUKI'
+  UNION ALL SELECT 'KAK', 'KAKAMEGA'
+  UNION ALL SELECT 'HTN', 'HILTON'
+  UNION ALL SELECT 'DAR-ES-ALAM', 'SINZA'
+  UNION ALL SELECT 'DAR', 'SINZA'
+  UNION ALL SELECT 'UGANDA', 'UGANDA'
+  UNION ALL SELECT 'UG', 'UGANDA'
+  UNION ALL SELECT 'KSI', 'KISII'
+  UNION ALL SELECT 'KTDA', 'KTDA'
+  UNION ALL SELECT 'KTDA NEW', 'KTDA NEW'
+  UNION ALL SELECT 'BUSIA', 'BUSIA'
+  UNION ALL SELECT 'RONG', 'RONGAI'
+  UNION ALL SELECT 'RONGAI', 'RONGAI'
+  UNION ALL SELECT 'MRKT', 'MRKT'
+  UNION ALL SELECT 'MARKET', 'MRKT'
+  UNION ALL SELECT 'CORP', 'CORPORATE'
+  UNION ALL SELECT 'CORPORATE', 'CORPORATE'
+  UNION ALL SELECT 'COMPLIMENTARY', 'COMPLIMENTARY'
+  UNION ALL SELECT 'CBD', 'CBD'
+  -- The transit node's own name is a two-word compound, not the short code
+  -- the other rows key off — "CBD Stocks" and "KTDA Shop" verified live.
+  UNION ALL SELECT 'CBD STOCKS', 'CBD'
+  UNION ALL SELECT 'KTDA SHOP', 'KTDA'
+  UNION ALL SELECT 'WEBSITE STORE', 'WEBSITE'
+),
+mapped AS (
+  SELECT
+    qb.bag_name,
+    -- Falls back to the raw path segment (unmapped) rather than dropping the
+    -- row, so a new transit node still surfaces in the total and in
+    -- transit.unmapped_destinations() instead of silently vanishing.
+    COALESCE(cm.full_name, UPPER(SPLIT_PART(qb.location_path, '/', 3))) AS dest_name,
+    qb.qty
+  FROM quant_balance qb
+  LEFT JOIN code_mapping cm ON UPPER(SPLIT_PART(qb.location_path, '/', 3)) = cm.code
+)
+SELECT
+  bag_name AS "Product",
+  dest_name AS "Destination",
+  SUM(qty) AS "Quantity"
+FROM mapped
+GROUP BY bag_name, dest_name
+HAVING SUM(qty) <> 0;
+"""
+
+# Raw dispatch and receipt events behind Shops Receiving — one row per move,
+# not yet settled against each other. lib/views.py's FIFO settlement (see
+# _settle_receiving) matches these two streams per shop+bag: oldest dispatch
+# against oldest receipt, first, so a split delivery (part of a consignment
+# landing before the rest) still counts each bag once rather than leaving the
+# whole line "outstanding" until every last bag of it has arrived.
+SHOPS_RECEIVING_DISPATCHES = """
+WITH params AS (
+  SELECT
+    CAST(:start_date AS DATE) AS start_date,
+    CAST(:end_date AS DATE) AS end_date
+),
+moves AS MATERIALIZED (
+  SELECT
+    m.state, m.product_qty AS qty, DATE(m."date") AS move_date,
+    EXTRACT(DOW FROM m."date") = 0 AS is_sunday,
+    src.complete_name AS src_path, dest.complete_name AS dest_path,
+    COALESCE(pt."name", pp.id::text) AS bag_name
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  CROSS JOIN params p
+  WHERE DATE(m."date") BETWEEN p.start_date AND p.end_date
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+),
+dispatches AS (
+  SELECT
+    bag_name,
+    CASE
+      WHEN dest_path ILIKE '%MSA%'    THEN 'MOMBASA'
+      WHEN dest_path ILIKE '%NAKS%'   THEN 'NAKURU'
+      WHEN dest_path ILIKE '%ELD%'    THEN 'ELDORET'
+      WHEN dest_path ILIKE '%KSM%'    THEN 'KISUMU'
+      WHEN dest_path ILIKE '%MERU%'   THEN 'MERU'
+      WHEN dest_path ILIKE '%THK%'    THEN 'THIKA'
+      WHEN dest_path ILIKE '%HAZ%'    THEN 'HAZINA'
+      WHEN dest_path ILIKE '%KITE%'   THEN 'KITENGELA'
+      WHEN dest_path ILIKE '%NAN%'    THEN 'NANYUKI'
+      WHEN dest_path ILIKE '%KAK%'    THEN 'KAKAMEGA'
+      WHEN dest_path ILIKE '%HTN%'    THEN 'HILTON'
+      WHEN dest_path ILIKE '%KSI%'    THEN 'KISII'
+      WHEN dest_path ILIKE '%BUSIA%'  THEN 'BUSIA'
+      WHEN dest_path ILIKE '%RONG%'   THEN 'RONGAI'
+      WHEN dest_path ILIKE '%STAR%'   THEN 'STARMALL'
+      WHEN dest_path ILIKE '%CBD%'    THEN 'KTDA'
+      ELSE NULL
+    END AS shop,
+    qty, move_date
+  FROM moves
+  WHERE src_path ILIKE 'FINWH%'
+    AND src_path NOT ILIKE '%Goods in Transit%'
+    AND dest_path ILIKE '%Goods in Transit%'
+    AND state != 'cancel'
+    AND NOT is_sunday
+)
+SELECT bag_name AS "Product", shop AS "Shop", move_date AS "Date", qty AS "Qty"
+FROM dispatches
+WHERE shop IS NOT NULL AND qty > 0
+ORDER BY "Product", "Shop", "Date";
+"""
+
+SHOPS_RECEIVING_RECEIPTS = """
+WITH params AS (
+  SELECT
+    CAST(:start_date AS DATE) AS start_date,
+    CAST(:end_date AS DATE) AS end_date
+),
+moves AS MATERIALIZED (
+  SELECT
+    m.state, m.product_qty AS qty, DATE(m."date") AS move_date,
+    src.complete_name AS src_path, dest.complete_name AS dest_path,
+    COALESCE(pt."name", pp.id::text) AS bag_name
+  FROM stock_move m
+  JOIN stock_location src  ON m.location_id = src.id
+  JOIN stock_location dest ON m.location_dest_id = dest.id
+  JOIN product_product pp  ON m.product_id = pp.id
+  LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
+  -- A wide net on purpose: a receipt can land any time after its dispatch,
+  -- not just inside the same date range, so this looks a month past the
+  -- window's end to catch late arrivals the settlement step can still match.
+  CROSS JOIN params p
+  WHERE DATE(m."date") BETWEEN p.start_date AND (p.end_date + INTERVAL '30 days')
+    AND COALESCE(pt."name",'') NOT LIKE '%+%'
+),
+receipts AS (
+  SELECT
+    bag_name,
+    CASE
+      WHEN dest_path ILIKE '%MSA/Stock%'    THEN 'MOMBASA'
+      WHEN dest_path ILIKE '%NAKS/Stock%'   THEN 'NAKURU'
+      WHEN dest_path ILIKE '%ELD/Stock%'    THEN 'ELDORET'
+      WHEN dest_path ILIKE '%KSM/Stock%'    THEN 'KISUMU'
+      WHEN dest_path ILIKE '%MERU/Stock%'   THEN 'MERU'
+      WHEN dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
+      WHEN dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
+      WHEN dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
+      WHEN dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
+      WHEN dest_path ILIKE '%HTN/Stock%'    THEN 'HILTON'
+      WHEN dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
+      WHEN dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
+      WHEN dest_path ILIKE '%RONG/Stock%'   THEN 'RONGAI'
+      WHEN dest_path ILIKE '%STAR/Stock%'   THEN 'STARMALL'
+      WHEN dest_path ILIKE '%CBD/Stock%'    THEN 'KTDA'
+      ELSE NULL
+    END AS shop,
+    qty, move_date
+  FROM moves
+  WHERE src_path ILIKE 'FINWH/Goods in Transit/%'
+    AND state = 'done'
+)
+SELECT bag_name AS "Product", shop AS "Shop", move_date AS "Date", qty AS "Qty"
+FROM receipts
+WHERE shop IS NOT NULL AND qty > 0
+ORDER BY "Product", "Shop", "Date";
 """
 
 # One row per sold line: Date, parsed Product + Color, Location, unit Price,
