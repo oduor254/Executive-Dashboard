@@ -86,15 +86,39 @@ _FULL_PRICE_TOLERANCE = 1.0  # KES
 _POWER_DEALS_START = (2026, 7)
 _DEALS_OF_WEEK_START = (2026, 1)
 
+# What year to assume for a CSV written before the year column existed — see
+# _with_year. Tracking began in 2026, so that is the only year such a file
+# can hold.
+_LEGACY_YEAR = 2026
+
+
+def _with_year(frame: pd.DataFrame) -> pd.DataFrame:
+    """Backfill "year" on a file written before that column existed.
+
+    These CSVs are rewritten in place by deals_sync.sync(), so the copy on a
+    running deployment is not necessarily the copy in git — a sync run before
+    the year column was added leaves an old-format file sitting next to new
+    code, and reading it blew the Offer Types tab up with a bare KeyError.
+    The schema this code needs can't be assumed of a file the app itself
+    writes, so a missing column is repaired rather than fatal.
+
+    2026 is the right fill: a file with no year column can only have been
+    written by the version that predates it, and that version only ever ran
+    against the 2026 sheet.
+    """
+    if "year" in frame.columns:
+        return frame
+    return frame.assign(year=_LEGACY_YEAR)
+
 
 @st.cache_data(show_spinner=False)
 def _load_power_deals() -> pd.DataFrame:
-    return pd.read_csv(_DATA_DIR / "power_deals.csv")
+    return _with_year(pd.read_csv(_DATA_DIR / "power_deals.csv"))
 
 
 @st.cache_data(show_spinner=False)
 def _load_deals_of_week() -> pd.DataFrame:
-    return pd.read_csv(_DATA_DIR / "deals_of_week.csv")
+    return _with_year(pd.read_csv(_DATA_DIR / "deals_of_week.csv"))
 
 
 def _is_discounted(price: float, original: float) -> bool:

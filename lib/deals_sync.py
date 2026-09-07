@@ -249,7 +249,11 @@ def _merge_with_existing(fresh: pd.DataFrame, filename: str, key: list[str]) -> 
     if not path.exists():
         return fresh
 
-    existing = pd.read_csv(path)
+    # Repaired the same way deals._load_* repairs it: a file written before the
+    # year column existed is still an archive worth keeping, and dropping it
+    # for want of one column would quietly discard the history this merge
+    # exists to protect.
+    existing = deals._with_year(pd.read_csv(path))
     if existing.empty or not set(key).issubset(existing.columns):
         return fresh
 
