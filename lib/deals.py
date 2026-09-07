@@ -50,7 +50,9 @@ Standard/Antitheft was actually chosen — not 3.
 """
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -90,6 +92,30 @@ _DEALS_OF_WEEK_START = (2026, 1)
 # _with_year. Tracking began in 2026, so that is the only year such a file
 # can hold.
 _LEGACY_YEAR = 2026
+
+
+SYNCED_AT_FILE = "offers_synced_at.json"
+
+# Deal of the Week rotates weekly, so the sheet gains a fresh set of products
+# every week and the stored copy falls behind within days rather than months.
+# August 2026 was caught mid-drift: a sync had captured week one only, leaving
+# 740 bags worth KES 1.37m classified as Regular for want of the later weeks'
+# definitions. A week is therefore the point at which the lists stop being
+# trustworthy, not an arbitrary threshold.
+SYNC_STALE_AFTER_DAYS = 7
+
+
+def last_synced() -> datetime | None:
+    """When the offer lists were last pulled from the sheet, or None if that
+    was never recorded (a deployment whose CSVs came straight from git)."""
+    path = _DATA_DIR / SYNCED_AT_FILE
+    if not path.exists():
+        return None
+    try:
+        stamp = json.loads(path.read_text(encoding="utf-8"))["synced_at"]
+        return datetime.fromisoformat(stamp)
+    except (ValueError, KeyError, OSError, json.JSONDecodeError):
+        return None  # unreadable stamp is the same as no stamp, never fatal
 
 
 def _with_year(frame: pd.DataFrame) -> pd.DataFrame:

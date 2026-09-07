@@ -311,6 +311,33 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     with k5.container(border=True):
         st.metric("% of Sales on Offer", f"{pct_on_offer:,.1f}%")
 
+    # Deal of the Week rotates weekly, so the sheet gains products through the
+    # month and the stored lists drift out of date within days. When that goes
+    # unnoticed the tab quietly under-reports — August 2026 lost 740 bags to
+    # Regular that way — so say plainly how old these lists are.
+    synced = deals.last_synced()
+    if synced is None:
+        st.info(
+            "These offer lists came from the repository, not from a sync on this "
+            "deployment — click **Sync Offers from Sheet** to confirm they match "
+            "the spreadsheet.",
+            icon="ℹ️",
+        )
+    else:
+        age = datetime.now() - synced
+        days = age.days
+        when = ("today" if days == 0 else "yesterday" if days == 1 else f"{days} days ago")
+        if days >= deals.SYNC_STALE_AFTER_DAYS:
+            st.warning(
+                f"Offers last synced **{when}** ({synced:%d %b %Y, %H:%M}). Deal of "
+                "the Week rotates weekly, so the sheet has probably moved on — "
+                "sales matching newer offers are being counted as Regular until "
+                "you sync.",
+                icon="⚠️",
+            )
+        else:
+            st.caption(f"🔄 Offers last synced {when} · {synced:%d %b %Y, %H:%M}")
+
     col_caption, col_sync_offers, col_sync = st.columns([2.2, 1.4, 1])
     with col_caption:
         st.caption(

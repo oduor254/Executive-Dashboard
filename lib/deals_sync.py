@@ -24,7 +24,8 @@ revenue.
 """
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -317,6 +318,16 @@ def sync() -> dict:
 
     all_dow.to_csv(_DATA_DIR / "deals_of_week.csv", index=False)
     power_df.to_csv(_DATA_DIR / "power_deals.csv", index=False)
+
+    # Stamped in a file of its own rather than read off the CSVs' modification
+    # time, which a git checkout resets — on a deployment that would report
+    # the last deploy as the last sync, and the whole point is to notice when
+    # the sheet has moved on and this has not.
+    (_DATA_DIR / deals.SYNCED_AT_FILE).write_text(json.dumps({
+        "synced_at": datetime.now().isoformat(timespec="seconds"),
+        "dow_rows": int(len(all_dow)),
+        "power_rows": int(len(power_df)),
+    }), encoding="utf-8")
 
     # Pick up the new files immediately in this session, without a restart.
     deals._load_power_deals.clear()
