@@ -29,6 +29,19 @@ col_picker, col_refresh = st.columns([3, 1])
 with col_picker:
     start_date, end_date = filters.date_range_control("products")
 
+# Page level, deliberately NOT inside any of the tab fragments below. Every tab
+# here is its own st.fragment, and a button inside one only reruns that one —
+# so refreshing from By Shop cleared the cache but left Offer Types showing
+# whatever it last drew, which is exactly how it went stale. At page level the
+# click reruns the whole script and all five tabs re-read Postgres.
+with col_refresh:
+    if db.refresh_button(key="products_refresh"):
+        # Offer Types is classified against the deal definitions, which are
+        # cached with no TTL — clear those too, or a refresh re-reads the
+        # sales but still classifies them against last hour's offers.
+        deals._load_power_deals.clear()
+        deals._load_deals_of_week.clear()
+
 TOTAL_LABELS = ("MASTERFILE TOTAL", "NON-MASTERFILE TOTAL")
 MAX_TABLE_ROWS = 5000
 OFFER_COLORS = {
@@ -47,9 +60,6 @@ tab_shop, tab_category, tab_value, tab_offers, tab_new_products = st.tabs(
 
 @st.fragment()
 def render_by_shop(start_date: date, end_date: date) -> None:
-    with col_refresh:
-        db.refresh_button(key="products_refresh")
-
     df = db.run_query(
         queries.PRODUCT_SALES_BY_SHOP,
         {"start_date": start_date, "end_date": end_date},

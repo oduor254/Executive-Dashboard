@@ -77,9 +77,22 @@ def run_query(sql: str, params: dict | None = None) -> pd.DataFrame:
             time.sleep(QUERY_RETRY_BACKOFF_SECONDS * attempt)
 
 
-def refresh_button(key: str, label: str = "🔄 Refresh now") -> None:
+def refresh_button(key: str, label: str = "🔄 Refresh now") -> bool:
     """Manual cache-bust control. Viewer decides when to re-poll Postgres,
     instead of a timer forcing a rerun (and resetting any in-progress table
-    filters) every REFRESH_INTERVAL_SECONDS."""
+    filters) every REFRESH_INTERVAL_SECONDS.
+
+    Returns whether it was clicked, so a page that caches something else of
+    its own (Product Sales caches the deal definitions alongside the query
+    results) can clear that in the same breath.
+
+    Draw this OUTSIDE any st.fragment on a page that has more than one. A
+    button inside a fragment only reruns that fragment, so the other
+    fragments keep showing whatever they last drew — the cache is cleared
+    but nothing re-queries. At page level the click reruns the whole script,
+    so every fragment re-reads.
+    """
     if st.button(label, key=key):
         run_query.clear()
+        return True
+    return False
