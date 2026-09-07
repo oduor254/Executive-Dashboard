@@ -69,6 +69,11 @@ _COMBO_BUY_GET = r"buy.*get"
 # tolerance is enough to recognize "this is a full-price sale, not a deal."
 _FULL_PRICE_TOLERANCE = 1.0  # KES
 
+# The promotions programme began in 2026 — there were no Power Deals or Deals
+# of the Week before it. Earlier sales classify as Regular, which is the truth
+# rather than a gap, so periods_without_definitions stays quiet about them.
+OFFERS_START_YEAR = 2026
+
 
 @st.cache_data(show_spinner=False)
 def _load_power_deals() -> pd.DataFrame:
@@ -100,14 +105,17 @@ def _combo_bag_count(product: str) -> int:
 
 def periods_without_definitions(start_date, end_date) -> list[str]:
     """Months in [start_date, end_date] missing an offer list, as readable
-    strings: "August 2025 — no offer lists recorded", "March 2026 — no Power
-    Deal list recorded".
+    strings: "March 2026 — no Power Deal list recorded".
 
     Without this, a month the sheet never covered reports zero Power Deals and
     zero Deals of the Week — which reads as "we ran no promotions that month"
     when it actually means "we have no record of what was on promotion". A
     zero that looks like a fact is worse than an obvious gap, so the page says
     which months it is blind to rather than quietly showing them as nothing.
+
+    Nothing before OFFERS_START_YEAR is reported: the promotions programme
+    began in 2026, so zero offers in 2025 is the fact of the matter, not a
+    missing record, and flagging it would cry wolf on every historical range.
 
     Checked per list, not across both: the two are curated separately, and a
     month can easily have Tanzania's Singles recorded while Kenya's Power Deal
@@ -122,6 +130,8 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
 
     out: list[str] = []
     for p in pd.period_range(pd.Timestamp(start_date), pd.Timestamp(end_date), freq="M"):
+        if p.year < OFFERS_START_YEAR:
+            continue
         period = (p.year, p.strftime("%B"))
         label = f"{p.strftime('%B')} {p.year}"
         missing_power = period not in has_power
