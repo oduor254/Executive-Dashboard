@@ -33,13 +33,7 @@ branch_totals AS (
         END                                                         AS branch,
 
         ROUND(SUM(
-            CASE
-                WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
-                    THEN pol.price_subtotal_incl / 25
-                WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
-                    THEN pol.price_subtotal_incl / 29
-                ELSE pol.price_subtotal_incl
-            END
+            pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
         ), 0)                                                       AS revenue,
 
         SUM(pol.qty)                                                AS qty,
@@ -799,13 +793,8 @@ SELECT
 
     -- Unit Price (price per item)
     ROUND(
-        CASE
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
-                THEN (pol.price_subtotal_incl / 25) / NULLIF(pol.qty, 0)
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
-                THEN (pol.price_subtotal_incl / 29) / NULLIF(pol.qty, 0)
-            ELSE pol.price_subtotal_incl / NULLIF(pol.qty, 0)
-        END,
+        (pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1))
+            / NULLIF(pol.qty, 0),
         2
     )                                                               AS "Price",
 
@@ -814,13 +803,7 @@ SELECT
 
     -- Total (Price * Quantity)
     ROUND(
-        CASE
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
-                THEN pol.price_subtotal_incl / 25
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
-                THEN pol.price_subtotal_incl / 29
-            ELSE pol.price_subtotal_incl
-        END,
+        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1),
         2
     )                                                               AS "Total",
 
@@ -1566,6 +1549,11 @@ shop_sales AS (
     SUM(pl.qty)                 AS units_sold,
     SUM(pl.price_subtotal)      AS sales_amount,
     SUM(pl.price_subtotal_incl) AS total_sales,
+    -- Converted per order, not per shop after the fact: p.currency_rate is
+    -- the rate Odoo itself recorded on that order (1 for Kenya, 25 for
+    -- Dar-Es-Alam, 34.482759 for Uganda), so this cannot drift from Odoo the
+    -- way a hardcoded divisor did.
+    SUM(pl.price_subtotal_incl / COALESCE(NULLIF(p.currency_rate, 0), 1)) AS total_sales_kes,
     MAX(CASE WHEN COALESCE(pt.is_combo, FALSE) = TRUE
              OR  COALESCE(pt."name", '') LIKE '%+%'
              THEN 1 ELSE 0 END) AS combo_flag
@@ -1607,11 +1595,7 @@ tagged AS (
     ss.units_sold,
     ss.sales_amount,
     ss.total_sales,
-    CASE ss.shop
-      WHEN 'UGANDA' THEN ss.total_sales / 29.0
-      WHEN 'SINZA'  THEN ss.total_sales / 25.0
-      ELSE ss.total_sales
-    END AS actual_sales,
+    ss.total_sales_kes AS actual_sales,
     CASE WHEN ss.combo_flag = 1 OR mo.product_key IS NOT NULL THEN 0 ELSE 1 END AS section,
     ss.combo_flag AS combo_rank,
     0 AS row_type
@@ -3359,26 +3343,15 @@ SELECT
     END                                                             AS "Location",
 
     ROUND(
-        CASE
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
-                THEN (pol.price_subtotal_incl / 25) / NULLIF(pol.qty, 0)
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
-                THEN (pol.price_subtotal_incl / 29) / NULLIF(pol.qty, 0)
-            ELSE pol.price_subtotal_incl / NULLIF(pol.qty, 0)
-        END,
+        (pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1))
+            / NULLIF(pol.qty, 0),
         2
     )                                                               AS "Price",
 
     pol.qty                                                         AS "Quantity",
 
     ROUND(
-        CASE
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
-                THEN pol.price_subtotal_incl / 25
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
-                THEN pol.price_subtotal_incl / 29
-            ELSE pol.price_subtotal_incl
-        END,
+        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1),
         2
     )                                                               AS "Total"
 
@@ -3510,13 +3483,7 @@ sale_lines AS (
                 ))
         END AS product,
         pol.qty AS quantity,
-        CASE
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
-                THEN pol.price_subtotal_incl / 25
-            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Uganda%'
-                THEN pol.price_subtotal_incl / 29
-            ELSE pol.price_subtotal_incl
-        END AS total
+        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1) AS total
 
     FROM pos_order po
     LEFT JOIN pos_order_line       pol   ON pol.order_id = po.id
