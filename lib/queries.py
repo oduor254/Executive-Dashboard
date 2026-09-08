@@ -76,7 +76,12 @@ branch_totals AS (
         AND pt.name NOT ILIKE '%Delivery Fee%'
         AND pt.name NOT ILIKE '%Gift Bag%'
         AND pc.name NOT ILIKE '%Pos%'
-        AND pol.qty > 0
+        -- Refund lines carry a negative qty and a negative amount. Keeping
+        -- them nets returns off the day's takings, the way Odoo reports it;
+        -- excluding them reported gross sales and let a single mis-key stand
+        -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+        -- reversed 776 an hour later, inflating that day by KES 1.4m).
+        AND pol.qty <> 0
         AND pt.name NOT ILIKE '%KES discount%'
         AND po.date_order::DATE BETWEEN dr.start_date AND dr.end_date
 
@@ -566,7 +571,12 @@ shop_sales AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
-    AND pl.qty > 0
+    -- Refund lines carry a negative qty and a negative amount. Keeping
+    -- them nets returns off the day's takings, the way Odoo reports it;
+    -- excluding them reported gross sales and let a single mis-key stand
+    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+    -- reversed 776 an hour later, inflating that day by KES 1.4m).
+    AND pl.qty <> 0
     -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
     -- Travel Free") is a pricing container, not a bag itself — Odoo already
     -- records the actual bag(s) inside it as separate, normally-named
@@ -837,7 +847,12 @@ WHERE
     AND pt.name NOT ILIKE '%Delivery Fee%'
     AND pt.name NOT ILIKE '%Gift Bag%'
     AND pc.name NOT ILIKE '%Pos%'
-    AND pol.qty > 0
+    -- Refund lines carry a negative qty and a negative amount. Keeping
+    -- them nets returns off the day's takings, the way Odoo reports it;
+    -- excluding them reported gross sales and let a single mis-key stand
+    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+    -- reversed 776 an hour later, inflating that day by KES 1.4m).
+    AND pol.qty <> 0
     AND pt.name NOT ILIKE '%KES discount%'
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
@@ -1045,7 +1060,12 @@ lines AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
-    AND pl.qty > 0
+    -- Refund lines carry a negative qty and a negative amount. Keeping
+    -- them nets returns off the day's takings, the way Odoo reports it;
+    -- excluding them reported gross sales and let a single mis-key stand
+    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+    -- reversed 776 an hour later, inflating that day by KES 1.4m).
+    AND pl.qty <> 0
     -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
     -- Travel Free") is a pricing container, not a bag itself — Odoo already
     -- records the actual bag(s) inside it as separate, normally-named
@@ -1567,7 +1587,12 @@ shop_sales AS (
     AND COALESCE(pt."name", '') NOT ILIKE '%Gift Bag%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
-    AND pl.qty > 0
+    -- Refund lines carry a negative qty and a negative amount. Keeping
+    -- them nets returns off the day's takings, the way Odoo reports it;
+    -- excluding them reported gross sales and let a single mis-key stand
+    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+    -- reversed 776 an hour later, inflating that day by KES 1.4m).
+    AND pl.qty <> 0
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
@@ -3375,7 +3400,12 @@ WHERE
     AND pt.name NOT ILIKE '%Delivery Fee%'
     AND pt.name NOT ILIKE '%Gift Bag%'
     AND pc.name NOT ILIKE '%Pos%'
-    AND pol.qty > 0
+    -- Refund lines carry a negative qty and a negative amount. Keeping
+    -- them nets returns off the day's takings, the way Odoo reports it;
+    -- excluding them reported gross sales and let a single mis-key stand
+    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+    -- reversed 776 an hour later, inflating that day by KES 1.4m).
+    AND pol.qty <> 0
     AND pt.name NOT ILIKE '%KES discount%'
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
@@ -3505,7 +3535,12 @@ sale_lines AS (
         AND pt.name NOT ILIKE '%Delivery Fee%'
         AND pt.name NOT ILIKE '%Gift Bag%'
         AND pc.name NOT ILIKE '%Pos%'
-        AND pol.qty > 0
+        -- Refund lines carry a negative qty and a negative amount. Keeping
+        -- them nets returns off the day's takings, the way Odoo reports it;
+        -- excluding them reported gross sales and let a single mis-key stand
+        -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+        -- reversed 776 an hour later, inflating that day by KES 1.4m).
+        AND pol.qty <> 0
         AND pt.name NOT ILIKE '%KES discount%'
         AND pt.name NOT LIKE '%+%'
         AND pt.name NOT ILIKE '% or %'
