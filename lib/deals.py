@@ -206,6 +206,73 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
     return out
 
 
+UNLISTED = "Unlisted Discount"
+
+# A sale has to be this far under the usual price before it counts as a
+# discount rather than rounding or a part-shilling difference. The real deals
+# run at 300-400 off, so 100 separates them comfortably from noise.
+_DISCOUNT_FLOOR = 100.0
+
+
+def _usual_by_family(usual: pd.DataFrame) -> pd.DataFrame:
+    """Collapse the per-variant usual prices onto the family grain that
+    PRODUCT_LINE_ITEMS reports at.
+
+    Takes the price of the best-observed variant rather than averaging across
+    them: an average is dragged down by any one colour that habitually sells
+    on promotion, and the point of this number is to be the undiscounted
+    reference.
+    """
+    if usual is None or usual.empty:
+        return pd.DataFrame(columns=["Location", "Product", "Usual Price"])
+
+    out = usual.copy()
+    out["Product"] = out["Full Name"].astype(str).map(family_of_name)
+    out = out.sort_values("Observations", ascending=False)
+    out = out.drop_duplicates(subset=["Location", "Product"], keep="first")
+    return out[["Location", "Product", "Usual Price"]]
+
+
+def family_of_name(name: str) -> str:
+    """The family PRODUCT_LINE_ITEMS would report this variant under."""
+    from lib import taxonomy
+    fam = taxonomy.family_of(name)
+    return str(name).strip() if fam == taxonomy.UNMAPPED else fam
+
+
+def apply_usual_prices(df: pd.DataFrame, usual: pd.DataFrame) -> pd.DataFrame:
+    """Attach the usual price and the discount off it, and relabel a
+    discounted sale that matched no listed offer as UNLISTED.
+
+    The curated lists only ever describe the promotions somebody wrote down.
+    Over Sept 1-14 2026, 627 of the 747 sales made below their usual price had
+    no entry on any list — KES 1.1m of discounting the Offer Types tab was
+    reporting as full-price Regular trade. This says what the till actually
+    charged, so the discount shows up whether or not it was recorded.
+    """
+    df = df.copy()
+    if df.empty:
+        for col in ("Usual Price", "Discount", "Discount Value"):
+            df[col] = pd.Series(dtype="float64")
+        return df
+
+    by_family = _usual_by_family(usual)
+    df = df.merge(by_family, on=["Location", "Product"], how="left")
+
+    df["Discount"] = (df["Usual Price"] - df["Price"]).round(2)
+    # Only positive discounts on real, positive-priced sales. A refund line or
+    # a zero-priced combo component is not a discount.
+    is_discounted = (
+        df["Discount"].fillna(0) >= _DISCOUNT_FLOOR
+    ) & (df["Price"] > 0) & (df["Quantity"] > 0)
+    df.loc[~is_discounted, "Discount"] = 0.0
+    df["Discount Value"] = (df["Discount"] * df["Quantity"]).round(2)
+
+    unlisted = is_discounted & (df["Offer Type"] == "Regular")
+    df.loc[unlisted, "Offer Type"] = UNLISTED
+    return df
+
+
 def country_of(location: str) -> str:
     # Uganda and Sinza are each their own single-shop country label; every
     # other location rolls up into "Kenya". "Sinza" (not "Tanzania") for

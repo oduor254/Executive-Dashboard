@@ -3567,3 +3567,64 @@ LEFT JOIN period_sales ps ON ps.product = np.product
 GROUP BY np.product, np.first_sold
 ORDER BY "Revenue" DESC;
 """
+
+
+# What each bag normally sells for at each shop — the modal unit price over the
+# 90 days ending at the report's end_date.
+#
+# Deliberately observed rather than referenced. product_template.list_price
+# reproduces Kenya's shelf price well (75-85% of Kenya lines land exactly on
+# it), but is meaningless for Sinza and Uganda, which price from their own
+# TANZANIA/UGANDA pricelists in TZS/UGX — and those rule prices no longer
+# match what those shops actually charge (Jumbo Black rules at ~3,700 KES
+# equivalent against 2,000 actually taken). An observed modal needs no
+# reference data, works the same in every currency, and cannot go stale.
+#
+# The window is anchored on end_date and fixed at 90 days so the baseline does
+# not move with the selected range: picking "Today" would otherwise make each
+# day its own baseline and no sale could ever look discounted.
+#
+# Conservative by construction: a bag sold on promotion more often than not
+# has the promotion price as its mode, so its discount goes unreported. It
+# under-counts rather than inventing discounts that were not given.
+USUAL_PRICES = """
+WITH window_lines AS (
+  SELECT
+    CASE
+      WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+      ELSE INITCAP(TRIM(REGEXP_REPLACE(
+             COALESCE(sw.name, sl.complete_name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+    END AS location,
+    COALESCE(pt."name", '<<unknown>>') AS full_name,
+    ROUND(pol.price_subtotal_incl / NULLIF(pol.qty, 0)
+          / COALESCE(NULLIF(po.currency_rate, 0), 1)) AS unit_price
+  FROM pos_order po
+  JOIN pos_order_line pol ON pol.order_id = po.id
+  LEFT JOIN product_product pp ON pp.id = pol.product_id
+  LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+  LEFT JOIN product_category pc ON pc.id = pt.categ_id
+  LEFT JOIN pos_session ps ON ps.id = po.session_id
+  LEFT JOIN pos_config pconf ON pconf.id = ps.config_id
+  LEFT JOIN stock_picking_type spt ON spt.id = pconf.picking_type_id
+  LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+  LEFT JOIN stock_location sl ON sl.id = spt.default_location_src_id
+  WHERE po.date_order::DATE
+        BETWEEN CAST(:end_date AS DATE) - INTERVAL '90 days' AND CAST(:end_date AS DATE)
+    AND po.state IN ('done', 'paid')
+    AND pol.qty > 0
+    AND pol.price_subtotal_incl > 0
+    AND COALESCE(pt."name", '') NOT LIKE '%+%'
+    AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
+    AND COALESCE(pt."name", '') NOT ILIKE '%Gift Bag%'
+    AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
+    AND COALESCE(pc."name", '') NOT ILIKE '%Pos%'
+)
+SELECT
+  location                                              AS "Location",
+  full_name                                             AS "Full Name",
+  MODE() WITHIN GROUP (ORDER BY unit_price)             AS "Usual Price",
+  COUNT(*)                                              AS "Observations"
+FROM window_lines
+GROUP BY location, full_name
+HAVING COUNT(*) >= 3;   -- too few sales to call any price "usual"
+"""

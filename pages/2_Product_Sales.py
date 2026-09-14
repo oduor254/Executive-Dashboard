@@ -50,6 +50,9 @@ OFFER_COLORS = {
     "Singles": theme.CATEGORICAL[3],
     "Special Offers": theme.CATEGORICAL[6],
     "Combo": theme.CATEGORICAL[4],
+    # Sold below its usual price but on no list — amber, because it is a
+    # discount that was given without being recorded, not a clean category.
+    deals.UNLISTED: theme.STATUS["warning"],
     "Regular": theme.TEXT_MUTED,
 }
 
@@ -264,6 +267,14 @@ def render_by_offer(start_date: date, end_date: date) -> None:
 
     df = deals.classify(df)
 
+    # The curated lists only describe promotions somebody wrote down, and most
+    # are not: over Sept 1-14 2026, 627 of the 747 sales made below their usual
+    # price appeared on no list at all. Comparing each sale against what that
+    # bag normally fetches at that shop catches the discount either way, so the
+    # tab stops reporting discounted trade as full-price Regular.
+    usual = db.run_query(queries.USUAL_PRICES, {"end_date": end_date})
+    df = deals.apply_usual_prices(df, usual)
+
     # A month with no recorded offer list reports zero deals, which reads as
     # "nothing was on promotion" rather than "we don't know what was". Say so.
     missing = deals.periods_without_definitions(start_date, end_date)
@@ -295,7 +306,11 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     # Special Offers, without having to name every category here.
     pct_on_offer = ((total_revenue - regular_revenue - combo_revenue) / total_revenue * 100) if total_revenue else 0.0
 
-    k1, k2, k3, k4, k5 = st.columns(5)
+    unlisted_revenue = by_offer_revenue.get(deals.UNLISTED, 0.0)
+    unlisted_qty = by_offer_qty.get(deals.UNLISTED, 0.0)
+    discount_given = df["Discount Value"].sum() if "Discount Value" in df.columns else 0.0
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
     with k1.container(border=True):
         st.metric("Total Revenue", f"KES {total_revenue:,.0f}", f"{total_qty:,.0f} bags sold", delta_color="off")
     with k2.container(border=True):
@@ -309,7 +324,22 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                  "e.g. \"Safiri Travel + Standard Travel or Antitheft Backpack\" is 2 bags.",
         )
     with k5.container(border=True):
-        st.metric("% of Sales on Offer", f"{pct_on_offer:,.1f}%")
+        st.metric(
+            "Unlisted Discounts", f"KES {unlisted_revenue:,.0f}",
+            f"{unlisted_qty:,.0f} bags sold", delta_color="off",
+            help="Sold below what that bag normally fetches at that shop, but on "
+                 "no Power Deal, Deal of the Week, Singles or Special Offers "
+                 "list. Either a promotion nobody recorded, or a discount given "
+                 "at the till.",
+        )
+    with k6.container(border=True):
+        st.metric(
+            "% of Sales on Offer", f"{pct_on_offer:,.1f}%",
+            f"KES {discount_given:,.0f} off list", delta_color="off",
+            help="Counts every sale made below full price, whether or not the "
+                 "promotion was written down. The figure underneath is the total "
+                 "given away against the usual price.",
+        )
 
     # Deal of the Week rotates weekly, so the sheet gains products through the
     # month and the stored lists drift out of date within days. When that goes
