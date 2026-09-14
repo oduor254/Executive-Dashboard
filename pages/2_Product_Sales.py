@@ -275,6 +275,13 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     usual = db.run_query(queries.USUAL_PRICES, {"end_date": end_date})
     df = deals.apply_usual_prices(df, usual)
 
+    # The spreadsheet is a hand-transcription of what Odoo already holds as
+    # dated pricelist rules, and it is an incomplete one: for the 12-26
+    # September tier Odoo carries 37 bag families across 18 shops where the
+    # sheet recorded 31 across 14. Reading the archived rules alongside it
+    # recovers the deals nobody wrote down.
+    df = deals.apply_pricelist_deals(df, pricelists.deals_in_window(start_date, end_date))
+
     # A month with no recorded offer list reports zero deals, which reads as
     # "nothing was on promotion" rather than "we don't know what was". Say so.
     missing = deals.periods_without_definitions(start_date, end_date)

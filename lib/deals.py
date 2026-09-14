@@ -240,6 +240,71 @@ def family_of_name(name: str) -> str:
     return str(name).strip() if fam == taxonomy.UNMAPPED else fam
 
 
+# Pricelist rules are held ex-VAT (Aria Pro at 1034.48 against the 1200 the
+# customer pays), so a rule price is grossed up before comparing. The slack
+# covers rounding and the odd part-shilling, not a different price.
+_VAT_MULTIPLIER = 1.16
+_RULE_SLACK = 1.03
+
+
+def apply_pricelist_deals(df: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
+    """Label sales that match a dated Odoo pricelist rule as Deal of the Week.
+
+    The spreadsheet is a partial transcription of these rules: for the 12-26
+    September tier Odoo carries 37 bag families across 18 shops where the sheet
+    recorded 31 across 14, and 22 families — Prime, Jumbo, Mini Zuri, Elyse,
+    Fabela among them — appear in Odoo and nowhere in the sheet. Sales of those
+    were landing in Regular or Unlisted Discount, which is why Deal of the Week
+    read low.
+
+    Only rows the curated lists did not already name are relabelled. Where the
+    sheet has a row it is the more specific record — it distinguishes Singles
+    and Special Offers, which a pricelist rule cannot.
+    """
+    if df.empty or rules is None or rules.empty:
+        return df
+
+    df = df.copy()
+    rules = rules.copy()
+    rules["Family"] = rules["Product"].astype(str).map(family_of_name)
+    rules["Deal Price"] = (
+        pd.to_numeric(rules["Rule Price"], errors="coerce")
+        * _VAT_MULTIPLIER * _RULE_SLACK
+    )
+    rules["Starts"] = pd.to_datetime(rules["Starts"])
+    rules["Ends"] = pd.to_datetime(rules["Ends"])
+
+    # Cheapest rule per shop+bag, so a bag on two overlapping rules is judged
+    # against the better offer rather than whichever happened to sort first.
+    best = (rules.sort_values("Deal Price")
+                 .drop_duplicates(subset=["Location", "Family"], keep="first"))
+    lookup = {
+        (r["Location"], r["Family"]): (r["Deal Price"], r["Starts"], r["Ends"],
+                                       r.get("Tier"), r.get("Window"))
+        for _, r in best.iterrows()
+    }
+
+    sold_on = pd.to_datetime(df["Date"])
+    matched, tiers, windows = [], [], []
+    for loc, prod, price, when in zip(df["Location"], df["Product"], df["Price"], sold_on):
+        hit = lookup.get((loc, prod))
+        if hit is None:
+            matched.append(False); tiers.append(""); windows.append("")
+            continue
+        deal_price, starts, ends, tier, window = hit
+        ok = (starts <= when <= ends) and 0 < price <= deal_price
+        matched.append(bool(ok))
+        tiers.append(tier if ok else "")
+        windows.append(window if ok else "")
+
+    df["Tier"] = tiers
+    df["Deal Window"] = windows
+
+    claimable = df["Offer Type"].isin(["Regular", UNLISTED])
+    df.loc[pd.Series(matched, index=df.index) & claimable, "Offer Type"] = "Deal of the Week"
+    return df
+
+
 def apply_usual_prices(df: pd.DataFrame, usual: pd.DataFrame) -> pd.DataFrame:
     """Attach the usual price and the discount off it, and relabel a
     discounted sale that matched no listed offer as UNLISTED.
