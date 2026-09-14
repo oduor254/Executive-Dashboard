@@ -3628,3 +3628,71 @@ FROM window_lines
 GROUP BY location, full_name
 HAVING COUNT(*) >= 3;   -- too few sales to call any price "usual"
 """
+
+
+# Dated pricelist rules — the promotions as Odoo itself holds them, with the
+# shops each pricelist serves.
+#
+# Read straight from Odoo rather than from a spreadsheet: where a dated rule
+# exists the till charged that price 96.4% of the time, against manual shops
+# where a week's sample had 77 bags sold at full price despite being on the
+# list. The rule is what the customer was actually charged.
+#
+# Includes inactive rules on purpose. A retired rule still describes what was
+# on offer while it ran, and 47 of the May rules are already deactivated —
+# filtering on active would erase the history this exists to keep.
+PRICELIST_RULES = """
+SELECT
+  pl.name                                   AS "Pricelist",
+  pt."name"                                 AS "Product",
+  i.fixed_price                             AS "Rule Price",
+  i.compute_price                           AS "Compute",
+  i.percent_price                           AS "Percent",
+  cur.name                                  AS "Currency",
+  i.date_start::DATE                        AS "Starts",
+  i.date_end::DATE                          AS "Ends",
+  i.active                                  AS "Active",
+  i.write_date                              AS "Last Changed",
+  (SELECT STRING_AGG(DISTINCT pc."name", ', ' ORDER BY pc."name")
+     FROM pos_config pc WHERE pc.pricelist_id = pl.id) AS "Tills"
+FROM product_pricelist_item i
+JOIN product_pricelist pl ON pl.id = i.pricelist_id
+LEFT JOIN product_template pt ON pt.id = i.product_tmpl_id
+LEFT JOIN res_currency cur ON cur.id = i.currency_id
+WHERE i.date_start IS NOT NULL
+  AND pt."name" IS NOT NULL
+ORDER BY i.date_start DESC, pl.name, pt."name";
+"""
+
+# Order-level promotions that ride as their own line: "300.0 KES discount on
+# total amount", the percentage variants, and anything like them. They carry a
+# negative amount and are not a product, so every other query excludes them by
+# name — which left a promotion that has run since April 2026, worth -KES
+# 197,700 so far, invisible on a page whose whole job is reporting offers.
+ORDER_DISCOUNTS = """
+SELECT
+  po.date_order::DATE AS "Date",
+  CASE
+    WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+    ELSE INITCAP(TRIM(REGEXP_REPLACE(
+           COALESCE(sw.name, sl.complete_name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+  END                 AS "Location",
+  pt."name"           AS "Offer",
+  COUNT(*)            AS "Times Given",
+  ROUND(SUM(pol.price_subtotal_incl
+            / COALESCE(NULLIF(po.currency_rate, 0), 1)), 2) AS "Value"
+FROM pos_order po
+JOIN pos_order_line pol ON pol.order_id = po.id
+JOIN product_product pp ON pp.id = pol.product_id
+JOIN product_template pt ON pt.id = pp.product_tmpl_id
+LEFT JOIN pos_session ps ON ps.id = po.session_id
+LEFT JOIN pos_config pconf ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type spt ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location sl ON sl.id = spt.default_location_src_id
+WHERE po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND po.state IN ('done', 'paid')
+  AND (pt."name" ILIKE '%discount%' OR pt."name" ILIKE '%promo%')
+GROUP BY 1, 2, 3
+ORDER BY "Date" DESC, "Value";
+"""

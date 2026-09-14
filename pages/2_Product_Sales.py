@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, deals, deals_sync, filters, grid, queries, sheets_sync, theme
+from lib import auth, db, deals, deals_sync, filters, grid, pricelists, queries, sheets_sync, theme
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
 
@@ -387,6 +387,18 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                            "deployed app."):
             with st.spinner("Pulling offers from the deals spreadsheet…"):
                 try:
+                    # Archive Odoo's dated pricelist rules in the same breath.
+                    # Odoo keeps only a rule's current state — they get edited,
+                    # deactivated and replaced each tier, and the 1-11 Sept
+                    # window had already vanished before this was written — so
+                    # each snapshot appends what is true now to a history that
+                    # survives the next edit.
+                    snap = pricelists.snapshot()
+                    if snap["new"]:
+                        st.info(
+                            f"Archived {snap['new']} new pricelist rule(s) from Odoo "
+                            f"({snap['total']} on record).", icon="🗄️",
+                        )
                     result = deals_sync.sync()
                     st.success(
                         f"Kenya: {result['kenya_dow']} Deal of the Week, {result['kenya_power']} "
@@ -444,11 +456,41 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         fig.update_layout(title="Revenue by Offer Type", height=360)
         st.plotly_chart(fig, width="stretch")
 
+    # Order-level promotions ride as their own line ("300.0 KES discount on
+    # total amount") rather than as a product price, so they are invisible to
+    # everything above — which left a promotion running since April 2026 out of
+    # a page whose job is reporting offers.
+    order_offers = db.run_query(
+        queries.ORDER_DISCOUNTS, {"start_date": start_date, "end_date": end_date}
+    )
+    if not order_offers.empty:
+        st.subheader("Order-Level Offers")
+        st.caption(
+            "Discounts applied to a whole order rather than by repricing a bag — "
+            "they sit outside the categories above, so they are counted here "
+            "instead of being double-counted there."
+        )
+        by_offer = (
+            order_offers.groupby("Offer", as_index=False)
+            .agg(Times=("Times Given", "sum"), Value=("Value", "sum"))
+            .sort_values("Value")
+        )
+        cols = st.columns(min(len(by_offer), 4) or 1)
+        for col, (_, row) in zip(cols, by_offer.iterrows()):
+            with col.container(border=True):
+                st.metric(
+                    row["Offer"][:34], f"KES {abs(row['Value']):,.0f}",
+                    f"{int(row['Times']):,} times", delta_color="off",
+                )
+        with st.container(border=True):
+            grid.filterable_table(order_offers, height=260)
+
     col_offer, col_country, col_location = st.columns(3)
     with col_offer:
         offer_choice = st.selectbox(
             "Offer Type",
-            ["All Offer Types", "Power Deal", "Deal of the Week", "Singles", "Special Offers", "Combo", "Regular"],
+            ["All Offer Types", "Power Deal", "Deal of the Week", "Singles",
+             "Special Offers", deals.UNLISTED, "Combo", "Regular"],
             key="offer_type_filter",
         )
     with col_country:
