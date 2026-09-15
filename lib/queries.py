@@ -22,6 +22,8 @@ branch_totals AS (
             -- PRODUCT_SALES_BY_SHOP/BAGS_SOLD_BY_CATEGORY already do.
             WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
                 THEN 'Website'
+            WHEN lower(pconf.name) = 'staff pos'
+                THEN 'Staff POS'
             WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
                 THEN 'Sinza'
             ELSE INITCAP(
@@ -32,11 +34,23 @@ branch_totals AS (
                 )
         END                                                         AS branch,
 
-        ROUND(SUM(
+        -- Revenue is every line on the order, the way Odoo totals a POS
+        -- order: delivery fees, gift bags and order-level "KES discount"
+        -- lines included. Leaving them out read KES 181k under Odoo for
+        -- 1-15 Sep 2026 (fees +159,890, gift bags +21,650, discounts -28,800).
+        SUM(
             pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
-        ), 0)                                                       AS revenue,
+        )                                                           AS revenue,
 
-        SUM(pol.qty)                                                AS qty,
+        -- Units sold stays products only: a delivery fee or a discount line
+        -- is not a unit.
+        SUM(CASE
+            WHEN pt.name NOT ILIKE '%Delivery Fee%'
+             AND pt.name NOT ILIKE '%Gift Bag%'
+             AND pt.name NOT ILIKE '%KES discount%'
+             AND COALESCE(pc.name, '') NOT ILIKE '%Pos%'
+            THEN pol.qty ELSE 0
+        END)                                                        AS qty,
 
         COUNT(DISTINCT CASE
             WHEN po.customer_type = 'walkin' THEN po.id
@@ -66,23 +80,19 @@ branch_totals AS (
     date_range dr
 
     WHERE
-        po.state IN ('done', 'paid')
-        AND pt.name NOT ILIKE '%Delivery Fee%'
-        AND pt.name NOT ILIKE '%Gift Bag%'
-        AND pc.name NOT ILIKE '%Pos%'
-        -- Refund lines carry a negative qty and a negative amount. Keeping
-        -- them nets returns off the day's takings, the way Odoo reports it;
-        -- excluding them reported gross sales and let a single mis-key stand
-        -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
-        -- reversed 776 an hour later, inflating that day by KES 1.4m).
-        AND pol.qty <> 0
-        AND pt.name NOT ILIKE '%KES discount%'
+        po.state IN ('done', 'paid', 'invoiced')
+        -- Refund lines carry a negative qty and a negative amount, and are
+        -- kept: they net returns off the takings the way Odoo reports it
+        -- (Eldoret keyed 777 Lola Black on 7 Sep 2026 and reversed 776 an
+        -- hour later; dropping the reversal overstated that day by KES 1.4m).
         AND po.date_order::DATE BETWEEN dr.start_date AND dr.end_date
 
     GROUP BY
         CASE
             WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
                 THEN 'Website'
+            WHEN lower(pconf.name) = 'staff pos'
+                THEN 'Staff POS'
             WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
                 THEN 'Sinza'
             ELSE INITCAP(
@@ -125,12 +135,14 @@ branch_mapping AS (
     UNION ALL SELECT 'Kakamega', 'KAKAMEGA'
     UNION ALL SELECT 'Kitengela', 'KITENGELA'
     UNION ALL SELECT 'Meru', 'MERU'
+    -- No target, but Odoo counts its takings, so it is listed and totalled.
+    UNION ALL SELECT 'Staff POS', NULL
 ),
 
 results AS (
     SELECT
         bt.branch                                                       AS "Branch",
-        bt.revenue                                                      AS "Revenue",
+        ROUND(bt.revenue, 2)                                            AS "Revenue",
         bt.qty                                                          AS "Qty",
         bt.walk_in_orders                                               AS "Walk-in Orders",
         bt.online_orders                                                AS "Online Orders",
@@ -149,7 +161,8 @@ results AS (
     FROM branch_totals bt
     JOIN branch_mapping bm ON LOWER(bt.branch) = LOWER(bm.branch_name)  -- shop locations with a target only
     LEFT JOIN sales_pos_target spt ON (
-        spt.name ILIKE bm.target_branch || '%'
+        bm.target_branch IS NOT NULL
+        AND spt.name ILIKE bm.target_branch || '%'
         AND spt.period = (SELECT selected_period FROM period_target)
         AND (SELECT end_date FROM date_range) BETWEEN spt.start_date AND spt.end_date
     )
@@ -158,7 +171,7 @@ results AS (
 
     SELECT
         'GRAND TOTAL'                                                   AS "Branch",
-        SUM(bt.revenue)                                                 AS "Revenue",
+        ROUND(SUM(bt.revenue), 2)                                       AS "Revenue",
         SUM(bt.qty)                                                     AS "Qty",
         SUM(bt.walk_in_orders)                                          AS "Walk-in Orders",
         SUM(bt.online_orders)                                           AS "Online Orders",
