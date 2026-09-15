@@ -830,12 +830,11 @@ WHERE
     AND pt.name NOT ILIKE '%Delivery Fee%'
     AND pt.name NOT ILIKE '%Gift Bag%'
     AND pc.name NOT ILIKE '%Pos%'
-    -- Refund lines carry a negative qty and a negative amount. Keeping
-    -- them nets returns off the day's takings, the way Odoo reports it;
-    -- excluding them reported gross sales and let a single mis-key stand
-    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
-    -- reversed 776 an hour later, inflating that day by KES 1.4m).
-    AND pol.qty <> 0
+    -- Refund lines carry a negative qty. The sales queries keep them so
+    -- takings net the way Odoo reports them, but this is a customer list:
+    -- a refund is not a purchase, and a row per return clutters it with
+    -- customers shown "buying" -1 bags. Purchases only.
+    AND pol.qty > 0
     AND pt.name NOT ILIKE '%KES discount%'
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
