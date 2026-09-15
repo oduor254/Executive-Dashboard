@@ -715,6 +715,19 @@ customer_name_split AS (
             )
         ) AS full_name
     FROM res_partner rp
+),
+
+-- What was later handed back against each sale line. Every refund line in
+-- Odoo points at the line it reverses, so a sale can be shown net of its
+-- returns rather than as a purchase next to a separate -1 row.
+refunded AS (
+    SELECT
+        r.refunded_orderline_id     AS line_id,
+        SUM(r.qty)                  AS qty,
+        SUM(r.price_subtotal_incl)  AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
 )
 
 SELECT
@@ -798,12 +811,13 @@ SELECT
         2
     )                                                               AS "Price",
 
-    -- Quantity
-    pol.qty                                                         AS "Quantity",
+    -- Quantity, net of anything later refunded against this line
+    pol.qty + COALESCE(ref.qty, 0)                                  AS "Quantity",
 
     -- Total (Price * Quantity)
     ROUND(
-        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1),
+        (pol.price_subtotal_incl + COALESCE(ref.amount, 0))
+            / COALESCE(NULLIF(po.currency_rate, 0), 1),
         2
     )                                                               AS "Total",
 
@@ -815,6 +829,7 @@ FROM pos_order po
 LEFT JOIN res_partner          rp    ON rp.id    = po.partner_id
 LEFT JOIN customer_name_split  cns   ON cns.id   = rp.id
 LEFT JOIN pos_order_line       pol   ON pol.order_id = po.id
+LEFT JOIN refunded             ref   ON ref.line_id = pol.id
 LEFT JOIN product_product      pp    ON pp.id    = pol.product_id
 LEFT JOIN product_template     pt    ON pt.id    = pp.product_tmpl_id
 LEFT JOIN product_color_split  pcs   ON pcs.product_tmpl_id = pt.id
@@ -830,11 +845,14 @@ WHERE
     AND pt.name NOT ILIKE '%Delivery Fee%'
     AND pt.name NOT ILIKE '%Gift Bag%'
     AND pc.name NOT ILIKE '%Pos%'
-    -- Refund lines carry a negative qty. The sales queries keep them so
-    -- takings net the way Odoo reports them, but this is a customer list:
-    -- a refund is not a purchase, and a row per return clutters it with
-    -- customers shown "buying" -1 bags. Purchases only.
+    -- A customer list shows purchases, so refund lines (negative qty) are
+    -- left out. Dropping them alone is not enough: the sale each one
+    -- reversed would then stand at full value, and mis-keys are refunded
+    -- this way (Kakamega keyed KES 11,998,820 on 12 Sep 2026 and refunded
+    -- it four minutes later). Sales are shown net of their refunds, and a
+    -- sale refunded in full disappears with its refund.
     AND pol.qty > 0
+    AND pol.qty + COALESCE(ref.qty, 0) > 0
     AND pt.name NOT ILIKE '%KES discount%'
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
