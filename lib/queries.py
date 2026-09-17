@@ -742,8 +742,14 @@ refunded AS (
     WHERE r.refunded_orderline_id IS NOT NULL
     GROUP BY r.refunded_orderline_id
 )
+,
 
+-- One row per sale line, net of its refunds. Aggregated below.
+line_rows AS (
 SELECT
+    po.id                                                           AS order_id,
+    pol.product_id                                                  AS product_id,
+    po.date_order                                                   AS ordered_at,
     po.date_order::DATE                                             AS "Date",
 
     -- Name (full customer name)
@@ -872,7 +878,24 @@ WHERE
     AND po.date_order >= CAST(:start_date AS TIMESTAMP)
     AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 
-ORDER BY po.date_order DESC;
+)
+
+-- Odoo can hold one purchase as several lines — the website till keyed
+-- 22 Mini Umbra Beige as 22 one-unit lines on a single order (WEBSITE
+-- SALES/29213, 16 Sep 2026). A customer list reads that as one purchase
+-- of 22, so lines are combined per order and product.
+SELECT
+    "Date", "Name", "Gender", "Phone", "Product", "Color", "Category", "Location",
+    ROUND(SUM("Total") / NULLIF(SUM("Quantity"), 0), 2)            AS "Price",
+    SUM("Quantity")                                                 AS "Quantity",
+    SUM("Total")                                                    AS "Total",
+    "Customer Type"
+FROM line_rows
+GROUP BY
+    order_id, product_id,
+    "Date", "Name", "Gender", "Phone", "Product", "Color", "Category",
+    "Location", "Customer Type"
+ORDER BY MAX(ordered_at) DESC;
 """
 PRODUCTION_BREAKDOWN = """
 WITH date_range AS (
