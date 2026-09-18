@@ -123,7 +123,7 @@ def render_by_shop(start_date: date, end_date: date) -> None:
             title=f"Top Products — {selected_shop}",
             height=max(360, 28 * len(top_products)),
         )
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     with st.container(border=True):
         grid.filterable_table(filtered)
@@ -179,7 +179,7 @@ def render_by_category(start_date: date, end_date: date) -> None:
             title="Top Categories by Bags Sold",
             height=max(360, 28 * len(top_categories)),
         )
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column. Rows ending in \"Total\" are category subtotals.")
@@ -247,7 +247,7 @@ def render_by_value(start_date: date, end_date: date) -> None:
             title=f"Top Products by Sales Value — {selected_shop}",
             height=max(360, 28 * len(top_products)),
         )
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")
@@ -461,7 +461,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         )
         theme.apply_layout(fig, show_legend=False)
         fig.update_layout(title="Revenue by Offer Type", height=360)
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     # Order-level promotions ride as their own line ("300.0 KES discount on
     # total amount") rather than as a product price, so they are invisible to
@@ -533,7 +533,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 title=f"Top Products — {offer_choice}",
                 height=max(360, 28 * len(top_products)),
             )
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     if not filtered.empty:
         with st.container(border=True):
@@ -608,7 +608,7 @@ def render_new_products(start_date: date, end_date: date) -> None:
             )
             theme.apply_layout(fig, show_legend=False)
             fig.update_layout(title="New Collections by Revenue", height=max(360, 28 * len(top)))
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")

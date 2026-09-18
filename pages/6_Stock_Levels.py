@@ -62,7 +62,7 @@ def render_stock() -> None:
         )
         theme.apply_layout(fig, show_legend=False)
         fig.update_layout(title="Stock by Location", height=max(360, 28 * len(ranked)))
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     locations = sorted(df["Location"].unique())
     selected_location = st.selectbox("Location", ["All Locations"] + locations, key="stock_location_filter")
@@ -85,7 +85,7 @@ def render_stock() -> None:
             title=f"Top Products in Stock — {selected_location}",
             height=max(360, 28 * len(top_products)),
         )
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")

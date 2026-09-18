@@ -75,7 +75,7 @@ def render_production(start_date: date, end_date: date) -> None:
             title=f"Top Products — {selected_metric}",
             height=max(360, 28 * len(top)),
         )
-        st.plotly_chart(fig, width="stretch")
+        theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")

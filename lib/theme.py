@@ -7,6 +7,7 @@ its own validated steps from the same ramps, not an automatic light flip.
 from __future__ import annotations
 
 import plotly.graph_objects as go
+import streamlit as st
 
 FONT_FAMILY = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
@@ -39,6 +40,10 @@ SEQUENTIAL_BLUE = [
 ]
 
 DIVERGING = {"cool": "#2a78d6", "warm": "#e34948", "mid": "#383835"}
+
+# "Other" in a share chart, and anything without a target: a neutral that
+# reads as "not one of the named series" rather than as a ninth hue.
+OTHER = "#6f6e69"
 
 # Dark chart chrome
 CHART_SURFACE = "#1a1a19"
@@ -105,3 +110,69 @@ def status_color(value: float, warn_at: float, critical_at: float, higher_is_wor
     if value <= warn_at:
         return STATUS["warning"]
     return STATUS["good"]
+
+
+# Vertical space the chart header takes, in px. The title sits at the top of
+# the figure and the legend on its own row beneath it, so neither is ever
+# drawn over the other or over the plot.
+_TITLE_BAND = 44
+_LEGEND_BAND = 34
+
+
+def finalize(fig: go.Figure) -> go.Figure:
+    """Lay out the chart header so titles, legends and axis labels never collide.
+
+    This runs at draw time rather than in apply_layout because pages set their
+    title AFTER apply_layout, and fig.update_layout(title="...") replaces the
+    whole title object — any position set earlier is lost. That is how titles
+    ended up printed on top of the legend.
+    """
+    title = fig.layout.title.text if fig.layout.title else None
+    horizontal_legend = (fig.layout.showlegend is not False
+                         and (fig.layout.legend.orientation or "h") == "h")
+    legend_shown = bool(fig.layout.showlegend) and horizontal_legend
+
+    top = (_TITLE_BAND if title else 12) + (_LEGEND_BAND if legend_shown else 0)
+    margin = fig.layout.margin
+    fig.update_layout(margin=dict(
+        t=top if (title or legend_shown) else (margin.t if margin.t is not None else top),
+        l=margin.l if margin.l is not None else 8,
+        r=margin.r if margin.r is not None else 8,
+        b=margin.b if margin.b is not None else 8,
+    ))
+
+    if title:
+        fig.update_layout(title=dict(
+            text=title, x=0, xref="container", xanchor="left",
+            y=1, yref="container", yanchor="top",
+            pad=dict(t=14, l=12),
+            font=dict(color=TEXT_PRIMARY, size=15, family=FONT_FAMILY),
+        ))
+    if legend_shown:
+        # Anchored to the top edge of the plot, i.e. in the band under the title.
+        fig.update_layout(legend=dict(
+            orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom",
+            yref="paper", bgcolor="rgba(0,0,0,0)",
+            font=dict(color=TEXT_SECONDARY, size=12),
+        ))
+
+    # Long branch and product names reserve the room they need instead of
+    # running off the edge or under the neighbouring label.
+    fig.update_xaxes(automargin=True, title_standoff=8, ticklabelstandoff=4)
+    fig.update_yaxes(automargin=True, title_standoff=8, ticklabelstandoff=6)
+
+    # "x unified" on a horizontal bar chart groups every bar at the same VALUE,
+    # which is meaningless; the category runs up the y axis there.
+    bars = [t for t in fig.data if t.type == "bar"]
+    if (fig.layout.hovermode == "x unified" and bars
+            and all(t.orientation == "h" for t in bars)):
+        fig.update_layout(hovermode="y unified")
+    return fig
+
+
+def show(fig: go.Figure, **kwargs) -> None:
+    """Draw a chart. Use this instead of st.plotly_chart so every chart gets
+    the same collision-free header."""
+    kwargs.setdefault("width", "stretch")
+    kwargs.setdefault("config", {"displaylogo": False})
+    st.plotly_chart(finalize(fig), **kwargs)

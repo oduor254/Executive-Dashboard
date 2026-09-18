@@ -381,7 +381,7 @@ def _by_source_chart(sources, totals) -> None:
     # No Plotly title: it renders inside the plot area and collides with the
     # centred legend. Headings are st.subheader above the container instead.
     fig.update_layout(height=max(360, 26 * len(pivot)))
-    st.plotly_chart(fig, width="stretch")
+    theme.show(fig, width="stretch")
 
     with st.expander("Exact tally by sender"):
         table = pivot.reset_index().rename(columns={"Destination": "Shop / Channel"})
@@ -570,7 +570,7 @@ def _combined(df, sources, hub_detail, start_date: date, end_date: date) -> None
         st.caption("The fifteen largest families by total bags.")
         with st.container(border=True):
             top_families = family_rows.nlargest(15, "TOTAL").sort_values("TOTAL", ascending=True)
-            st.plotly_chart(
+            theme.show(
                 _family_bar(top_families["Product"], top_families["TOTAL"]),
                 width="stretch",
             )
@@ -691,7 +691,7 @@ def _dispatch(data: dict, start_date: date, end_date: date) -> None:
     st.caption("The fifteen largest families by total bags.")
     with st.container(border=True):
         top_families = family_rows.nlargest(15, "TOTAL").sort_values("TOTAL", ascending=True)
-        st.plotly_chart(
+        theme.show(
             _family_bar(top_families["Family"], top_families["TOTAL"]),
             width="stretch",
         )
@@ -701,7 +701,7 @@ def _dispatch(data: dict, start_date: date, end_date: date) -> None:
         st.subheader("Bags Dispatched by Shop & Channel")
         st.caption("Total bags sent to each destination in this range.")
         with st.container(border=True):
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     rows = _rows_by_destination(df, DEST_COLUMNS, "DISPATCHED")
     if rows is not None:
@@ -1179,7 +1179,7 @@ def _receiving(df, *, with_metrics: bool = True) -> None:
                     align="left",
                 ),
             )
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     st.subheader("Receiving Scoreboard")
     st.caption(
@@ -1307,7 +1307,7 @@ def _in_transit(df, channels, start_date: date, end_date: date,
             "its transit location, waiting to be received."
         )
         with st.container(border=True):
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     rows = _rows_by_destination(df, transit.BALANCE_COLUMNS, "OUTSTANDING")
     if rows is not None:

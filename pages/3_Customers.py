@@ -128,7 +128,7 @@ def render_customers(start_date: date, end_date: date) -> None:
             )
             theme.apply_layout(fig, show_legend=False)
             fig.update_layout(title="Customers by Gender", height=360)
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     with col_top:
         with st.container(border=True):
@@ -165,7 +165,7 @@ def render_customers(start_date: date, end_date: date) -> None:
                 title=f"Top Customers by Spend — {selected_location}",
                 height=max(360, 28 * len(top_customers)),
             )
-            st.plotly_chart(fig, width="stretch")
+            theme.show(fig, width="stretch")
 
     with st.container(border=True):
         display_df = filtered.sort_values("Date", ascending=False)

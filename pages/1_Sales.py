@@ -1,6 +1,7 @@
 """Sales Performance — revenue, orders, and target attainment by branch."""
 from __future__ import annotations
 
+import calendar
 from datetime import date, datetime
 
 import plotly.graph_objects as go
@@ -9,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, filters, grid, queries, theme
+from lib import auth, charts, db, filters, grid, queries, theme
 
 st.set_page_config(page_title="Sales · Denri Executive Dashboard", page_icon="💰", layout="wide")
 
@@ -26,6 +27,104 @@ if not connected:
 col_picker, col_refresh = st.columns([3, 1])
 with col_picker:
     start_date, end_date = filters.date_range_control("sales")
+
+
+# One colour per sales channel, the same in every chart on this page.
+CHANNEL_COLORS = {
+    "Walk-in": theme.CATEGORICAL[0],
+    "Online": theme.CATEGORICAL[1],
+    "Activation": theme.CATEGORICAL[2],
+}
+
+# Attainment against pace, from the reserved status palette. Each band also
+# prints its percentage on the bar and names itself in the legend, so the
+# colour is never the only cue.
+PACE_BANDS = [
+    (1.00, "On or ahead of pace", theme.STATUS["good"]),
+    (0.90, "Slightly behind", theme.STATUS["warning"]),
+    (0.75, "Behind", theme.STATUS["serious"]),
+    (0.00, "Well behind", theme.STATUS["critical"]),
+]
+NO_TARGET = ("No target", theme.OTHER)
+
+
+def _expected_share(start_date: date, end_date: date) -> float:
+    """How much of its target a branch should have reached by end_date.
+
+    Targets are set for a whole day, week or month (the query picks which from
+    the length of the range). A month-to-date range is judged against the
+    share of the month elapsed, otherwise every branch reads "behind" until
+    the last day of the month.
+    """
+    span = (end_date - start_date).days
+    if span > 7 and start_date.day == 1 and start_date.month == end_date.month:
+        days = calendar.monthrange(end_date.year, end_date.month)[1]
+        return end_date.day / days
+    return 1.0
+
+
+def _band(achieved: float, target: float, expected: float) -> tuple[str, str]:
+    if not target:
+        return NO_TARGET
+    pace = (achieved / 100) / expected if expected else 0
+    for floor, label, color in PACE_BANDS:
+        if pace >= floor:
+            return label, color
+    return PACE_BANDS[-1][1:]
+
+
+def _attainment_chart(branches, expected: float) -> go.Figure:
+    """Revenue bar per branch against a target tick, coloured by pace."""
+    rows = branches.fillna({"Target": 0, "% Achieved": 0})
+    bands = [_band(a, t, expected) for a, t in zip(rows["% Achieved"], rows["Target"])]
+    labels = [b[0] for b in bands]
+    custom = [
+        [t, a, expected * 100, t * expected - r, label]
+        for r, t, a, label in zip(rows["Revenue"], rows["Target"], rows["% Achieved"], labels)
+    ]
+    hover = (
+        "<b>%{y}</b><br>"
+        "Revenue&nbsp;&nbsp;&nbsp;<b>KES %{x:,.0f}</b><br>"
+        "Target&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;KES %{customdata[0]:,.0f}<br>"
+        "Achieved&nbsp;&nbsp;<b>%{customdata[1]:.1f}%</b>"
+        "&nbsp;(%{customdata[2]:.0f}% expected by now)<br>"
+        "%{customdata[4]}"
+        "<extra></extra>"
+    )
+
+    fig = go.Figure()
+    fig.add_bar(
+        y=rows["Branch"], x=rows["Revenue"], orientation="h", showlegend=False,
+        marker=dict(color=[b[1] for b in bands], cornerradius=4),
+        text=[f"{a:.0f}%" if t else "—" for a, t in zip(rows["% Achieved"], rows["Target"])],
+        textposition="outside", cliponaxis=False,
+        textfont=dict(color=theme.TEXT_SECONDARY, size=12),
+        customdata=custom, hovertemplate=hover,
+    )
+    has_target = rows[rows["Target"] > 0]
+    fig.add_scatter(
+        y=has_target["Branch"], x=has_target["Target"], mode="markers", name="Target",
+        marker=dict(symbol="line-ns", size=18, line=dict(width=2, color=theme.TEXT_PRIMARY)),
+        hoverinfo="skip",
+    )
+    # Legend entries for the colour bands actually on the chart.
+    present = set(labels)
+    for _, label, color in PACE_BANDS + [(None, *NO_TARGET)]:
+        if label in present:
+            fig.add_bar(x=[None], y=[None], orientation="h", name=label,
+                        marker=dict(color=color), hoverinfo="skip")
+
+    theme.apply_layout(fig, show_legend=True)
+    title = "Revenue vs Target by Branch"
+    if expected < 1:
+        title += f" · {expected:.0%} of the month elapsed"
+    fig.update_layout(
+        title=title, barmode="overlay", hovermode="closest",
+        height=max(420, 30 * len(rows) + 90),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor=theme.GRIDLINE, tickformat="~s")
+    fig.update_yaxes(showgrid=False)
+    return fig
 
 
 @st.fragment()
@@ -66,45 +165,45 @@ def render_sales(start_date: date, end_date: date) -> None:
         return
 
     branches = branches.sort_values("Revenue", ascending=True)
+    expected = _expected_share(start_date, end_date)
 
-    col_bullet, col_mix = st.columns(2)
+    with st.container(border=True):
+        theme.show(_attainment_chart(branches, expected))
 
-    with col_bullet:
+    col_share, col_channel = st.columns(2)
+    with col_share:
         with st.container(border=True):
-            bullet = go.Figure()
-            bullet.add_bar(
-                y=branches["Branch"], x=branches["Revenue"], orientation="h",
-                name="Revenue",
-                marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+            charts.share_chart(
+                charts.fold_other(branches["Branch"], branches["Revenue"]),
+                title="Revenue Share by Branch", key="sales_share_kind",
             )
-            bullet.add_scatter(
-                y=branches["Branch"], x=branches["Target"], mode="markers",
-                name="Target",
-                marker=dict(symbol="line-ns", size=16, line=dict(width=2, color=theme.TEXT_PRIMARY)),
-            )
-            theme.apply_layout(bullet, show_legend=True)
-            bullet.update_layout(
-                title="Revenue vs Target by Branch",
-                height=max(360, 32 * len(branches)),
-            )
-            st.plotly_chart(bullet, width="stretch")
-
-    with col_mix:
+    with col_channel:
         with st.container(border=True):
-            mix = go.Figure()
-            for col, label in [
-                ("Walk-in Orders", "Walk-in"),
-                ("Online Orders", "Online"),
-                ("Activation Orders", "Activation"),
-            ]:
-                mix.add_bar(x=branches["Branch"], y=branches[col], name=label)
-            mix.update_layout(barmode="stack", bargap=0.2)
-            theme.apply_layout(mix, show_legend=True)
-            mix.update_layout(
-                title="Order Mix by Branch",
-                height=max(360, 32 * len(branches)),
+            channels = charts.fold_other(
+                list(CHANNEL_COLORS),
+                [totals[f"{c} Orders"] for c in CHANNEL_COLORS],
             )
-            st.plotly_chart(mix, width="stretch")
+            charts.share_chart(
+                channels, title="Orders by Channel", key="sales_channel_kind",
+                unit="orders", default="Pie",
+                colors=[CHANNEL_COLORS[c] for c in channels["Label"]],
+            )
+
+    with st.container(border=True):
+        mix = go.Figure()
+        by_orders = branches.sort_values("Orders", ascending=False)
+        for channel, color in CHANNEL_COLORS.items():
+            mix.add_bar(
+                x=by_orders["Branch"], y=by_orders[f"{channel} Orders"], name=channel,
+                marker=dict(color=color, line=dict(color=theme.CHART_SURFACE, width=1)),
+                customdata=by_orders[["Orders"]],
+                hovertemplate=(f"{channel}: <b>%{{y:,.0f}}</b> of %{{customdata[0]:,.0f}} orders"
+                               "<extra></extra>"),
+            )
+        theme.apply_layout(mix, show_legend=True)
+        mix.update_layout(barmode="stack", bargap=0.25, title="Order Mix by Branch", height=420)
+        mix.update_xaxes(tickangle=-40)
+        theme.show(mix)
 
     with st.container(border=True):
         grid.filterable_table(df, currency_columns=("Revenue", "Target"))
