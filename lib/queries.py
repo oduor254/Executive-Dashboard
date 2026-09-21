@@ -813,6 +813,10 @@ SELECT
 
     -- Location
     CASE
+        -- The staff till sells out of the Accessories & Materials Store
+        -- location, so it is named by its till, not its stock location.
+        WHEN lower(pconf.name) = 'staff pos'
+            THEN 'Staff POS'
         WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
             THEN 'Sinza'
         ELSE INITCAP(
@@ -873,7 +877,8 @@ WHERE
     AND pol.qty > 0
     AND pol.qty + COALESCE(ref.qty, 0) > 0
     AND pt.name NOT ILIKE '%KES discount%'
-    AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
+    AND (COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
+         OR lower(pconf.name) = 'staff pos')
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
     AND po.date_order >= CAST(:start_date AS TIMESTAMP)
     AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
@@ -3385,6 +3390,10 @@ SELECT
     END                                                             AS "Color",
 
     CASE
+        -- The staff till sells out of the Accessories & Materials Store
+        -- location, so it is named by its till, not its stock location.
+        WHEN lower(pconf.name) = 'staff pos'
+            THEN 'Staff POS'
         WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
             THEN 'Sinza'
         ELSE INITCAP(
@@ -3433,7 +3442,8 @@ WHERE
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pol.qty <> 0
     AND pt.name NOT ILIKE '%KES discount%'
-    AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'
+    AND (COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
+         OR lower(pconf.name) = 'staff pos')
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
     AND po.date_order >= CAST(:start_date AS TIMESTAMP)
     AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
