@@ -56,7 +56,18 @@ FOLLOWUP_COLORS = {
     "Out of Stock": theme.CATEGORICAL[5],       # orange
     "Not Reachable": theme.CATEGORICAL[7],      # red
 }
-SOURCE_COLORS = {"Ad": theme.CATEGORICAL[5], "Organic": theme.CATEGORICAL[4]}
+# Sources as both apps name them. Fixed per source so Meta Ad - Instagram is
+# the same colour on the WhatsApp tab and the Social DMs tab.
+SOURCE_COLORS = {
+    "Meta Ad - Facebook": theme.CATEGORICAL[0],
+    "Meta Ad - Instagram": theme.CATEGORICAL[2],
+    "TikTok Ad": theme.CATEGORICAL[5],
+    "X Ad": theme.CATEGORICAL[3],
+    "Status Ads": theme.CATEGORICAL[6],
+    "Existing Direct": theme.CATEGORICAL[1],
+    "New Direct": theme.CATEGORICAL[4],
+    "Web Check Out": theme.CATEGORICAL[7],
+}
 
 # The tables as the user asked to see them, in the order asked.
 INTERACTION_COLUMNS = {"Date": "DATE", "Name": "NAME", "Contact": "CONTACT",
@@ -186,9 +197,7 @@ def _share(df: pd.DataFrame, column: str, *, title: str, key: str, unit: str,
            colors: dict[str, str] | None = None, default: str = "Doughnut") -> None:
     counts = df[column].fillna("Not recorded").value_counts()
     data = charts.fold_other(counts.index, counts.values)
-    palette = None
-    if colors:
-        palette = [colors.get(label, theme.OTHER) for label in data["Label"]]
+    palette = charts.colors_for(data["Label"], fixed=colors) if colors else None
     charts.share_chart(data, title=title, key=key, unit=unit, colors=palette, default=default)
 
 
@@ -232,6 +241,7 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                        unit="interactions", colors=ACTIVITY_COLORS)
             with c2, st.container(border=True):
                 _share(df, "Source", title="Where Customers Came From", key="wa_source_kind",
+                       colors=SOURCE_COLORS,
                        unit="interactions", default="Pie")
             with st.container(border=True):
                 theme.show(_daily_trend(df, "Interactions per Day by Outcome",
@@ -367,7 +377,7 @@ def render_social(start_date: date, end_date: date) -> None:
 
     total = len(df)
     converted = int(df["Converted"].sum())
-    from_ads = int((df["Source"] == "Ad").sum())
+    from_ads = int(df["From Ad"].sum())
     awaiting = df["Call Status"].isin(["Awaiting Call 1", "Awaiting Call 2"])
     overdue = awaiting & (pd.to_datetime(df["Next Call Due"]) < pd.Timestamp(date.today()))
 
@@ -384,7 +394,7 @@ def render_social(start_date: date, end_date: date) -> None:
         with c1, st.container(border=True):
             _share(df, "Platform", title="DMs by Platform", key="dm_platform_kind", unit="DMs")
         with c2, st.container(border=True):
-            _share(df, "Source", title="Ad vs Organic", key="dm_source_kind", unit="DMs",
+            _share(df, "Source", title="Where DMs Came From", key="dm_source_kind", unit="DMs",
                    colors=SOURCE_COLORS, default="Pie")
         with st.container(border=True):
             theme.show(_stacked_by_branch(

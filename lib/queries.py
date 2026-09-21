@@ -3947,7 +3947,20 @@ SELECT
     COALESCE(NULLIF(TRIM(dm.customer_name), ''),
              NULLIF(TRIM(dm.handle), ''))               AS "Name",
     COALESCE(sh.name, 'Not transferred')                AS "Branch",
-    CASE WHEN dm.is_ad THEN 'Ad' ELSE 'Organic' END     AS "Source",
+    -- Named the way the WhatsApp Monitor names its sources, so one source
+    -- reads the same in both apps: an ad by the network it ran on, and an
+    -- unpaid DM as new or existing direct contact.
+    CASE
+        WHEN dm.is_ad AND ch.name ILIKE '%instagram%' THEN 'Meta Ad - Instagram'
+        WHEN dm.is_ad AND ch.name ILIKE '%facebook%'  THEN 'Meta Ad - Facebook'
+        WHEN dm.is_ad AND ch.name ILIKE '%tiktok%'    THEN 'TikTok Ad'
+        WHEN dm.is_ad AND ch.name ILIKE 'x %'         THEN 'X Ad'
+        WHEN dm.is_ad                                 THEN 'Ad - ' || COALESCE(ch.name, 'Unknown Platform')
+        WHEN dm.customer_status = 'existing'          THEN 'Existing Direct'
+        WHEN dm.customer_status = 'new'               THEN 'New Direct'
+        ELSE 'Direct'
+    END                                                 AS "Source",
+    COALESCE(dm.is_ad, FALSE)                           AS "From Ad",
     COALESCE(ch.name, 'Not recorded')                   AS "Platform",
     CASE dm.customer_status
         WHEN 'new' THEN 'New' WHEN 'existing' THEN 'Existing'

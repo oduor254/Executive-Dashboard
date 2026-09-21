@@ -41,15 +41,19 @@ def fold_other(labels, values, max_named: int = MAX_NAMED) -> pd.DataFrame:
 def colors_for(labels, fixed: dict[str, str] | None = None) -> list[str]:
     """Categorical hues in fixed order, grey for Other; `fixed` pins an
     entity to a colour so it matches the same entity in other charts."""
-    out, i = [], 0
+    fixed = fixed or {}
+    # Hues a pinned entity already owns are skipped, so an unpinned label
+    # never borrows the colour of one that is.
+    taken = {fixed[label] for label in labels if label in fixed}
+    free = iter([c for c in theme.CATEGORICAL if c not in taken])
+    out = []
     for label in labels:
-        if fixed and label in fixed:
+        if label in fixed:
             out.append(fixed[label])
         elif str(label).startswith("Other"):
             out.append(theme.OTHER)
         else:
-            out.append(theme.CATEGORICAL[i % len(theme.CATEGORICAL)])
-            i += 1
+            out.append(next(free, theme.OTHER))
     return out
 
 
