@@ -263,7 +263,7 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                                   key="wa_int_branch")
             shown = df if branch == "All branches" else df[df["Branch"] == branch]
             with st.container(border=True):
-                _table(shown, INTERACTION_COLUMNS, pinned_columns=("NAME",))
+                _table(shown, INTERACTION_COLUMNS)
 
         with t_transfer:
             linked = transfers[transfers["Destination Linked"]]
@@ -422,7 +422,7 @@ def render_social(start_date: date, end_date: date) -> None:
         shown = df if platform == "All platforms" else df[df["Platform"] == platform]
         shown = shown if branch == "All branches" else shown[shown["Branch"] == branch]
         with st.container(border=True):
-            _table(shown, LEAD_COLUMNS, pinned_columns=("NAME",))
+            _table(shown, LEAD_COLUMNS)
 
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 
