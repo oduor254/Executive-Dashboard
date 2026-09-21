@@ -48,11 +48,13 @@ ACTIVITY_COLORS = {
     "Not recorded": theme.OTHER,
 }
 FOLLOWUP_COLORS = {
-    "Purchased": theme.CATEGORICAL[1],
-    "Visit Shop": theme.CATEGORICAL[3],
-    "Enquiry": theme.CATEGORICAL[0],
-    "Not Purchased": theme.CATEGORICAL[7],
-    "Pending": theme.OTHER,
+    "Purchased": theme.CATEGORICAL[1],          # green
+    "Already Purchased": theme.CATEGORICAL[4],  # aqua
+    "Purchase Later": theme.CATEGORICAL[0],     # blue
+    "Visit the Shop": theme.CATEGORICAL[3],     # yellow
+    "Enquiries": theme.CATEGORICAL[6],          # violet
+    "Out of Stock": theme.CATEGORICAL[5],       # orange
+    "Not Reachable": theme.CATEGORICAL[7],      # red
 }
 SOURCE_COLORS = {"Ad": theme.CATEGORICAL[5], "Organic": theme.CATEGORICAL[4]}
 
@@ -316,32 +318,35 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
 
     with t_follow:
         follow = db.run_query(queries.WA_FOLLOWUPS, params)
+        lists = db.run_query(queries.WA_FOLLOWUP_LISTS, params).iloc[0]
         if follow.empty:
-            st.info("No follow-up lists were generated in this date range.")
+            st.info("No follow-up outcomes were recorded in this date range.")
         else:
-            done = follow[follow["Follow-up Outcome"] != "Pending"]
-            bought = int((follow["Follow-up Outcome"] == "Purchased").sum())
+            n = len(follow)
+            outcome = follow["Follow-up Outcome"]
+            bought = int(outcome.isin(["Purchased", "Already Purchased"]).sum())
+            unreachable = int((outcome == "Not Reachable").sum())
+            later = int(outcome.isin(["Purchase Later", "Visit the Shop"]).sum())
             _kpis([
-                ("Customers to Call Back", f"{len(follow):,}", f"{follow['Batch'].nunique():,} lists"),
-                ("Followed Up", f"{len(done):,}", _pct(len(done), len(follow))),
-                ("Still Pending", f"{len(follow) - len(done):,}", None),
-                ("Bought After Follow-up", f"{bought:,}", f"{_pct(bought, len(done))} of those reached"),
+                ("Follow-ups Recorded", f"{n:,}",
+                 f"{int(lists['Customers Listed']):,} listed in {int(lists['Lists']):,} call lists"),
+                ("Bought", f"{bought:,}", f"{_pct(bought, n)} incl. already purchased"),
+                ("Still Interested", f"{later:,}", "purchase later or visit shop"),
+                ("Not Reachable", f"{unreachable:,}", _pct(unreachable, n)),
             ])
             c1, c2 = st.columns(2)
             with c1, st.container(border=True):
                 _share(follow, "Follow-up Outcome", title="Follow-up Outcomes",
-                       key="wa_follow_kind", unit="customers", colors=FOLLOWUP_COLORS)
+                       key="wa_follow_kind", unit="follow-ups", colors=FOLLOWUP_COLORS)
             with c2, st.container(border=True):
-                theme.show(_stacked_by_branch(follow.assign(ID=range(len(follow))),
-                                              "Follow-up Outcome", FOLLOWUP_COLORS,
+                theme.show(_stacked_by_branch(follow, "Follow-up Outcome", FOLLOWUP_COLORS,
                                               "Follow-ups by Branch"))
             with st.container(border=True):
-                _table(follow, {"Generated On": "GENERATED ON", "Type": "TYPE", "Branch": "BRANCH",
-                                "Name": "NAME", "Contact": "CONTACT",
+                _table(follow, {"Followed Up On": "FOLLOWED UP ON", "Name": "NAME",
+                                "Contact": "CONTACT", "Branch": "BRANCH",
                                 "Original Date": "ORIGINAL DATE",
-                                "Original Outcome": "ORIGINAL OUTCOME",
-                                "Product Wanted": "PRODUCT WANTED",
-                                "Follow-up Outcome": "FOLLOW-UP OUTCOME"},
+                                "Original Activity": "ORIGINAL ACTIVITY",
+                                "Follow-up Outcome": "OUTCOME", "Note": "NOTE"},
                        pinned_columns=("NAME",))
 
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")

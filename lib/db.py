@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 from pandas.errors import DatabaseError
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.engine import Engine
 
 from lib import config
@@ -71,7 +72,10 @@ def run_query(sql: str, params: dict | None = None) -> pd.DataFrame:
         try:
             with get_engine().connect() as conn:
                 return pd.read_sql(text(sql), conn, params=params or {})
-        except DatabaseError:
+        # pandas wraps errors raised while running the query, but one raised
+        # as the connection closes (a replica cancelling a slow read with
+        # "conflict with recovery") surfaces as SQLAlchemy's own error.
+        except (DatabaseError, DBAPIError):
             if attempt == QUERY_MAX_ATTEMPTS:
                 raise
             time.sleep(QUERY_RETRY_BACKOFF_SECONDS * attempt)

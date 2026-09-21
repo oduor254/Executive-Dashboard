@@ -3776,7 +3776,6 @@ ENGAGEMENT_TABLES = [
     "denri_monitor_interaction", "denri_monitor_shop", "denri_monitor_source",
     "denri_monitor_reason", "denri_monitor_bag", "denri_monitor_transfer_reason",
     "denri_monitor_interaction_oos_product_rel", "denri_monitor_followup",
-    "denri_monitor_followup_item", "denri_monitor_followup_item_oos_product_rel",
     "denri_social_dm", "denri_social_channel", "denri_social_shop_outcome",
 ]
 
@@ -3787,11 +3786,36 @@ WHERE to_regclass('public.' || t) IS NOT NULL
   AND NOT has_table_privilege('public.' || t, 'SELECT')
 """
 
-WA_INTERACTIONS = """
+# The monitor never fills customer_name (empty on every interaction), so the
+# name comes from, in order: the WhatsApp username, then the Odoo customer
+# whose phone ends in the same nine digits (phone_key is exactly that).
+# Covers 45% of interactions for 1-22 Sep 2026; the rest have only a number.
+_WA_PARTNER_BY_PHONE = """
+partner_by_phone AS (
+    SELECT DISTINCT ON (k.key) k.key, rp.name
+    FROM res_partner rp
+    CROSS JOIN LATERAL (VALUES (
+        RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile), '\\D', '', 'g'), 9)
+    )) AS k(key)
+    WHERE rp.active
+      AND COALESCE(rp.phone, rp.mobile) IS NOT NULL
+      AND k.key IN (
+          SELECT phone_key FROM denri_monitor_interaction
+          WHERE {date_col} BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      )
+    ORDER BY k.key, rp.id DESC
+)
+"""
+_WA_NAME = """COALESCE(NULLIF(TRIM(i.customer_name), ''), NULLIF(TRIM(i.wa_username), ''),
+             pbp.name, 'Unknown')"""
+
+# Only the columns the page reads: the dashboard runs over links as slow as
+# 10 KB/s, where every unused column is paid for on every refresh.
+WA_INTERACTIONS = "WITH " + _WA_PARTNER_BY_PHONE.format(date_col="date") + """
 SELECT
     i.id                                                            AS "ID",
     i.date                                                          AS "Date",
-    NULLIF(TRIM(i.customer_name), '')                               AS "Name",
+    """ + _WA_NAME + """                                            AS "Name",
     COALESCE(NULLIF(TRIM(i.phone), ''), i.phone_clean)              AS "Contact",
     COALESCE(src.name, 'Not recorded')                              AS "Source",
     CASE i.activity
@@ -3803,15 +3827,11 @@ SELECT
         ELSE COALESCE(i.activity, 'Not recorded')
     END                                                             AS "Activity",
     COALESCE(sh.name, 'Not recorded')                               AS "Branch",
-    COALESCE(src.is_paid, FALSE)                                    AS "Paid Source",
     (i.activity = 'purchased' OR COALESCE(i.is_purchased, FALSE))   AS "Converted",
-    rsn.name                                                        AS "Reason",
     (COALESCE(rsn.is_out_of_stock, FALSE)
         OR i.oos_bag_id IS NOT NULL
         OR i.oos_product_id IS NOT NULL)                            AS "Out of Stock",
-    CASE i.lead_temp WHEN 'cold' THEN 'Cold' WHEN 'warm' THEN 'Warm' END AS "Lead Temperature",
     i.response_time_first                                           AS "First Response (min)",
-    agent_p.name                                                    AS "Handled By",
     -- Transfers: where it went, why, and what happened once it got there.
     to_sh.name                                                      AS "Transferred To",
     trs.name                                                        AS "Transfer Reason",
@@ -3825,29 +3845,15 @@ SELECT
     END                                                             AS "Outcome at Destination",
     (dest.activity = 'purchased'
         OR COALESCE(dest.is_purchased, FALSE))                      AS "Converted at Destination",
-    i.transferred_from_id IS NOT NULL                               AS "Transferred In",
-    from_sh.name                                                    AS "Transferred From",
-    CASE i.followup_outcome
-        WHEN 'already_purchased' THEN 'Already Purchased'
-        WHEN 'enquiry'           THEN 'Enquiries'
-        WHEN 'out_of_stock'      THEN 'Out of Stock'
-        WHEN 'purchase_later'    THEN 'Purchase at a Later Date'
-        WHEN 'purchased'         THEN 'Purchased'
-        WHEN 'visit_shop'        THEN 'Visit the Shop'
-        WHEN 'not_reachable'     THEN 'Not Reachable'
-    END                                                             AS "Follow-up Outcome",
-    i.particulars                                                   AS "Particulars"
+    i.transferred_from_id IS NOT NULL                               AS "Transferred In"
 FROM denri_monitor_interaction i
 LEFT JOIN denri_monitor_shop            sh      ON sh.id      = i.shop_id
+LEFT JOIN partner_by_phone              pbp     ON pbp.key    = i.phone_key
 LEFT JOIN denri_monitor_source          src     ON src.id     = i.source_id
 LEFT JOIN denri_monitor_reason          rsn     ON rsn.id     = i.reason_id
-LEFT JOIN res_users                     agent   ON agent.id   = i.agent_id
-LEFT JOIN res_partner                   agent_p ON agent_p.id = agent.partner_id
 LEFT JOIN denri_monitor_shop            to_sh   ON to_sh.id   = i.transfer_to_shop_id
 LEFT JOIN denri_monitor_transfer_reason trs     ON trs.id     = i.transfer_reason_id
 LEFT JOIN denri_monitor_interaction     dest    ON dest.id    = i.transferred_to_id
-LEFT JOIN denri_monitor_interaction     orig    ON orig.id    = i.transferred_from_id
-LEFT JOIN denri_monitor_shop            from_sh ON from_sh.id = orig.shop_id
 WHERE i.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 ORDER BY i.date DESC, i.id DESC
 """
@@ -3855,8 +3861,8 @@ ORDER BY i.date DESC, i.id DESC
 # Every product a customer asked for that was out of stock. An interaction can
 # name several (oos_product_ids) as well as a primary product and a bag from
 # the monitor's own bag list; each distinct one counts once per interaction.
-WA_OUT_OF_STOCK = """
-WITH wanted AS (
+WA_OUT_OF_STOCK = "WITH " + _WA_PARTNER_BY_PHONE.format(date_col="date") + """,
+wanted AS (
     SELECT r.interaction_id, pt.name AS product
     FROM denri_monitor_interaction_oos_product_rel r
     JOIN product_template pt ON pt.id = r.product_id
@@ -3871,7 +3877,7 @@ WITH wanted AS (
 )
 SELECT
     i.date                                              AS "Date",
-    NULLIF(TRIM(i.customer_name), '')                   AS "Name",
+    """ + _WA_NAME + """                                AS "Name",
     COALESCE(NULLIF(TRIM(i.phone), ''), i.phone_clean)  AS "Contact",
     COALESCE(sh.name, 'Not recorded')                   AS "Branch",
     w.product                                           AS "Product Wanted",
@@ -3879,45 +3885,57 @@ SELECT
 FROM wanted w
 JOIN denri_monitor_interaction i   ON i.id   = w.interaction_id
 LEFT JOIN denri_monitor_shop   sh  ON sh.id  = i.shop_id
+LEFT JOIN partner_by_phone     pbp ON pbp.key = i.phone_key
 LEFT JOIN denri_monitor_reason rsn ON rsn.id = i.reason_id
 WHERE i.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 ORDER BY i.date DESC
 """
 
-# Follow-up call lists the monitor generates from past interactions, one row
-# per customer to call back. Ranged on when the list was generated.
-WA_FOLLOWUPS = """
+# Follow-up outcomes are recorded on the interaction being followed up
+# (followup_outcome / followup_recorded_on), not on the generated call-list
+# items: every one of the 3,340 items ever generated has no outcome, while
+# 7,627 interactions carry one. Ranged on when the follow-up was recorded.
+WA_FOLLOWUPS = "WITH " + _WA_PARTNER_BY_PHONE.format(date_col="followup_recorded_on::DATE") + """
 SELECT
-    fb.generated_on                                     AS "Generated On",
-    fb.name                                             AS "Batch",
-    CASE fb.followup_type
-        WHEN 'oos' THEN 'Out of stock' ELSE 'General'
-    END                                                 AS "Type",
-    COALESCE(sh.name, 'All shops')                      AS "Branch",
-    fi.orig_date                                        AS "Original Date",
-    NULLIF(TRIM(fi.customer_name), '')                  AS "Name",
-    fi.phone                                            AS "Contact",
-    fi.orig_activity                                    AS "Original Outcome",
-    COALESCE(pt.name, prods.names)                      AS "Product Wanted",
-    CASE fi.followup_outcome
+    i.id                                                AS "ID",
+    i.followup_recorded_on::DATE                        AS "Followed Up On",
+    i.date                                              AS "Original Date",
+    """ + _WA_NAME + """                                AS "Name",
+    COALESCE(NULLIF(TRIM(i.phone), ''), i.phone_clean)  AS "Contact",
+    COALESCE(sh.name, 'Not recorded')                   AS "Branch",
+    CASE i.activity
         WHEN 'enquiry'       THEN 'Enquiry'
         WHEN 'purchased'     THEN 'Purchased'
         WHEN 'not_purchased' THEN 'Not Purchased'
         WHEN 'visit_shop'    THEN 'Visit Shop'
-        ELSE 'Pending'
-    END                                                 AS "Follow-up Outcome"
-FROM denri_monitor_followup_item fi
-JOIN denri_monitor_followup      fb ON fb.id = fi.batch_id
-LEFT JOIN denri_monitor_shop     sh ON sh.id = fb.shop_id
-LEFT JOIN product_template       pt ON pt.id = fi.oos_product_id
-LEFT JOIN LATERAL (
-    SELECT string_agg(p.name, ', ' ORDER BY p.name) AS names
-    FROM denri_monitor_followup_item_oos_product_rel r
-    JOIN product_template p ON p.id = r.product_id
-    WHERE r.item_id = fi.id
-) prods ON TRUE
-WHERE fb.generated_on BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
-ORDER BY fb.generated_on DESC, fi.id
+        WHEN 'transferred'   THEN 'Transferred'
+        ELSE COALESCE(i.activity, 'Not recorded')
+    END                                                 AS "Original Activity",
+    CASE i.followup_outcome
+        WHEN 'already_purchased' THEN 'Already Purchased'
+        WHEN 'enquiry'           THEN 'Enquiries'
+        WHEN 'out_of_stock'      THEN 'Out of Stock'
+        WHEN 'purchase_later'    THEN 'Purchase Later'
+        WHEN 'purchased'         THEN 'Purchased'
+        WHEN 'visit_shop'        THEN 'Visit the Shop'
+        WHEN 'not_reachable'     THEN 'Not Reachable'
+    END                                                 AS "Follow-up Outcome",
+    i.followup_note                                     AS "Note"
+FROM denri_monitor_interaction i
+LEFT JOIN denri_monitor_shop sh  ON sh.id   = i.shop_id
+LEFT JOIN partner_by_phone   pbp ON pbp.key = i.phone_key
+WHERE i.followup_outcome IS NOT NULL
+  AND i.followup_recorded_on::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+ORDER BY i.followup_recorded_on DESC
+"""
+
+# The call-back lists generated for agents, for context beside the outcomes.
+WA_FOLLOWUP_LISTS = """
+SELECT
+    COUNT(*)                        AS "Lists",
+    COALESCE(SUM(item_count), 0)    AS "Customers Listed"
+FROM denri_monitor_followup
+WHERE generated_on BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 """
 
 SOCIAL_DMS = """
