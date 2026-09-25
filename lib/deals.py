@@ -415,7 +415,13 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     )
     is_dow = dow_type.notna()
 
-    is_combo = df["Product"].str.strip().str.lower().apply(_is_combo)
+    # Odoo's own flag where the query provides it, name-parsing only as a
+    # fallback for callers that do not (the flag is the authority: it also
+    # catches bundles whose name carries no "+").
+    if "Bundle" in df.columns:
+        is_combo = df["Bundle"].fillna(False).astype(bool)
+    else:
+        is_combo = df["Product"].str.strip().str.lower().apply(_is_combo)
 
     offer = pd.Series("Regular", index=df.index)
     offer[is_power] = "Power Deal"
@@ -428,12 +434,21 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     # own Deal of the Week label for that row should win.
     offer[is_dow] = dow_type[is_dow]
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
+    if "In Bundle" in df.columns:
+        # The bags inside a bundle belong to the combo, not to Regular.
+        offer[df["In Bundle"].fillna(False).astype(bool)] = "Combo"
     df["Offer Type"] = offer
 
-    if is_combo.any():
-        # .apply() on an empty slice can't infer a numeric result dtype and
-        # falls back to the input's (string) dtype, which then fails to
-        # multiply against Quantity — guard skips that empty case entirely.
+    if "In Bundle" in df.columns:
+        # The container is priced but holds no bag of its own; the bags are
+        # the lines inside it. Counting both read 774 bags for 24 Sep 2026
+        # where the shop sold 698.
+        df.loc[is_combo, "Quantity"] = 0
+    elif is_combo.any():
+        # Without the flags, fall back to counting the bags named in the
+        # bundle. .apply() on an empty slice can't infer a numeric result
+        # dtype and falls back to the input's (string) dtype, which then
+        # fails to multiply against Quantity — the guard skips that case.
         bag_counts = df.loc[is_combo, "Product"].apply(_combo_bag_count).astype(int)
         df.loc[is_combo, "Quantity"] = df.loc[is_combo, "Quantity"] * bag_counts
 

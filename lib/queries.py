@@ -3446,7 +3446,25 @@ SELECT
         2
     )                                                               AS "Price",
 
-    pol.qty                                                         AS "Quantity",
+    -- Bags only, and never negative: a refunded bag counts as a movement, the
+    -- way the bags-sold figures count it. A strap, an order-level discount or
+    -- a combo container is not a bag, so it carries no quantity — but its row
+    -- stays, because its money is part of the takings. The money in "Total"
+    -- keeps its sign, so revenue nets the refund out.
+    CASE
+        WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
+         AND COALESCE(pol.is_combo_line, FALSE) = FALSE
+         AND COALESCE(pt.is_combo, FALSE) = FALSE
+        THEN ABS(pol.qty) ELSE 0
+    END                                                             AS "Quantity",
+
+    -- Odoo writes a combo as a container line holding the whole price plus a
+    -- zero-priced line per bag inside it. Both are kept: the container is
+    -- where the money is, the inner lines are the bags. Which is which is
+    -- flagged here so nothing counts a combo twice.
+    (COALESCE(pol.is_combo_line, FALSE)
+        OR COALESCE(pt.is_combo, FALSE))                            AS "Bundle",
+    COALESCE(pol.sub_product_line, FALSE)                           AS "In Bundle",
 
     ROUND(
         pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1),
@@ -3469,7 +3487,6 @@ LEFT JOIN stock_location       sl    ON sl.id    = spt.default_location_src_id
 WHERE
     po.state IN ('done', 'paid')
     AND pt.name NOT ILIKE '%Delivery Fee%'
-    AND pt.name NOT ILIKE '%Gift Bag%'
     AND pc.name NOT ILIKE '%Pos%'
     -- Refund lines carry a negative qty and a negative amount. Keeping
     -- them nets returns off the day's takings, the way Odoo reports it;
@@ -3477,7 +3494,9 @@ WHERE
     -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pol.qty <> 0
-    AND pt.name NOT ILIKE '%KES discount%'
+    -- Order-level discount lines stay: they are money off the takings, so
+    -- dropping them left this tab's revenue above the Sales page's. They
+    -- carry no quantity, being a discount rather than a bag.
     AND (COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'  -- shop locations only, not production
          OR lower(pconf.name) = 'staff pos')
     AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
