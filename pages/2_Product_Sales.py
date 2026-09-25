@@ -56,8 +56,10 @@ OFFER_COLORS = {
     "Regular": theme.TEXT_MUTED,
 }
 
-tab_shop, tab_category, tab_value, tab_offers, tab_new_products = st.tabs(
-    ["By Shop", "By Category", "Sales Value", "Offer Types", "New Products"]
+(tab_shop, tab_category, tab_locations, tab_value, tab_offers,
+ tab_new_products) = st.tabs(
+    ["By Shop", "By Category", "By Location", "Sales Value", "Offer Types",
+     "New Products"]
 )
 
 
@@ -184,6 +186,67 @@ def render_by_category(start_date: date, end_date: date) -> None:
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column. Rows ending in \"Total\" are category subtotals.")
         grid.filterable_table(df.drop(columns=["sort_priority"]), pinned_columns=("Bag",))
+
+
+@st.fragment()
+def render_by_location(start_date: date, end_date: date) -> None:
+    """Two plain quantity tables: the bags counted, and everything left out.
+
+    The second exists so the excluded lines are still watchable — a strap, a
+    delivery fee or a combo bundle does not count as a bag sold, but it still
+    moved through the till and someone has to be able to see it.
+    """
+    params = {"start_date": start_date, "end_date": end_date}
+    bags = db.run_query(queries.BAGS_SOLD_BY_CATEGORY, params)
+    excluded = db.run_query(queries.EXCLUDED_FROM_BAGS_SOLD, params)
+
+    st.subheader("Bags Sold by Location")
+    if bags.empty:
+        st.info("No bags sold in this date range yet.")
+    else:
+        rows = bags[bags["sort_priority"] == 0].drop(
+            columns=["sort_priority", "Category"])
+        shops = [c for c in rows.columns if c not in ("Bag", "TOTAL")]
+        # Only the shops that actually sold something, so the table is not
+        # mostly zeros.
+        shops = [c for c in shops if rows[c].sum() != 0]
+        rows = rows[["Bag"] + shops + ["TOTAL"]].sort_values("TOTAL", ascending=False)
+        totals = pd.DataFrame([{"Bag": "TOTAL",
+                                **{c: rows[c].sum() for c in shops + ["TOTAL"]}}])
+        st.caption(
+            f"{len(rows):,} bags across {len(shops)} locations · quantities only, "
+            "a refunded bag counted as a movement, combo contents counted as the "
+            "bags they are."
+        )
+        with st.container(border=True):
+            grid.filterable_table(pd.concat([rows, totals], ignore_index=True),
+                                  pinned_columns=("Bag",))
+
+    st.subheader("Excluded from Bags Sold")
+    if excluded.empty:
+        st.info("Nothing was excluded in this date range.")
+        return
+    wide = excluded.pivot_table(index=["Item", "Reason"], columns="Shop",
+                                values="Qty", aggfunc="sum", fill_value=0).reset_index()
+    shop_cols = [c for c in wide.columns if c not in ("Item", "Reason")]
+    wide["TOTAL"] = wide[shop_cols].sum(axis=1)
+    wide = wide.sort_values(["Reason", "TOTAL"], ascending=[True, False])
+    by_reason = (excluded.groupby("Reason")
+                 .agg(Items=("Qty", "sum"), KES=("KES", "sum"))
+                 .sort_values("Items", ascending=False).reset_index())
+    cols = st.columns(min(len(by_reason), 4) or 1)
+    for col, (_, row) in zip(cols, by_reason.iterrows()):
+        with col.container(border=True):
+            st.metric(row["Reason"].split(" (")[0], f"{row['Items']:,.0f}",
+                      f"KES {row['KES']:,.0f}", delta_color="off")
+    st.caption(
+        "Why each line is out of the bag count: a combo bundle is a price "
+        "container whose contents are counted instead, straps and accessories "
+        "are not bags, and delivery fees and order-level discounts are money "
+        "rather than stock. They still count towards revenue."
+    )
+    with st.container(border=True):
+        grid.filterable_table(wide, pinned_columns=("Item",))
 
 
 @st.fragment()
@@ -620,6 +683,9 @@ with tab_shop:
 
 with tab_category:
     render_by_category(start_date, end_date)
+
+with tab_locations:
+    render_by_location(start_date, end_date)
 
 with tab_value:
     render_by_value(start_date, end_date)

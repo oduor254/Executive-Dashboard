@@ -45,17 +45,20 @@ branch_totals AS (
             ELSE 0
         END)                                                        AS revenue,
 
-        -- Units sold counts what left the shelf: no delivery fees, no
-        -- discount lines, and no combo containers — Odoo records the bags
+        -- Bags sold: bags and gift bags only (straps and other accessories
+        -- are not bags), never the combo container — Odoo records the bags
         -- inside a combo as their own lines, so counting the bundle as well
         -- counted a two-bag combo three times.
+    -- Bags sold counts a refunded bag as a sale, the way Odoo's own
+    -- dashboard does: for 24 Sep 2026 it reports 687 where netting the day's
+    -- 9 refunds gives 678. Most of those refunds are a mis-keyed sale being
+    -- re-rung rather than a customer return, so this overstates by design —
+    -- it is kept only so the dashboard and Odoo quote the same number.
         SUM(CASE
-            WHEN pt.name NOT ILIKE '%Delivery Fee%'
-             AND pt.name NOT ILIKE '%KES discount%'
-             AND COALESCE(pc.name, '') NOT ILIKE '%Pos%'
+            WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
              AND COALESCE(pol.is_combo_line, FALSE) = FALSE
              AND COALESCE(pt.is_combo, FALSE) = FALSE
-            THEN pol.qty ELSE 0
+            THEN ABS(pol.qty) ELSE 0
         END)                                                        AS qty,
 
         COUNT(DISTINCT CASE
@@ -570,7 +573,7 @@ shop_sales AS (
       ELSE UPPER(pc."name")
     END AS shop,
     COALESCE(pt."name", '<<unknown>>') AS product_name,
-    SUM(pl.qty) AS qty_sold
+    SUM(ABS(pl.qty)) AS qty_sold
   FROM pos_order p
   JOIN pos_order_line pl ON pl.order_id = p.id
   LEFT JOIN pos_session ps ON p.session_id = ps.id
@@ -580,7 +583,7 @@ shop_sales AS (
   LEFT JOIN product_category pcat ON pcat.id = pt.categ_id
   CROSS JOIN date_range dr
   WHERE p.date_order::date BETWEEN dr.start_date AND dr.end_date
-    AND p.state IN ('done', 'paid')
+    AND p.state IN ('done', 'paid', 'invoiced')  -- as the Sales page counts them
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
@@ -590,6 +593,14 @@ shop_sales AS (
     -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pl.qty <> 0
+    -- Bags sold counts a refunded bag as a sale, the way Odoo's own
+    -- dashboard does: for 24 Sep 2026 it reports 687 where netting the day's
+    -- 9 refunds gives 678. Most of those refunds are a mis-keyed sale being
+    -- re-rung rather than a customer return, so this overstates by design —
+    -- it is kept only so the dashboard and Odoo quote the same number.
+    -- Straps and the rest of the accessories are not bags.
+    AND (COALESCE(pcat."name", '') ILIKE 'Bags%'
+         OR COALESCE(pt."name", '') ILIKE '%Gift Bag%')
     -- Combo containers, including refunded ones (a refund line does not
     -- carry is_combo_line): the bags inside are counted on their own lines.
     AND COALESCE(pl.is_combo_line, FALSE) = FALSE
@@ -604,7 +615,7 @@ shop_sales AS (
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
   GROUP BY 1, 2
-  HAVING SUM(pl.qty) <> 0
+  HAVING SUM(ABS(pl.qty)) <> 0
 ),
 
 tagged AS (
@@ -1084,19 +1095,18 @@ lines AS (
     -- variants) live under Odoo's generic "All" category rather than a Bags
     -- subcategory, so they're assigned by name here instead. "Accessories"
     -- (buckles, zips, locks, rivets, adjusters, ...) is production/repair
-    -- component stock, not bags sold to customers, so it's dropped entirely
-    -- except Straps, which are genuinely sold as their own retail item.
+    -- component stock, not bags sold to customers, so it's dropped entirely,
+    -- straps included: a strap is an accessory, not a bag.
     -- "All" is Odoo's uncategorized catch-all (stationery, samples, other
     -- non-bag items) and is dropped the same way.
     CASE
         WHEN pt."name" ILIKE '%Gift Bag%' THEN 'Gift Bags'
-        WHEN COALESCE(pcat."name", '') = 'Accessories' AND pt."name" ILIKE '%Strap%' THEN 'Straps'
         WHEN COALESCE(pcat."name", '') IN ('Accessories', 'All') THEN ''
         ELSE TRIM(REGEXP_REPLACE(COALESCE(pcat."name", ''), '^Bags\\s*/\\s*', ''))
     END AS category,
     pc."name" AS shop_name,
     p.session_id AS session_id,
-    pl.qty AS bag_qty
+    ABS(pl.qty) AS bag_qty
   FROM pos_order p
   CROSS JOIN date_params dp
   JOIN pos_order_line pl ON pl.order_id = p.id
@@ -1106,7 +1116,7 @@ lines AS (
   LEFT JOIN product_template pt ON pp.product_tmpl_id = pt.id
   LEFT JOIN product_category pcat ON pcat.id = pt.categ_id
   WHERE p.date_order::date BETWEEN dp.start_date AND dp.end_date
-    AND p.state IN ('done', 'paid')
+    AND p.state IN ('done', 'paid', 'invoiced')  -- as the Sales page counts them
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
     AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
@@ -1116,6 +1126,11 @@ lines AS (
     -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pl.qty <> 0
+    -- Bags sold counts a refunded bag as a sale, the way Odoo's own
+    -- dashboard does: for 24 Sep 2026 it reports 687 where netting the day's
+    -- 9 refunds gives 678. Most of those refunds are a mis-keyed sale being
+    -- re-rung rather than a customer return, so this overstates by design —
+    -- it is kept only so the dashboard and Odoo quote the same number.
     -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
     -- Travel Free") is a pricing container, not a bag itself — Odoo already
     -- records the actual bag(s) inside it as separate, normally-named
@@ -1127,6 +1142,11 @@ lines AS (
     -- A refunded combo does not carry is_combo_line, so the container line
     -- came back through as if it were a bag; the template flag catches it.
     AND COALESCE(pt.is_combo, FALSE) = FALSE
+    -- Bags and gift bags only, the same rule the Sales page and By Shop use,
+    -- so the three never disagree: this drops "Saleable" (Foam Cleaner, gift
+    -- vouchers, sampling and customisation fees) along with the accessories.
+    AND (COALESCE(pcat."name", '') ILIKE 'Bags%'
+         OR COALESCE(pt."name", '') ILIKE '%Gift Bag%')
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
 ),
@@ -1639,14 +1659,16 @@ shop_sales AS (
   LEFT JOIN product_category pcat ON pcat.id = pt.categ_id
   CROSS JOIN date_range dr
   WHERE p.date_order::date BETWEEN dr.start_date AND dr.end_date
-    AND p.state IN ('done', 'paid')
+    AND p.state IN ('done', 'paid', 'invoiced')  -- as the Sales page counts them
     AND (
           COALESCE(pt."name", '') NOT LIKE '%+%'
           OR COALESCE(pt.is_combo, FALSE) = TRUE
         )
+    -- Everything the customer was charged for except delivery, which is
+    -- what Odoo's dashboard totals: gift bags and order-level "KES discount"
+    -- lines belong in the takings. For 24 Sep 2026 leaving them out (plus the
+    -- Staff POS till below) read KES 1,367,425.64 against Odoo's 1,369,141.64.
     AND COALESCE(pt."name", '') NOT ILIKE '%Delivery Fee%'
-    AND COALESCE(pt."name", '') NOT ILIKE '%Gift Bag%'
-    AND COALESCE(pt."name", '') NOT ILIKE '%KES discount%'
     AND COALESCE(pcat."name", '') NOT ILIKE '%Pos%'
     -- Refund lines carry a negative qty and a negative amount. Keeping
     -- them nets returns off the day's takings, the way Odoo reports it;
@@ -1656,7 +1678,6 @@ shop_sales AS (
     AND pl.qty <> 0
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
-    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
   GROUP BY 1, 2
   HAVING SUM(pl.price_subtotal_incl) <> 0
 ),
@@ -4063,4 +4084,69 @@ LEFT JOIN res_users                 agent   ON agent.id   = dm.agent_id
 LEFT JOIN res_partner               agent_p ON agent_p.id = agent.partner_id
 WHERE dm.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 ORDER BY dm.date DESC, dm.id DESC
+"""
+
+
+# Everything the bags-sold count leaves out, so it can still be watched.
+# Same date range, same shop names and the same counting as BAGS_SOLD_BY_CATEGORY
+# (a refunded item counts as a movement), but only the lines that do NOT make it
+# into bags sold — accessories, delivery fees, order-level discounts, the combo
+# bundle containers whose contents are counted instead, non-bag items, and
+# anything rung at a non-shop till.
+EXCLUDED_FROM_BAGS_SOLD = """
+SELECT
+    COALESCE(pt."name", '<<unknown>>')                       AS "Item",
+    COALESCE(pcat."name", 'No category')                     AS "Category",
+    CASE
+        WHEN COALESCE(pl.is_combo_line, FALSE)
+          OR COALESCE(pt.is_combo, FALSE)                    THEN 'Combo bundle (contents counted instead)'
+        WHEN pt."name" ILIKE '%Delivery Fee%'                THEN 'Delivery fee'
+        WHEN pt."name" ILIKE '%KES discount%'                THEN 'Order discount'
+        WHEN COALESCE(pcat."name", '') ILIKE '%Pos%'         THEN 'POS material'
+        WHEN COALESCE(pcat."name", '') = 'Accessories'
+         AND pt."name" ILIKE '%Strap%'                       THEN 'Strap'
+        WHEN COALESCE(pcat."name", '') = 'Accessories'       THEN 'Accessory'
+        WHEN p.session_id IS NOT NULL
+         AND (COALESCE(pc."name", '') = ''
+              OR pc."name" ILIKE '%Flash Sale%')             THEN 'Non-shop till'
+        ELSE 'Not a bag'
+    END                                                      AS "Reason",
+    CASE
+        WHEN lower(pc."name") IN ('website sales','website','jumia')
+          OR p.session_id IS NULL                            THEN 'WEBSITE'
+        WHEN lower(pc."name") IN ('sinza','dar-es-alam')     THEN 'SINZA'
+        WHEN lower(pc."name") IN ('ktda','ktda shop')        THEN 'KTDA'
+        WHEN COALESCE(pc."name", '') = ''                    THEN 'NO TILL'
+        ELSE UPPER(pc."name")
+    END                                                      AS "Shop",
+    SUM(ABS(pl.qty))                                         AS "Qty",
+    ROUND(SUM(pl.price_subtotal_incl
+              / COALESCE(NULLIF(p.currency_rate, 0), 1))::NUMERIC, 2) AS "KES"
+FROM pos_order p
+JOIN pos_order_line pl ON pl.order_id = p.id
+LEFT JOIN pos_session ps ON ps.id = p.session_id
+LEFT JOIN pos_config pc ON pc.id = ps.config_id
+LEFT JOIN product_product pp ON pp.id = pl.product_id
+LEFT JOIN product_template pt ON pt.id = pp.product_tmpl_id
+LEFT JOIN product_category pcat ON pcat.id = pt.categ_id
+CROSS JOIN (
+    SELECT CAST(:start_date AS DATE) AS start_date,
+           CAST(:end_date AS DATE)   AS end_date
+) dr
+WHERE p.date_order::date BETWEEN dr.start_date AND dr.end_date
+  AND p.state IN ('done', 'paid', 'invoiced')
+  AND pl.qty <> 0
+  -- The complement of the bags-sold rule: a bag or gift bag that is not a
+  -- combo container and was sold at a shop till is counted there, not here.
+  AND NOT (
+        (COALESCE(pcat."name", '') ILIKE 'Bags%'
+         OR COALESCE(pt."name", '') ILIKE '%Gift Bag%')
+    AND COALESCE(pl.is_combo_line, FALSE) = FALSE
+    AND COALESCE(pt.is_combo, FALSE) = FALSE
+    AND (p.session_id IS NULL
+         OR (COALESCE(pc."name", '') <> '' AND pc."name" NOT ILIKE '%Flash Sale%'))
+  )
+GROUP BY 1, 2, 3, 4
+HAVING SUM(ABS(pl.qty)) <> 0
+ORDER BY "Reason", SUM(ABS(pl.qty)) DESC
 """
