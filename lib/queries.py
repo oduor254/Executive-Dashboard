@@ -34,21 +34,27 @@ branch_totals AS (
                 )
         END                                                         AS branch,
 
-        -- Revenue is every line on the order, the way Odoo totals a POS
-        -- order: delivery fees, gift bags and order-level "KES discount"
-        -- lines included. Leaving them out read KES 181k under Odoo for
-        -- 1-15 Sep 2026 (fees +159,890, gift bags +21,650, discounts -28,800).
-        SUM(
-            pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
-        )                                                           AS revenue,
-
-        -- Units sold stays products only: a delivery fee or a discount line
-        -- is not a unit.
+        -- Every line the customer was charged for except delivery: gift bags
+        -- and order-level "KES discount" lines count, delivery fees do not.
+        -- That is what Odoo's own dashboard reports — for 24 Sep 2026 both
+        -- read KES 1,369,141.64, the difference being exactly the day's
+        -- KES 9,450 of delivery fees.
         SUM(CASE
             WHEN pt.name NOT ILIKE '%Delivery Fee%'
-             AND pt.name NOT ILIKE '%Gift Bag%'
+            THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+            ELSE 0
+        END)                                                        AS revenue,
+
+        -- Units sold counts what left the shelf: no delivery fees, no
+        -- discount lines, and no combo containers — Odoo records the bags
+        -- inside a combo as their own lines, so counting the bundle as well
+        -- counted a two-bag combo three times.
+        SUM(CASE
+            WHEN pt.name NOT ILIKE '%Delivery Fee%'
              AND pt.name NOT ILIKE '%KES discount%'
              AND COALESCE(pc.name, '') NOT ILIKE '%Pos%'
+             AND COALESCE(pol.is_combo_line, FALSE) = FALSE
+             AND COALESCE(pt.is_combo, FALSE) = FALSE
             THEN pol.qty ELSE 0
         END)                                                        AS qty,
 
@@ -584,6 +590,10 @@ shop_sales AS (
     -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pl.qty <> 0
+    -- Combo containers, including refunded ones (a refund line does not
+    -- carry is_combo_line): the bags inside are counted on their own lines.
+    AND COALESCE(pl.is_combo_line, FALSE) = FALSE
+    AND COALESCE(pt.is_combo, FALSE) = FALSE
     -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
     -- Travel Free") is a pricing container, not a bag itself — Odoo already
     -- records the actual bag(s) inside it as separate, normally-named
@@ -593,7 +603,6 @@ shop_sales AS (
     AND COALESCE(pl.is_combo_line, FALSE) = FALSE
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
-    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
   GROUP BY 1, 2
   HAVING SUM(pl.qty) <> 0
 ),
@@ -672,7 +681,7 @@ WITH color_list(color) AS (
         ('A4 Red'),('A4 Pink'),
         ('A5 Red'),('A5 Pink'),
         ('A3'),('A4'),('A5'),
-        ('Crimson'),
+        ('Wine Red'),('Crimson'),
         ('Beige'),('Black'),('Blue'),('Brown'),('Chocolate'),('Choco'),
         ('Cracked'),('Green'),('green'),('GREEN'),('Grey'),('Gold'),('Lilac'),('Maroon'),
         ('Mustard'),('Nude'),('Orange'),('Pink'),('Purple'),
@@ -1115,9 +1124,11 @@ lines AS (
     -- needs excluding here; excluding by Odoo's own is_combo_line flag
     -- catches every combo shape without needing to parse the bundle name.
     AND COALESCE(pl.is_combo_line, FALSE) = FALSE
+    -- A refunded combo does not carry is_combo_line, so the container line
+    -- came back through as if it were a bag; the template flag catches it.
+    AND COALESCE(pt.is_combo, FALSE) = FALSE
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
-    AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Staff%')
 ),
 
 raw_sales AS (
@@ -1143,6 +1154,7 @@ raw_sales AS (
     SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('ktda','ktda shop')) AS ktda,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'busia')        AS busia,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'rongai')       AS rongai,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'staff pos')    AS staff_pos,
     SUM(bag_qty) AS total
   FROM lines
   GROUP BY product_name, category
@@ -1153,7 +1165,7 @@ product_details AS (
     product_name AS bag_name,
     starmall, mombasa, nakuru, eldoret, kisumu, meru, thika,
     hazina, kitengela, website, nanyuki, kakamega, hilton, sinza,
-    uganda, kisii, ktda, busia, rongai, total,
+    uganda, kisii, ktda, busia, rongai, staff_pos, total,
     category,
     0 AS sort_priority
   FROM raw_sales
@@ -1182,6 +1194,7 @@ category_totals AS (
     SUM(ktda) AS ktda,
     SUM(busia) AS busia,
     SUM(rongai) AS rongai,
+    SUM(staff_pos) AS staff_pos,
     SUM(total) AS total,
     category,
     1 AS sort_priority
@@ -1212,6 +1225,7 @@ grand_total AS (
     SUM(ktda) AS ktda,
     SUM(busia) AS busia,
     SUM(rongai) AS rongai,
+    SUM(staff_pos) AS staff_pos,
     SUM(total) AS total,
     NULL AS category,
     2 AS sort_priority
@@ -1239,6 +1253,7 @@ SELECT
   COALESCE(ktda, 0)     AS "KTDA",
   COALESCE(busia, 0)    AS "BUSIA",
   COALESCE(rongai, 0)   AS "RONGAI",
+  COALESCE(staff_pos, 0) AS "STAFF POS",
   COALESCE(total, 0)    AS "TOTAL",
   category              AS "Category",
   sort_priority
@@ -3345,7 +3360,7 @@ WITH color_list(color) AS (
         ('A4 Red'),('A4 Pink'),
         ('A5 Red'),('A5 Pink'),
         ('A3'),('A4'),('A5'),
-        ('Crimson'),
+        ('Wine Red'),('Crimson'),
         ('Beige'),('Black'),('Blue'),('Brown'),('Chocolate'),('Choco'),
         ('Cracked'),('Green'),('green'),('GREEN'),('Grey'),('Gold'),('Lilac'),('Maroon'),
         ('Mustard'),('Nude'),('Orange'),('Pink'),('Purple'),
@@ -3507,7 +3522,7 @@ WITH color_list(color) AS (
         ('A4 Red'),('A4 Pink'),
         ('A5 Red'),('A5 Pink'),
         ('A3'),('A4'),('A5'),
-        ('Crimson'),
+        ('Wine Red'),('Crimson'),
         ('Beige'),('Black'),('Blue'),('Brown'),('Chocolate'),('Choco'),
         ('Cracked'),('Green'),('green'),('GREEN'),('Grey'),('Gold'),('Lilac'),('Maroon'),
         ('Mustard'),('Nude'),('Orange'),('Pink'),('Purple'),
@@ -3599,6 +3614,53 @@ trailing_6mo_sales AS (
     WHERE sale_date >= CURRENT_DATE - INTERVAL '6 months'
 ),
 
+-- Bags added to the catalogue in the last 6 months, whether or not they
+-- have sold yet. A launch is news the day it is listed, not once it has
+-- shifted 30 units: La Femme went into Odoo on 21 Sep 2026 as four Tote Bag
+-- colours and would otherwise have been invisible here until it sold 30.
+-- Restricted to the Bags categories, which keeps internal, non-bag templates
+-- out without needing a sales history, and named the same colour-stripped
+-- way as the sales rows so four colours read as one launch.
+newly_listed AS (
+    SELECT base.product, MIN(base.listed_on) AS listed_on
+    FROM (
+        SELECT
+            -- Odoo's own name carries a marketing name in brackets
+            -- ("Lafemme Black (Obsidian)"), so the bracket goes first, then
+            -- the colour, then any trailing style code — leaving the family
+            -- name the sales rows use, so four colours read as one launch.
+            TRIM(REGEXP_REPLACE(
+                CASE
+                    WHEN c.color IS NULL THEN cleaned.name
+                    ELSE LEFT(cleaned.name, LENGTH(cleaned.name) - LENGTH(c.color))
+                END,
+                '\s+018$', ''
+            ))                                      AS product,
+            pt.create_date::DATE                    AS listed_on
+        FROM product_template pt
+        JOIN product_category pc ON pc.id = pt.categ_id
+        CROSS JOIN LATERAL (
+            SELECT TRIM(REGEXP_REPLACE(pt.name, '\s*\(.*\)\s*$', '')) AS name
+        ) cleaned
+        LEFT JOIN LATERAL (
+            SELECT cl.color FROM color_list cl
+            WHERE cleaned.name LIKE '% ' || cl.color
+            ORDER BY LENGTH(cl.color) DESC LIMIT 1
+        ) c ON TRUE
+        WHERE pt.active
+          AND pc.name ILIKE 'Bags%'
+          AND pt.create_date >= CURRENT_DATE - INTERVAL '6 months'
+          AND pt.name NOT ILIKE '%Sample%'
+          AND pt.name NOT ILIKE '%REJECT%'
+          AND pt.name NOT ILIKE '%TEST%'
+          AND pt.name NOT ILIKE '%Custom%'
+          AND pt.name NOT LIKE '%[%'
+          AND pt.name NOT LIKE '%+%'
+    ) base
+    WHERE base.product <> ''
+    GROUP BY base.product
+),
+
 new_products AS (
     SELECT af.product, af.first_sold
     FROM all_time_first_sale af
@@ -3608,6 +3670,13 @@ new_products AS (
     HAVING
         SUM(t6.quantity) >= 30
         AND SUM(t6.total) / NULLIF(SUM(t6.quantity), 0) >= 1000
+
+    UNION
+
+    SELECT nl.product, NULL::DATE
+    FROM newly_listed nl
+    WHERE nl.product NOT IN (SELECT product FROM all_time_first_sale
+                             WHERE first_sold < CURRENT_DATE - INTERVAL '6 months')
 ),
 
 -- Bounded to whatever the page's date picker is set to — this is what
@@ -3625,10 +3694,11 @@ SELECT
     np.first_sold                                  AS "First Sold",
     COALESCE(SUM(ps.quantity), 0)                  AS "Quantity Sold",
     ROUND(COALESCE(SUM(ps.total), 0)::NUMERIC, 2)  AS "Revenue"
-FROM new_products np
+FROM (SELECT product, MIN(first_sold) AS first_sold
+      FROM new_products GROUP BY product) np
 LEFT JOIN period_sales ps ON ps.product = np.product
 GROUP BY np.product, np.first_sold
-ORDER BY "Revenue" DESC;
+ORDER BY "Revenue" DESC, "Product";
 """
 
 

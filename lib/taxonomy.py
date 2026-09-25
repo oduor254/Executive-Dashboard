@@ -45,6 +45,7 @@ _COLOR_SUFFIXES = sorted([
     "A4 Red", "A4 Pink",
     "A5 Red", "A5 Pink",
     "A3", "A4", "A5",
+    "Wine Red",
     "Crimson",
     "Beige", "Black", "Blue", "Brown", "Chocolate", "Choco",
     "Cracked", "Green", "Grey", "Gold", "Lilac", "Maroon",
