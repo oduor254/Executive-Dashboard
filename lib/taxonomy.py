@@ -45,6 +45,7 @@ _COLOR_SUFFIXES = sorted([
     "A4 Red", "A4 Pink",
     "A5 Red", "A5 Pink",
     "A3", "A4", "A5",
+    "Denim Blue",
     "Wine Red",
     "Crimson",
     "Beige", "Black", "Blue", "Brown", "Chocolate", "Choco",
@@ -427,6 +428,30 @@ def base_name(name) -> str:
     some colors as two separate SKUs (plain and "... 018") for what is, on the
     shop floor, the same bag — this is the name they share once that's gone."""
     return _STYLE_CODE_RE.sub("", str(name)).strip()
+
+
+def group_of(name) -> str:
+    """The heading a product should sit under when rows are grouped by bag.
+
+    Like family_of(), but it always answers: the shop's own naming carries
+    tags family_of() cannot match — reject stock ("Man Bag Black [REJECT]"),
+    a style code ("Trecento 018 Maroon"), a marketing name in brackets
+    ("Lafemme Black (Obsidian)") — and each of those is still the same bag.
+    Tags are stripped first, and anything the masterfile does not recognise
+    falls back to its own colour-stripped name rather than collapsing into
+    one "UNMAPPED" heap.
+    """
+    cleaned = re.sub(r"\s*\[[^\]]*\]\s*$", "", str(name)).strip()
+    cleaned = re.sub(r"\s*\([^)]*\)\s*$", "", cleaned).strip()
+    cleaned = base_name(cleaned)
+    family = family_of(cleaned)
+    if family != UNMAPPED:
+        return family
+    # Colour first, then the style code: Odoo writes it as "Trecento 018
+    # Maroon", so the code is only at the end once the colour is gone.
+    stripped = base_name(_strip_color(cleaned))
+    family = family_of(stripped)
+    return family if family != UNMAPPED else (stripped or cleaned)
 
 
 def merge_style_codes(df: pd.DataFrame, column: str) -> pd.DataFrame:

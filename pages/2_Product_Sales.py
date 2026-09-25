@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, deals, deals_sync, filters, grid, pricelists, queries, sheets_sync, theme
+from lib import (auth, db, deals, deals_sync, filters, grid, pricelists, queries,
+                 sheets_sync, taxonomy, theme)
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
 
@@ -188,6 +189,32 @@ def render_by_category(start_date: date, end_date: date) -> None:
         grid.filterable_table(df.drop(columns=["sort_priority"]), pinned_columns=("Bag",))
 
 
+def _with_family_subtotals(rows: pd.DataFrame, shops: list[str]) -> pd.DataFrame:
+    """Rows alphabetical, with a subtotal line after each bag family.
+
+    "Ace Black TT", "Ace Chocolate", "Ace Cracked", then "ACE Total" — the
+    colours of one bag read as a block and the block carries its own number,
+    which is what anyone counting stock actually wants.
+    """
+    value_columns = shops + ["TOTAL"]
+    rows = rows.assign(
+        _family=[taxonomy.group_of(bag) for bag in rows["Bag"]]
+    ).sort_values(["_family", "Bag"], key=lambda col: col.str.upper())
+
+    out = []
+    for family, group in rows.groupby("_family", sort=False):
+        out.append(group.drop(columns="_family"))
+        out.append(pd.DataFrame([{
+            "Bag": f"{family.upper()} Total",
+            **{c: group[c].sum() for c in value_columns},
+        }]))
+    out.append(pd.DataFrame([{
+        "Bag": "GRAND TOTAL",
+        **{c: rows[c].sum() for c in value_columns},
+    }]))
+    return pd.concat(out, ignore_index=True)
+
+
 @st.fragment()
 def render_by_location(start_date: date, end_date: date) -> None:
     """Two plain quantity tables: the bags counted, and everything left out.
@@ -210,16 +237,14 @@ def render_by_location(start_date: date, end_date: date) -> None:
         # Only the shops that actually sold something, so the table is not
         # mostly zeros.
         shops = [c for c in shops if rows[c].sum() != 0]
-        rows = rows[["Bag"] + shops + ["TOTAL"]].sort_values("TOTAL", ascending=False)
-        totals = pd.DataFrame([{"Bag": "TOTAL",
-                                **{c: rows[c].sum() for c in shops + ["TOTAL"]}}])
+        rows = rows[["Bag"] + shops + ["TOTAL"]]
         st.caption(
-            f"{len(rows):,} bags across {len(shops)} locations · quantities only, "
-            "a refunded bag counted as a movement, combo contents counted as the "
-            "bags they are."
+            f"{len(rows):,} bags across {len(shops)} locations · alphabetical, with "
+            "a subtotal after each bag's colours · quantities only, a refunded bag "
+            "counted as a movement, combo contents counted as the bags they are."
         )
         with st.container(border=True):
-            grid.filterable_table(pd.concat([rows, totals], ignore_index=True),
+            grid.filterable_table(_with_family_subtotals(rows, shops),
                                   pinned_columns=("Bag",))
 
     st.subheader("Excluded from Bags Sold")
