@@ -60,7 +60,9 @@ def tier_of(starts, ends=None) -> str:
     start = pd.Timestamp(starts)
     end = pd.Timestamp(ends) if ends is not None else start
     midpoint = start + (end - start) / 2
-    return "First half" if midpoint.day <= _FIRST_HALF_ENDS else "Second half"
+    # Named the way the deals sheet names them, so a pricelist tier and a
+    # sheet row for the same tier carry the same label.
+    return "Tier 1" if midpoint.day <= _FIRST_HALF_ENDS else "Tier 2"
 
 
 def window_label(starts, ends) -> str:
@@ -130,6 +132,47 @@ def snapshot() -> dict:
     return {"seen": len(live), "new": len(merged) - len(existing), "total": len(merged)}
 
 
+# What separates a Deal of the Week tier from a short timed offer. Each shop's
+# pricelist carries its tier as one block of rules sharing a window — 12-26
+# September, then 26 September-10 October, 35-57 rules each — while "300 off"
+# style promotions sit alongside as a handful of rules lasting a day to a week.
+# Labelling every dated rule as Deal of the Week put one-day offers (the CBD
+# Mini Umbra on 27 Sep) into the tier.
+_TIER_MIN_DAYS = 10
+_TIER_MIN_RULES = 5
+TIER = "Deal of the Week"
+TIMED = "Timed Offer"
+
+
+def windows() -> pd.DataFrame:
+    """Every archived promotion window, one row per shop, marked tier or timed.
+
+    Columns: Location, Pricelist, Starts, Ends, Rules, Kind (TIER or TIMED).
+    """
+    arc = load()
+    cols = ["Location", "Pricelist", "Starts", "Ends", "Rules", "Kind"]
+    if arc.empty:
+        return pd.DataFrame(columns=cols)
+    arc = arc.copy()
+    arc["Starts"] = pd.to_datetime(arc["Starts"], errors="coerce")
+    arc["Ends"] = pd.to_datetime(arc["Ends"], errors="coerce")
+    arc = arc.dropna(subset=["Starts", "Ends"])
+    grouped = (arc.groupby(["Pricelist", "Starts", "Ends"], as_index=False)
+                  .agg(Rules=("Product", "nunique"), Tills=("Tills", "first")))
+    days = (grouped["Ends"] - grouped["Starts"]).dt.days + 1
+    grouped["Kind"] = [
+        TIER if d >= _TIER_MIN_DAYS and r >= _TIER_MIN_RULES else TIMED
+        for d, r in zip(days, grouped["Rules"])
+    ]
+    rows = [
+        {"Location": loc, "Pricelist": g["Pricelist"], "Starts": g["Starts"],
+         "Ends": g["Ends"], "Rules": g["Rules"], "Kind": g["Kind"]}
+        for _, g in grouped.iterrows()
+        for loc in locations_of(g["Tills"])
+    ]
+    return pd.DataFrame(rows, columns=cols)
+
+
 def deals_in_window(start_date, end_date) -> pd.DataFrame:
     """Archived rules that were live at any point in [start_date, end_date],
     one row per shop the rule applied to.
@@ -140,7 +183,7 @@ def deals_in_window(start_date, end_date) -> pd.DataFrame:
     """
     arc = load()
     empty = pd.DataFrame(columns=["Location", "Product", "Rule Price", "Starts",
-                                  "Ends", "Tier", "Window", "Pricelist"])
+                                  "Ends", "Tier", "Window", "Pricelist", "Kind"])
     if arc.empty:
         return empty
 
@@ -152,10 +195,16 @@ def deals_in_window(start_date, end_date) -> pd.DataFrame:
     if window.empty:
         return empty
 
+    kinds = windows()
+    kind_of = {(k["Pricelist"], k["Starts"], k["Ends"]): k["Kind"]
+               for _, k in kinds.iterrows()}
+
     rows = []
     for _, r in window.iterrows():
+        kind = kind_of.get((r["Pricelist"], r["Starts"], r["Ends"]), TIMED)
         for loc in locations_of(r.get("Tills")):
             rows.append({
+                "Kind": kind,
                 "Location": loc,
                 "Product": r["Product"],
                 "Rule Price": r["Rule Price"],

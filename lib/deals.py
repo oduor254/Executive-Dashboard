@@ -50,6 +50,7 @@ Standard/Antitheft was actually chosen — not 3.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import re
 from datetime import datetime
@@ -132,9 +133,16 @@ def _with_year(frame: pd.DataFrame) -> pd.DataFrame:
     written by the version that predates it, and that version only ever ran
     against the 2026 sheet.
     """
-    if "year" in frame.columns:
-        return frame
-    return frame.assign(year=_LEGACY_YEAR)
+    if "year" not in frame.columns:
+        frame = frame.assign(year=_LEGACY_YEAR)
+    # Same repair for the tier column, added when the sheet's Tier 1/Tier 2
+    # split started being kept. A row without one covers its whole month,
+    # which is what every row meant before tiers were read.
+    if "tier" in frame.columns:
+        frame = frame.assign(tier=frame["tier"].fillna("").astype(str))
+    elif "location" in frame.columns:
+        frame = frame.assign(tier="")
+    return frame
 
 
 @st.cache_data(show_spinner=False)
@@ -207,6 +215,10 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
 
 
 UNLISTED = "Unlisted Discount"
+DOW = "Deal of the Week"
+# A short dated pricelist rule running beside the tier ("300 off" and similar),
+# not part of Deal of the Week itself.
+TIMED_OFFER = "Timed Offer"
 
 # A sale has to be this far under the usual price before it counts as a
 # discount rather than rounding or a part-shilling difference. The real deals
@@ -248,19 +260,26 @@ _RULE_SLACK = 1.03
 
 
 def apply_pricelist_deals(df: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
-    """Label sales that match a dated Odoo pricelist rule as Deal of the Week.
+    """Label sales that match a dated Odoo pricelist rule.
+
+    A rule in one of the shop's tier windows (a fortnight-long block of
+    dozens of rules, see pricelists.windows) is Deal of the Week; a short
+    one-to-few-day rule beside it is a Timed Offer — the "300 off" style
+    promotions that run alongside the tier and are not part of it.
 
     The spreadsheet is a partial transcription of these rules: for the 12-26
     September tier Odoo carries 37 bag families across 18 shops where the sheet
-    recorded 31 across 14, and 22 families — Prime, Jumbo, Mini Zuri, Elyse,
-    Fabela among them — appear in Odoo and nowhere in the sheet. Sales of those
-    were landing in Regular or Unlisted Discount, which is why Deal of the Week
-    read low.
+    recorded 31 across 14, so sales of the missing families were landing in
+    Regular or Unlisted Discount. Only rows the curated lists did not already
+    name are relabelled — the sheet distinguishes Singles and Special Offers,
+    which a pricelist rule cannot.
 
-    Only rows the curated lists did not already name are relabelled. Where the
-    sheet has a row it is the more specific record — it distinguishes Singles
-    and Special Offers, which a pricelist rule cannot.
+    Every rule is kept, not just the cheapest per bag: a bag on consecutive
+    tiers (12-26 Sep and 26 Sep-10 Oct) has two windows, and keeping one
+    threw the other tier's dates away.
     """
+    from lib import pricelists
+
     if df.empty or rules is None or rules.empty:
         return df
 
@@ -273,35 +292,40 @@ def apply_pricelist_deals(df: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame
     )
     rules["Starts"] = pd.to_datetime(rules["Starts"])
     rules["Ends"] = pd.to_datetime(rules["Ends"])
+    if "Kind" not in rules.columns:
+        rules["Kind"] = pricelists.TIER
+    # A tier outranks a timed offer when a sale fits both.
+    rules["_rank"] = (rules["Kind"] != pricelists.TIER).astype(int)
+    rules = rules.sort_values(["_rank", "Deal Price"])
 
-    # Cheapest rule per shop+bag, so a bag on two overlapping rules is judged
-    # against the better offer rather than whichever happened to sort first.
-    best = (rules.sort_values("Deal Price")
-                 .drop_duplicates(subset=["Location", "Family"], keep="first"))
-    lookup = {
-        (r["Location"], r["Family"]): (r["Deal Price"], r["Starts"], r["Ends"],
-                                       r.get("Tier"), r.get("Window"))
-        for _, r in best.iterrows()
-    }
+    lookup: dict[tuple[str, str], list] = {}
+    for _, r in rules.iterrows():
+        lookup.setdefault((r["Location"], r["Family"]), []).append(
+            (r["Deal Price"], r["Starts"], r["Ends"], r["Kind"],
+             r.get("Tier", ""), r.get("Window", "")))
 
     sold_on = pd.to_datetime(df["Date"])
-    matched, tiers, windows = [], [], []
+    labels, tiers, windows = [], [], []
     for loc, prod, price, when in zip(df["Location"], df["Product"], df["Price"], sold_on):
-        hit = lookup.get((loc, prod))
+        hit = next((h for h in lookup.get((loc, prod), [])
+                    if h[1] <= when <= h[2] and 0 < price <= h[0]), None)
         if hit is None:
-            matched.append(False); tiers.append(""); windows.append("")
+            labels.append(None); tiers.append(""); windows.append("")
             continue
-        deal_price, starts, ends, tier, window = hit
-        ok = (starts <= when <= ends) and 0 < price <= deal_price
-        matched.append(bool(ok))
-        tiers.append(tier if ok else "")
-        windows.append(window if ok else "")
+        _, _, _, kind, tier, window = hit
+        labels.append(DOW if kind == pricelists.TIER else TIMED_OFFER)
+        tiers.append(tier if kind == pricelists.TIER else "")
+        windows.append(window)
 
-    df["Tier"] = tiers
-    df["Deal Window"] = windows
-
-    claimable = df["Offer Type"].isin(["Regular", UNLISTED])
-    df.loc[pd.Series(matched, index=df.index) & claimable, "Offer Type"] = "Deal of the Week"
+    if "Tier" not in df.columns:
+        df["Tier"] = ""
+    if "Deal Window" not in df.columns:
+        df["Deal Window"] = ""
+    labels = pd.Series(labels, index=df.index)
+    claimable = df["Offer Type"].isin(["Regular", UNLISTED]) & labels.notna()
+    df.loc[claimable, "Offer Type"] = labels[claimable]
+    df.loc[claimable, "Tier"] = pd.Series(tiers, index=df.index)[claimable]
+    df.loc[claimable, "Deal Window"] = pd.Series(windows, index=df.index)[claimable]
     return df
 
 
@@ -345,6 +369,91 @@ def country_of(location: str) -> str:
     return location if location in NON_KENYA_LOCATIONS else "Kenya"
 
 
+_MONTH_NUMBER = {name: i for i, name in enumerate(calendar.month_name) if name}
+
+
+def _months_around(when: pd.Timestamp) -> list[tuple[int, str]]:
+    """The sale's own month first, then the next and the previous one."""
+    here = pd.Timestamp(when.year, when.month, 1)
+    order = [here, here + pd.DateOffset(months=1), here - pd.DateOffset(months=1)]
+    return [(m.year, calendar.month_name[m.month]) for m in order]
+
+
+def _window_label(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    if start.month == end.month:
+        return f"{start.day}-{end.day} {start:%b}"
+    return f"{start.day} {start:%b} - {end.day} {end:%b}"
+
+
+def _tier_number(tier) -> int | None:
+    found = re.search(r"\d+", str(tier or ""))
+    return int(found.group()) if found else None
+
+
+def _tier_window_finder():
+    """A function (year, month, tier, location) -> (start, end) for a sheet tier.
+
+    The sheet names a tier but gives no dates; the shop's Odoo pricelist does.
+    Each archived tier window (pricelists.windows, the fortnight-long blocks)
+    belongs to the month and half its midpoint falls in: 12-26 September is
+    September Tier 2, 26 September-10 October is October Tier 1. A tier with
+    no archived window is inferred from its neighbour — September Tier 1 at
+    the CBD shops ran up to the day before Tier 2 began, 1-11 September — and
+    with neither, the month is split at the 15th. A row with no tier covers
+    its whole month, which is what every row meant before tiers were kept.
+    """
+    from lib import pricelists
+
+    tiers = pricelists.windows()
+    tiers = tiers[tiers["Kind"] == pricelists.TIER]
+    by_location: dict[str, set] = {}
+    for _, w in tiers.iterrows():
+        by_location.setdefault(w["Location"], set()).add((w["Starts"], w["Ends"]))
+    # The sheet's "Nairobi Town" is the four CBD shops on one pricelist.
+    by_location["Nairobi Town"] = set().union(
+        *(by_location.get(shop, set()) for shop in NAIROBI_TOWN_SHOPS))
+
+    cache: dict = {}
+    day = pd.Timedelta(days=1)
+
+    def window_for(year: int, month: str, tier, location: str):
+        key = (year, month, str(tier), location)
+        if key in cache:
+            return cache[key]
+        number = _MONTH_NUMBER.get(str(month).strip())
+        if number is None:
+            cache[key] = None
+            return None
+        month_start = pd.Timestamp(year, number, 1)
+        month_end = month_start + pd.offsets.MonthEnd(0)
+        n = _tier_number(tier)
+        if n is None:
+            cache[key] = (month_start, month_end)
+            return cache[key]
+
+        halves: dict[int, tuple] = {}
+        for start, end in by_location.get(location, ()):
+            mid = start + (end - start) / 2
+            if (mid.year, mid.month) != (year, number):
+                continue
+            half = 1 if mid.day <= 15 else 2
+            if half not in halves or (end - start) > (halves[half][1] - halves[half][0]):
+                halves[half] = (start, end)
+
+        if n in halves:
+            window = halves[n]
+        elif n == 1:
+            window = ((month_start, halves[2][0] - day) if 2 in halves
+                      else (month_start, month_start + pd.Timedelta(days=14)))
+        else:
+            window = ((halves[1][1] + day, month_end) if 1 in halves
+                      else (month_start + pd.Timedelta(days=15), month_end))
+        cache[key] = window
+        return window
+
+    return window_for
+
+
 def classify(df: pd.DataFrame) -> pd.DataFrame:
     """Add "Offer Type" ("Power Deal", "Deal of the Week", "Singles",
     "Special Offers", "Combo", or "Regular") and "Country" ("Kenya",
@@ -381,20 +490,32 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         original = power_lookup.get((year, month, product))
         return original is not None and _is_discounted(price, original)
 
-    dow_lookup: dict[tuple[int, str, str, str], tuple[float, str]] = {
-        (int(row["year"]), row["month"], row["product"].lower(), row["location"]):
-            (row["price_then"], row["type"])
-        for _, row in dow.iterrows()
-    }
+    # Sheet rows are matched on the DATES of their tier, not the month: the
+    # sheet runs each month as Tier 1 then Tier 2, and matching on month alone
+    # kept Nairobi Town's Tier 1 Jamela labelled Deal of the Week for sales on
+    # 20-26 September, long after Tier 2 had replaced it.
+    dow_rows: dict[tuple[int, str, str, str], list[tuple[str, float, str]]] = {}
+    for _, row in dow.iterrows():
+        dow_rows.setdefault(
+            (int(row["year"]), row["month"], row["product"].lower(), row["location"]), []
+        ).append((row.get("tier", ""), row["price_then"], row["type"]))
 
-    def _dow_match(year: int, month: str, product: str, location: str, price: float) -> str | None:
-        candidates = [location]
+    window_for = _tier_window_finder()
+
+    def _dow_match(when: pd.Timestamp, product: str, location: str, price: float):
+        locations = [location]
         if location in NAIROBI_TOWN_SHOPS:
-            candidates.append("Nairobi Town")
-        for loc in candidates:
-            entry = dow_lookup.get((year, month, product, loc))
-            if entry is not None and _is_discounted(price, entry[0]):
-                return entry[1]  # the row's own type: Deal of the Week / Singles / Special Offers
+            locations.append("Nairobi Town")
+        # A tier can start in the month before the one the sheet files it
+        # under (October's Tier 1 at the CBD shops opens on 26 September), so
+        # the neighbouring months' lists are checked too; the dates decide.
+        for year, month in _months_around(when):
+            for loc in locations:
+                for tier, price_then, offer_type in dow_rows.get((year, month, product, loc), []):
+                    window = window_for(year, month, tier, loc)
+                    if (window is not None and window[0] <= when <= window[1]
+                            and _is_discounted(price, price_then)):
+                        return offer_type, tier, window
         return None
 
     is_power = pd.Series(
@@ -405,14 +526,14 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         index=df.index,
     ) & is_kenya
 
-    dow_type = pd.Series(
-        [
-            _dow_match(y, m, p, loc, price)
-            for y, m, p, loc, price in zip(
-                year_key, month_key, product_key, df["Location"], df["Price"])
-        ],
-        index=df.index,
-    )
+    dow_hits = [
+        _dow_match(when, p, loc, price)
+        for when, p, loc, price in zip(sold_on, product_key, df["Location"], df["Price"])
+    ]
+    dow_type = pd.Series([h[0] if h else None for h in dow_hits], index=df.index)
+    dow_tier = pd.Series([h[1] if h else "" for h in dow_hits], index=df.index)
+    dow_window = pd.Series(
+        [_window_label(*h[2]) if h else "" for h in dow_hits], index=df.index)
     is_dow = dow_type.notna()
 
     # Odoo's own flag where the query provides it, name-parsing only as a
@@ -433,6 +554,8 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     # the nationwide Power Deal entry, so it matched both, and the sheet's
     # own Deal of the Week label for that row should win.
     offer[is_dow] = dow_type[is_dow]
+    df["Tier"] = dow_tier.where(is_dow, "")
+    df["Deal Window"] = dow_window.where(is_dow, "")
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     if "In Bundle" in df.columns:
         # The bags inside a bundle belong to the combo, not to Regular.

@@ -51,6 +51,9 @@ OFFER_COLORS = {
     "Singles": theme.CATEGORICAL[3],
     "Special Offers": theme.CATEGORICAL[6],
     "Combo": theme.CATEGORICAL[4],
+    # A short dated pricelist rule running beside the tier ("300 off" and the
+    # like) — its own label so it no longer inflates Deal of the Week.
+    deals.TIMED_OFFER: theme.CATEGORICAL[5],
     # Sold below its usual price but on no list — amber, because it is a
     # discount that was given without being recorded, not a clean category.
     deals.UNLISTED: theme.STATUS["warning"],
@@ -538,7 +541,9 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 except Exception as exc:
                     st.error(f"Sync failed: {exc}")
 
-    order = ["Power Deal", "Deal of the Week", "Singles", "Special Offers", "Combo", "Regular"]
+    # Every label classify can give, so the bars add up to the tab's revenue.
+    order = ["Power Deal", "Deal of the Week", "Singles", "Special Offers",
+             deals.TIMED_OFFER, "Combo", deals.UNLISTED, "Regular"]
     ordered = by_offer_revenue.reindex(order).fillna(0)
 
     with st.container(border=True):
@@ -585,7 +590,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         offer_choice = st.selectbox(
             "Offer Type",
             ["All Offer Types", "Power Deal", "Deal of the Week", "Singles",
-             "Special Offers", deals.UNLISTED, "Combo", "Regular"],
+             "Special Offers", deals.TIMED_OFFER, deals.UNLISTED, "Combo", "Regular"],
             key="offer_type_filter",
         )
     with col_country:

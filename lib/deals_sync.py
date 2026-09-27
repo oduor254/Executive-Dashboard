@@ -44,7 +44,12 @@ MANUAL_ALIASES = {
     "ovalhandbag": "Oval Handbag", "wash bag": "Washbag", "zipped lunch bag": "Zipped Lunchset",
     "zipped lunchbag": "Zipped Lunchset", "laptop backpack": "Code 3",
     "amaya handbag": "Amaya", "antitheft backpack": "Antitheft", "aurora handbag": "Aurora",
-    "avana sling": "Avana", "bonita travel": "Bonita", "don man bag": "Don",
+    # Sales carry these as "Avana HB" and "Fabela" (colour stripped), so the
+    # catalog's own longer names never matched a sale: every September Tier 2
+    # Fabela row and July's Avana rows were dead on arrival.
+    "avana sling": "Avana HB", "fabela travel": "Fabela",
+    "doublepress backpack": "Double Press", "double press backpack": "Double Press",
+    "bonita travel": "Bonita", "don man bag": "Don",
     "elyse handbag": "Elyse", "fayola messenger": "Fayola", "imani handbag": "Imani",
     "jade briefcase": "Jade", "jamela handbag": "Jamela", "kai backpack": "Kai",
     "kate sling": "Kate", "kaz travel": "Kaz", "liam travel": "Liam", "lola handbag": "Lola",
@@ -183,6 +188,10 @@ def _parse_kenya(sh, families_lower: dict[str, str], unresolved: list[dict]) -> 
             dow_rows.append({
                 "month": row["Month"].strip(), "product": product, "location": row["Location"].strip(),
                 "price_then": price_then, "price_now": price_now, "type": "Deal of the Week",
+                # "Tier 1" runs the first part of the month, "Tier 2" the second.
+                # Without it both tiers merged into one month-long list, and a
+                # Tier 1 bag still read as a deal after its tier had ended.
+                "tier": str(row.get("Tier", "")).strip(),
             })
         elif offer_type == "power deals":
             power_rows.append({
@@ -254,7 +263,8 @@ def _merge_with_existing(fresh: pd.DataFrame, filename: str, key: list[str]) -> 
     # year column existed is still an archive worth keeping, and dropping it
     # for want of one column would quietly discard the history this merge
     # exists to protect.
-    existing = deals._with_year(pd.read_csv(path))
+    existing = deals._with_year(pd.read_csv(path, keep_default_na=False,
+                                            na_values={"price_then": [""], "price_now": [""]}))
     if existing.empty or not set(key).issubset(existing.columns):
         return fresh
 
@@ -291,10 +301,12 @@ def sync() -> dict:
 
     all_dow = pd.DataFrame(kenya_dow + uganda_rows + tanzania_rows)
     all_dow["year"] = sheet_year
+    # Uganda and Tanzania have no tiers; blank means "the whole month".
+    all_dow["tier"] = all_dow.get("tier", pd.Series(dtype=str)).fillna("")
     all_dow = (
-        all_dow.groupby(["year", "month", "product", "location", "type"], as_index=False)
+        all_dow.groupby(["year", "month", "tier", "product", "location", "type"], as_index=False)
         .agg(price_then=("price_then", "first"), price_now=("price_now", "first"))
-        .sort_values(["year", "month", "location", "product"])
+        .sort_values(["year", "month", "tier", "location", "product"])
     )
     power_df = pd.DataFrame(kenya_power)
     power_df["year"] = sheet_year
@@ -312,7 +324,7 @@ def sync() -> dict:
     # period the sheet still carries are refreshed; periods it no longer
     # carries are kept.
     all_dow = _merge_with_existing(
-        all_dow, "deals_of_week.csv", ["year", "month", "product", "location", "type"])
+        all_dow, "deals_of_week.csv", ["year", "month", "tier", "product", "location", "type"])
     power_df = _merge_with_existing(
         power_df, "power_deals.csv", ["year", "month", "product"])
 
