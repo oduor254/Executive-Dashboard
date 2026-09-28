@@ -49,16 +49,16 @@ branch_totals AS (
         -- are not bags), never the combo container — Odoo records the bags
         -- inside a combo as their own lines, so counting the bundle as well
         -- counted a two-bag combo three times.
-    -- Bags sold counts a refunded bag as a sale, the way Odoo's own
-    -- dashboard does: for 24 Sep 2026 it reports 687 where netting the day's
-    -- 9 refunds gives 678. Most of those refunds are a mis-keyed sale being
-    -- re-rung rather than a customer return, so this overstates by design —
-    -- it is kept only so the dashboard and Odoo quote the same number.
+    -- Bags sold nets refunds: a bag sold and refunded is not a bag sold.
+    -- That is how the daily Bags Sold reports count (13-19 Sep 2026 match to
+    -- the bag), and every refund in September 2026 was rung the same day as
+    -- its sale, so netting by day and netting by sale agree. Counting refunds
+    -- as movements, as Odoo's dashboard does, put every refund in twice.
         SUM(CASE
             WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
              AND COALESCE(pol.is_combo_line, FALSE) = FALSE
              AND COALESCE(pt.is_combo, FALSE) = FALSE
-            THEN ABS(pol.qty) ELSE 0
+            THEN pol.qty ELSE 0
         END)                                                        AS qty,
 
         COUNT(DISTINCT CASE
@@ -573,7 +573,7 @@ shop_sales AS (
       ELSE UPPER(pc."name")
     END AS shop,
     COALESCE(pt."name", '<<unknown>>') AS product_name,
-    SUM(ABS(pl.qty)) AS qty_sold
+    SUM(pl.qty) AS qty_sold
   FROM pos_order p
   JOIN pos_order_line pl ON pl.order_id = p.id
   LEFT JOIN pos_session ps ON p.session_id = ps.id
@@ -593,11 +593,11 @@ shop_sales AS (
     -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pl.qty <> 0
-    -- Bags sold counts a refunded bag as a sale, the way Odoo's own
-    -- dashboard does: for 24 Sep 2026 it reports 687 where netting the day's
-    -- 9 refunds gives 678. Most of those refunds are a mis-keyed sale being
-    -- re-rung rather than a customer return, so this overstates by design —
-    -- it is kept only so the dashboard and Odoo quote the same number.
+    -- Bags sold nets refunds: a bag sold and refunded is not a bag sold.
+    -- That is how the daily Bags Sold reports count (13-19 Sep 2026 match to
+    -- the bag), and every refund in September 2026 was rung the same day as
+    -- its sale, so netting by day and netting by sale agree. Counting refunds
+    -- as movements, as Odoo's dashboard does, put every refund in twice.
     -- Straps and the rest of the accessories are not bags.
     AND (COALESCE(pcat."name", '') ILIKE 'Bags%'
          OR COALESCE(pt."name", '') ILIKE '%Gift Bag%')
@@ -615,7 +615,7 @@ shop_sales AS (
     AND (p.session_id IS NULL OR COALESCE(pc."name", '') <> '')       -- shop locations only, not blank/production
     AND (p.session_id IS NULL OR pc."name" NOT ILIKE '%Flash Sale%')
   GROUP BY 1, 2
-  HAVING SUM(ABS(pl.qty)) <> 0
+  HAVING SUM(pl.qty) <> 0
 ),
 
 tagged AS (
@@ -1087,7 +1087,11 @@ WITH date_params AS (
 
 lines AS (
   SELECT
-    COALESCE(pt."name", '<<unknown>>') AS product_name,
+    -- The " 018" style code merged away, as the daily Bags Sold report names
+    -- them: "Zula Black 018" is Zula Black and "Trecento 018 Maroon" is
+    -- Trecento Maroon — the same bag on the shop floor under a second SKU.
+    TRIM(REGEXP_REPLACE(COALESCE(pt."name", '<<unknown>>'),
+                        '\s+018(\s|$)', '\\1'))    AS product_name,
     -- Odoo's own category tree ("Bags / Travel Bags", "Bags / Backpacks", ...)
     -- rather than a hand-maintained per-product-name list: picks up new
     -- products automatically and groups by the actual bag type instead of
@@ -1106,7 +1110,7 @@ lines AS (
     END AS category,
     pc."name" AS shop_name,
     p.session_id AS session_id,
-    ABS(pl.qty) AS bag_qty
+    pl.qty AS bag_qty
   FROM pos_order p
   CROSS JOIN date_params dp
   JOIN pos_order_line pl ON pl.order_id = p.id
@@ -1126,11 +1130,11 @@ lines AS (
     -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
     -- reversed 776 an hour later, inflating that day by KES 1.4m).
     AND pl.qty <> 0
-    -- Bags sold counts a refunded bag as a sale, the way Odoo's own
-    -- dashboard does: for 24 Sep 2026 it reports 687 where netting the day's
-    -- 9 refunds gives 678. Most of those refunds are a mis-keyed sale being
-    -- re-rung rather than a customer return, so this overstates by design —
-    -- it is kept only so the dashboard and Odoo quote the same number.
+    -- Bags sold nets refunds: a bag sold and refunded is not a bag sold.
+    -- That is how the daily Bags Sold reports count (13-19 Sep 2026 match to
+    -- the bag), and every refund in September 2026 was rung the same day as
+    -- its sale, so netting by day and netting by sale agree. Counting refunds
+    -- as movements, as Odoo's dashboard does, put every refund in twice.
     -- A combo/bundle line ("Jumbo + Prime Combo", "Buy Baby Bag Get Liam
     -- Travel Free") is a pricing container, not a bag itself — Odoo already
     -- records the actual bag(s) inside it as separate, normally-named
@@ -1164,7 +1168,8 @@ raw_sales AS (
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'thika')        AS thika,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'hazina')       AS hazina,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kitengela')    AS kitengela,
-    SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('website sales','website','jumia') OR session_id IS NULL) AS website,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('website sales','website') OR session_id IS NULL) AS website,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'jumia')        AS jumia,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'nanyuki')      AS nanyuki,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kakamega')     AS kakamega,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'hilton')       AS hilton,
@@ -1174,6 +1179,7 @@ raw_sales AS (
     SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('ktda','ktda shop')) AS ktda,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'busia')        AS busia,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'rongai')       AS rongai,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'marketing')    AS mrkt,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'staff pos')    AS staff_pos,
     SUM(bag_qty) AS total
   FROM lines
@@ -1184,8 +1190,8 @@ product_details AS (
   SELECT
     product_name AS bag_name,
     starmall, mombasa, nakuru, eldoret, kisumu, meru, thika,
-    hazina, kitengela, website, nanyuki, kakamega, hilton, sinza,
-    uganda, kisii, ktda, busia, rongai, staff_pos, total,
+    hazina, kitengela, website, jumia, nanyuki, kakamega, hilton, sinza,
+    uganda, kisii, ktda, busia, rongai, mrkt, staff_pos, total,
     category,
     0 AS sort_priority
   FROM raw_sales
@@ -1205,6 +1211,7 @@ category_totals AS (
     SUM(hazina) AS hazina,
     SUM(kitengela) AS kitengela,
     SUM(website) AS website,
+    SUM(jumia) AS jumia,
     SUM(nanyuki) AS nanyuki,
     SUM(kakamega) AS kakamega,
     SUM(hilton) AS hilton,
@@ -1214,6 +1221,7 @@ category_totals AS (
     SUM(ktda) AS ktda,
     SUM(busia) AS busia,
     SUM(rongai) AS rongai,
+    SUM(mrkt) AS mrkt,
     SUM(staff_pos) AS staff_pos,
     SUM(total) AS total,
     category,
@@ -1236,6 +1244,7 @@ grand_total AS (
     SUM(hazina) AS hazina,
     SUM(kitengela) AS kitengela,
     SUM(website) AS website,
+    SUM(jumia) AS jumia,
     SUM(nanyuki) AS nanyuki,
     SUM(kakamega) AS kakamega,
     SUM(hilton) AS hilton,
@@ -1245,6 +1254,7 @@ grand_total AS (
     SUM(ktda) AS ktda,
     SUM(busia) AS busia,
     SUM(rongai) AS rongai,
+    SUM(mrkt) AS mrkt,
     SUM(staff_pos) AS staff_pos,
     SUM(total) AS total,
     NULL AS category,
@@ -1264,6 +1274,7 @@ SELECT
   COALESCE(hazina, 0)   AS "HAZINA",
   COALESCE(kitengela, 0)AS "KITENGELA",
   COALESCE(website, 0)  AS "WEBSITE",
+  COALESCE(jumia, 0)    AS "JUMIA",
   COALESCE(nanyuki, 0)  AS "NANYUKI",
   COALESCE(kakamega, 0) AS "KAKAMEGA",
   COALESCE(hilton, 0)   AS "HILTON",
@@ -1273,6 +1284,7 @@ SELECT
   COALESCE(ktda, 0)     AS "KTDA",
   COALESCE(busia, 0)    AS "BUSIA",
   COALESCE(rongai, 0)   AS "RONGAI",
+  COALESCE(mrkt, 0)     AS "MRKT",
   COALESCE(staff_pos, 0) AS "STAFF POS",
   COALESCE(total, 0)    AS "TOTAL",
   category              AS "Category",
@@ -3401,6 +3413,20 @@ product_color_split AS (
             LIMIT 1
         ) AS matched_color
     FROM product_template pt
+),
+
+-- What was refunded against each sale line. Every refund line in Odoo points
+-- at the line it reverses, and every September 2026 refund was rung the same
+-- day as its sale, so folding it into that sale nets the day exactly as the
+-- daily Bags Sold report does, without leaving a negative row behind.
+refunded AS (
+    SELECT
+        r.refunded_orderline_id     AS line_id,
+        SUM(r.qty)                  AS qty,
+        SUM(r.price_subtotal_incl)  AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
 )
 
 SELECT
@@ -3446,16 +3472,15 @@ SELECT
         2
     )                                                               AS "Price",
 
-    -- Bags only, and never negative: a refunded bag counts as a movement, the
-    -- way the bags-sold figures count it. A strap, an order-level discount or
-    -- a combo container is not a bag, so it carries no quantity — but its row
-    -- stays, because its money is part of the takings. The money in "Total"
-    -- keeps its sign, so revenue nets the refund out.
+    -- Bags only, net of whatever was refunded against the line. A strap, an
+    -- order-level discount or a combo container is not a bag, so it carries
+    -- no quantity — but its row stays, because its money is part of the
+    -- takings.
     CASE
         WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
          AND COALESCE(pol.is_combo_line, FALSE) = FALSE
          AND COALESCE(pt.is_combo, FALSE) = FALSE
-        THEN ABS(pol.qty) ELSE 0
+        THEN pol.qty + COALESCE(ref.qty, 0) ELSE 0
     END                                                             AS "Quantity",
 
     -- Odoo writes a combo as a container line holding the whole price plus a
@@ -3467,13 +3492,15 @@ SELECT
     COALESCE(pol.sub_product_line, FALSE)                           AS "In Bundle",
 
     ROUND(
-        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1),
+        (pol.price_subtotal_incl + COALESCE(ref.amount, 0))
+            / COALESCE(NULLIF(po.currency_rate, 0), 1),
         2
     )                                                               AS "Total"
 
 FROM pos_order po
 
 LEFT JOIN pos_order_line       pol   ON pol.order_id = po.id
+LEFT JOIN refunded             ref   ON ref.line_id = pol.id
 LEFT JOIN product_product      pp    ON pp.id    = pol.product_id
 LEFT JOIN product_template     pt    ON pt.id    = pp.product_tmpl_id
 LEFT JOIN product_color_split  pcs   ON pcs.product_tmpl_id = pt.id
@@ -3485,15 +3512,16 @@ LEFT JOIN stock_warehouse      sw    ON sw.id    = spt.warehouse_id
 LEFT JOIN stock_location       sl    ON sl.id    = spt.default_location_src_id
 
 WHERE
-    po.state IN ('done', 'paid')
+    po.state IN ('done', 'paid', 'invoiced')
     AND pt.name NOT ILIKE '%Delivery Fee%'
     AND pc.name NOT ILIKE '%Pos%'
-    -- Refund lines carry a negative qty and a negative amount. Keeping
-    -- them nets returns off the day's takings, the way Odoo reports it;
-    -- excluding them reported gross sales and let a single mis-key stand
-    -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
-    -- reversed 776 an hour later, inflating that day by KES 1.4m).
-    AND pol.qty <> 0
+    -- Refund lines are folded into the sale they reverse (see "refunded"),
+    -- so they are not listed themselves, and a sale refunded in full drops
+    -- out with its refund — Eldoret keyed 777 Lola Black on 7 Sep 2026 and
+    -- reversed 776 an hour later; that nets to the one bag actually sold.
+    AND pol.qty > 0
+    AND NOT (pol.qty + COALESCE(ref.qty, 0) = 0
+             AND pol.price_subtotal_incl + COALESCE(ref.amount, 0) = 0)
     -- Order-level discount lines stay: they are money off the takings, so
     -- dropping them left this tab's revenue above the Sales page's. They
     -- carry no quantity, being a discount rather than a bag.
@@ -3529,7 +3557,7 @@ lines AS (
     SELECT
         t.family,
         po.date_order::DATE                                          AS sale_date,
-        ABS(pol.qty)                                                 AS qty,
+        pol.qty                                                      AS qty,
         pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1) AS total,
         pol.qty > 0                                                  AS is_sale
     FROM pos_order po
@@ -3959,7 +3987,7 @@ SELECT
         WHEN COALESCE(pc."name", '') = ''                    THEN 'NO TILL'
         ELSE UPPER(pc."name")
     END                                                      AS "Shop",
-    SUM(ABS(pl.qty))                                         AS "Qty",
+    SUM(pl.qty)                                              AS "Qty",
     ROUND(SUM(pl.price_subtotal_incl
               / COALESCE(NULLIF(p.currency_rate, 0), 1))::NUMERIC, 2) AS "KES"
 FROM pos_order p
@@ -3992,6 +4020,6 @@ WHERE p.date_order::date BETWEEN dr.start_date AND dr.end_date
          OR (COALESCE(pc."name", '') <> '' AND pc."name" NOT ILIKE '%Flash Sale%'))
   )
 GROUP BY 1, 2, 3, 4
-HAVING SUM(ABS(pl.qty)) <> 0
-ORDER BY "Reason", SUM(ABS(pl.qty)) DESC
+HAVING SUM(pl.qty) <> 0
+ORDER BY "Reason", SUM(pl.qty) DESC
 """
