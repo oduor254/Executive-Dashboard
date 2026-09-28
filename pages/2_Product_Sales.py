@@ -609,6 +609,23 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     filtered = filtered if country_choice == "All Countries" else filtered[filtered["Country"] == country_choice]
     filtered = filtered if location_choice == "All Locations" else filtered[filtered["Location"] == location_choice]
 
+    if offer_choice == deals.DOW and not filtered.empty:
+        # A tier is named with its dates ("Tier 2 · 12-26 Sep"): the same tier
+        # number comes round every month, and at the CBD shops a tier can
+        # start in the month before the one the sheet files it under.
+        tier_labels = (filtered["Tier"].fillna("").astype(str).str.strip() + " · "
+                       + filtered["Deal Window"].fillna("").astype(str).str.strip())
+        tier_labels = tier_labels.str.strip(" ·").replace("", "No tier recorded")
+        options = sorted(tier_labels.unique(),
+                         key=lambda label: (label == "No tier recorded", label))
+        tier_choice = st.selectbox(
+            "Tier", ["All Tiers"] + options, key="offer_type_tier_filter",
+            help="Deal of the Week runs as Tier 1 then Tier 2 each month; "
+                 "the dates are each shop's own tier window in Odoo.",
+        )
+        if tier_choice != "All Tiers":
+            filtered = filtered[tier_labels == tier_choice]
+
     if not filtered.empty and offer_choice != "All Offer Types":
         with st.container(border=True):
             top_products = (
@@ -621,9 +638,11 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             fig.add_bar(
                 y=top_products["Product"], x=top_products["Total"], orientation="h",
                 marker=dict(color=theme.sequential_colors(len(top_products)), cornerradius=4),
+                hovertemplate="<b>%{y}</b><br>KES %{x:,.0f}<extra></extra>",
             )
             theme.apply_layout(fig, show_legend=False)
             fig.update_layout(
+                hovermode="closest",
                 title=f"Top Products — {offer_choice}",
                 height=max(360, 28 * len(top_products)),
             )
