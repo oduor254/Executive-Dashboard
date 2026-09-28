@@ -3506,239 +3506,62 @@ WHERE
 ORDER BY po.date_order DESC;
 """
 
-# A "new collection" is a product whose first-ever sale falls within the
-# trailing 6 months — no manually-maintained list, so a genuinely new bag
-# is picked up automatically the moment it first sells, and ages out on
-# its own once it's no longer a recent launch. Deliberately sales-based
-# rather than catalog-based: product_template also holds non-bag internal
-# assets (equipment, supplies) with no reliable category flag to exclude
-# them, but those never appear in real POS sales, so building this off
-# actual sales sidesteps that noise entirely. Combos and samples are
-# excluded by name the same way PRODUCT_LINE_ITEMS excludes other
-# non-product lines.
+# The new collections being tracked, named in lib/data/new_products.csv and
+# passed in as :families. The list is the business's call rather than a rule:
+# deciding "new" from a product's age dropped Voyage (first sold Nov 2025),
+# Loop BP, Amora and Imani, which the team still tracks as launches, and a
+# 30-unit bar kept Lafemme out until it had sold 30.
 #
-# Two more filters separate genuine new collections from one-off corporate/
-# custom orders, which a raw first-sale date can't tell apart on its own:
-#   - at least 30 units sold — real retail adoption is repeat purchases
-#     across many transactions; a corporate bulk order is typically one
-#     line item, even if that line's revenue looks substantial.
-#   - average price >= KES 1,000/unit — excludes cheap consumables/
-#     accessories (e.g. a bag-cleaning product) that can rack up real
-#     volume without being an actual bag collection.
-#
-# Qualification (which products count as "new") always looks at the full
-# trailing 6 months, independent of :start_date/:end_date — whether a
-# collection is genuinely new shouldn't flip depending on which day the
-# page's date picker happens to be set to. Quantity Sold/Revenue in the
-# result, however, ARE scoped to :start_date/:end_date, so switching the
-# page to "Today" or "Yesterday" shows that day's actual performance for
-# each qualifying collection.
+# A family covers every template named the family itself or the family
+# followed by more words — "Loop BP" takes in Loop BP CN Black, Loop BP 018
+# Black and reject stock alike — limited to the Bags categories so "Taji"
+# does not also catch the TAJIRI and TAJI JUMBO items filed under "All".
+# Bags are counted as the bags-sold figures count them (combo containers out,
+# a refunded bag counted as a movement); revenue nets refunds.
 NEW_PRODUCTS = """
-WITH color_list(color) AS (
-    VALUES
-        -- Multi-word colors (longest match wins)
-        ('Black TT'),('Grey TT'),('Beige TT'),('Green TT'),
-        ('Wooven Black'),('Wooven Maroon'),('Wooven Mustard'),('Wooven Purple'),
-        ('Wooven Cream'),('Wooven Brown'),('Wooven Lilac'),
-        ('Croc Black'),('Croc Brown'),('Croc Mustard'),('Croc Orange'),('Croc Pink'),
-        ('Dark Brown'),('Mint Green'),('Yellow Brown'),('Yellow Dotted'),('Navy Blue'),
-        ('Antelope Brown'),
-        ('Red.Pattern'),('Red Pattern'),
-        ('Pattern Pink'),('Pattern Blue'),('Pattern Red'),
-        ('Amapiano Black'),('Amapiano Brown'),('Amapiano Grey'),('Amapiano Nude'),
-        ('Ankara Black'),('Ankara Brown'),('Ankara Grey'),('Ankara Nude'),
-        ('Black X Red'),
-        ('Beige/Red'),('Black/Cracked'),('Black/Red'),('Green/Red'),('Maroon/Red'),
-        ('Black/Beige'),('Black/Choco'),('Black/D.Brown'),('Black/Grey'),('Black/Spice'),
-        ('Red/Black'),('Grey/Black'),('Spice/Black'),('Cracked/Black'),('Chocolate/Black'),
-        ('Black 018'),('Beige 018'),('Dark Brown 018'),('Maroon 018'),
-        ('Titan 1'),('Titan 3'),('Titan 5'),('Titan 6'),('Titan 11'),('Titan 14'),('Titan 15'),
-        ('Goyard 5'),
-        ('Start 20'),('Start 4'),('Start 8'),
-        ('Red P'),('Black B'),('N.Blue'),('D.Brown'),
-        ('Manyatta Dark Brown'),('Manyatta Dark Green'),('Manyatta Green'),('Manyatta Yellow'),
-        ('CN Black'),('CN Grey'),('CN Dark Brown'),
-        ('A3 Red'),('A3 Pink'),
-        ('A4 Red'),('A4 Pink'),
-        ('A5 Red'),('A5 Pink'),
-        ('A3'),('A4'),('A5'),
-        ('Denim Blue'),('Wine Red'),('Crimson'),
-        ('Beige'),('Black'),('Blue'),('Brown'),('Chocolate'),('Choco'),
-        ('Cracked'),('Green'),('green'),('GREEN'),('Grey'),('Gold'),('Lilac'),('Maroon'),
-        ('Mustard'),('Nude'),('Orange'),('Pink'),('Purple'),
-        ('Red'),('Spice'),('White'),('Yellow')
+WITH tracked AS (
+    SELECT DISTINCT TRIM(f) AS family
+    FROM UNNEST(CAST(:families AS TEXT[])) AS f
+    WHERE TRIM(f) <> ''
 ),
 
-product_color_split AS (
+lines AS (
     SELECT
-        pt.id AS product_tmpl_id,
-        pt.name AS full_name,
-        (
-            SELECT cl.color
-            FROM color_list cl
-            WHERE pt.name LIKE '% ' || cl.color
-               OR pt.name = cl.color
-            ORDER BY LENGTH(cl.color) DESC
-            LIMIT 1
-        ) AS matched_color
-    FROM product_template pt
-),
-
-sale_lines AS (
-    SELECT
-        po.date_order::DATE AS sale_date,
-        CASE
-            WHEN pcs.matched_color IS NULL
-                THEN TRIM(REGEXP_REPLACE(pcs.full_name, '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'))
-            WHEN pcs.full_name = pcs.matched_color
-                THEN pcs.full_name
-            ELSE TRIM(REGEXP_REPLACE(
-                    LEFT(
-                        pcs.full_name,
-                        LENGTH(pcs.full_name) - LENGTH(pcs.matched_color)
-                    ),
-                    '^\\d+(\\.\\d+)?\\s*KES\\s+discount.*$', '', 'i'
-                ))
-        END AS product,
-        pol.qty AS quantity,
-        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1) AS total
-
+        t.family,
+        po.date_order::DATE                                          AS sale_date,
+        ABS(pol.qty)                                                 AS qty,
+        pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1) AS total,
+        pol.qty > 0                                                  AS is_sale
     FROM pos_order po
-    LEFT JOIN pos_order_line       pol   ON pol.order_id = po.id
-    LEFT JOIN product_product      pp    ON pp.id    = pol.product_id
-    LEFT JOIN product_template     pt    ON pt.id    = pp.product_tmpl_id
-    LEFT JOIN product_color_split  pcs   ON pcs.product_tmpl_id = pt.id
-    LEFT JOIN product_category     pc    ON pc.id    = pt.categ_id
-    LEFT JOIN pos_session          ps    ON ps.id    = po.session_id
-    LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
-    LEFT JOIN stock_picking_type   spt   ON spt.id   = pconf.picking_type_id
-    LEFT JOIN stock_warehouse      sw    ON sw.id    = spt.warehouse_id
-    LEFT JOIN stock_location       sl    ON sl.id    = spt.default_location_src_id
-
-    WHERE
-        po.state IN ('done', 'paid')
-        AND pt.name NOT ILIKE '%Delivery Fee%'
-        AND pt.name NOT ILIKE '%Gift Bag%'
-        AND pc.name NOT ILIKE '%Pos%'
-        -- Refund lines carry a negative qty and a negative amount. Keeping
-        -- them nets returns off the day's takings, the way Odoo reports it;
-        -- excluding them reported gross sales and let a single mis-key stand
-        -- uncorrected (Eldoret keyed 777 Lola Black on 7 Sep 2026 and
-        -- reversed 776 an hour later, inflating that day by KES 1.4m).
-        AND pol.qty <> 0
-        AND pt.name NOT ILIKE '%KES discount%'
-        AND pt.name NOT LIKE '%+%'
-        AND pt.name NOT ILIKE '% or %'
-        AND pt.name NOT ILIKE '%Buy%Get%'
-        AND pt.name NOT ILIKE '%Combo%'
-        AND pt.name NOT ILIKE '%Sample%'
-        AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Accessories%'
-        AND COALESCE(sw.name, sl.complete_name) NOT ILIKE '%Flash Sale%'
-),
-
--- Unbounded: needs full history to know a product truly never sold before
--- the trailing-6-month window, not just within some recent slice.
-all_time_first_sale AS (
-    SELECT product, MIN(sale_date) AS first_sold
-    FROM sale_lines
-    GROUP BY product
-),
-
--- Qualification always looks at the full trailing 6 months, independent of
--- whatever date range the page's picker is set to — "is this a genuine new
--- collection" shouldn't flip on and off depending on which day you're
--- looking at.
-trailing_6mo_sales AS (
-    SELECT product, quantity, total
-    FROM sale_lines
-    WHERE sale_date >= CURRENT_DATE - INTERVAL '6 months'
-),
-
--- Bags added to the catalogue in the last 6 months, whether or not they
--- have sold yet. A launch is news the day it is listed, not once it has
--- shifted 30 units: La Femme went into Odoo on 21 Sep 2026 as four Tote Bag
--- colours and would otherwise have been invisible here until it sold 30.
--- Restricted to the Bags categories, which keeps internal, non-bag templates
--- out without needing a sales history, and named the same colour-stripped
--- way as the sales rows so four colours read as one launch.
-newly_listed AS (
-    SELECT base.product, MIN(base.listed_on) AS listed_on
-    FROM (
-        SELECT
-            -- Odoo's own name carries a marketing name in brackets
-            -- ("Lafemme Black (Obsidian)"), so the bracket goes first, then
-            -- the colour, then any trailing style code — leaving the family
-            -- name the sales rows use, so four colours read as one launch.
-            TRIM(REGEXP_REPLACE(
-                CASE
-                    WHEN c.color IS NULL THEN cleaned.name
-                    ELSE LEFT(cleaned.name, LENGTH(cleaned.name) - LENGTH(c.color))
-                END,
-                '\s+018$', ''
-            ))                                      AS product,
-            pt.create_date::DATE                    AS listed_on
-        FROM product_template pt
-        JOIN product_category pc ON pc.id = pt.categ_id
-        CROSS JOIN LATERAL (
-            SELECT TRIM(REGEXP_REPLACE(pt.name, '\s*\(.*\)\s*$', '')) AS name
-        ) cleaned
-        LEFT JOIN LATERAL (
-            SELECT cl.color FROM color_list cl
-            WHERE cleaned.name LIKE '% ' || cl.color
-            ORDER BY LENGTH(cl.color) DESC LIMIT 1
-        ) c ON TRUE
-        WHERE pt.active
-          AND pc.name ILIKE 'Bags%'
-          AND pt.create_date >= CURRENT_DATE - INTERVAL '6 months'
-          AND pt.name NOT ILIKE '%Sample%'
-          AND pt.name NOT ILIKE '%REJECT%'
-          AND pt.name NOT ILIKE '%TEST%'
-          AND pt.name NOT ILIKE '%Custom%'
-          AND pt.name NOT LIKE '%[%'
-          AND pt.name NOT LIKE '%+%'
-    ) base
-    WHERE base.product <> ''
-    GROUP BY base.product
-),
-
-new_products AS (
-    SELECT af.product, af.first_sold
-    FROM all_time_first_sale af
-    JOIN trailing_6mo_sales t6 ON t6.product = af.product
-    WHERE af.first_sold >= CURRENT_DATE - INTERVAL '6 months'
-    GROUP BY af.product, af.first_sold
-    HAVING
-        SUM(t6.quantity) >= 30
-        AND SUM(t6.total) / NULLIF(SUM(t6.quantity), 0) >= 1000
-
-    UNION
-
-    SELECT nl.product, NULL::DATE
-    FROM newly_listed nl
-    WHERE nl.product NOT IN (SELECT product FROM all_time_first_sale
-                             WHERE first_sold < CURRENT_DATE - INTERVAL '6 months')
-),
-
--- Bounded to whatever the page's date picker is set to — this is what
--- actually gets displayed (Quantity Sold / Revenue), separate from
--- qualification above.
-period_sales AS (
-    SELECT product, quantity, total
-    FROM sale_lines
-    WHERE sale_date >= CAST(:start_date AS DATE)
-      AND sale_date < CAST(:end_date AS DATE) + INTERVAL '1 day'
+    JOIN pos_order_line   pol ON pol.order_id = po.id
+    JOIN product_product  pp  ON pp.id = pol.product_id
+    JOIN product_template pt  ON pt.id = pp.product_tmpl_id
+    JOIN product_category pc  ON pc.id = pt.categ_id
+    JOIN tracked t
+      ON LOWER(pt.name) = LOWER(t.family)
+      OR LOWER(pt.name) LIKE LOWER(t.family) || ' %'
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND pol.qty <> 0
+      AND pc.name ILIKE 'Bags%'
+      AND COALESCE(pol.is_combo_line, FALSE) = FALSE
+      AND COALESCE(pt.is_combo, FALSE) = FALSE
+      AND pt.name NOT LIKE '%+%'
 )
 
 SELECT
-    np.product                                     AS "Product",
-    np.first_sold                                  AS "First Sold",
-    COALESCE(SUM(ps.quantity), 0)                  AS "Quantity Sold",
-    ROUND(COALESCE(SUM(ps.total), 0)::NUMERIC, 2)  AS "Revenue"
-FROM (SELECT product, MIN(first_sold) AS first_sold
-      FROM new_products GROUP BY product) np
-LEFT JOIN period_sales ps ON ps.product = np.product
-GROUP BY np.product, np.first_sold
-ORDER BY "Revenue" DESC, "Product";
+    t.family                                                         AS "Product",
+    MIN(l.sale_date) FILTER (WHERE l.is_sale)                        AS "First Sold",
+    COALESCE(SUM(l.qty) FILTER (
+        WHERE l.sale_date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)), 0)
+                                                                     AS "Quantity Sold",
+    ROUND(COALESCE(SUM(l.total) FILTER (
+        WHERE l.sale_date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)), 0)::NUMERIC, 2)
+                                                                     AS "Revenue",
+    COALESCE(SUM(l.qty), 0)                                          AS "Units Since Launch"
+FROM tracked t
+LEFT JOIN lines l ON l.family = t.family
+GROUP BY t.family
+ORDER BY "Revenue" DESC, t.family
 """
 
 
@@ -4109,16 +3932,14 @@ ORDER BY dm.date DESC, dm.id DESC
 # Everything the bags-sold count leaves out, so it can still be watched.
 # Same date range, same shop names and the same counting as BAGS_SOLD_BY_CATEGORY
 # (a refunded item counts as a movement), but only the lines that do NOT make it
-# into bags sold — accessories, delivery fees, order-level discounts, the combo
-# bundle containers whose contents are counted instead, non-bag items, and
-# anything rung at a non-shop till.
+# into bags sold — accessories, delivery fees, order-level discounts, non-bag
+# items, and anything rung at a non-shop till. Combo containers are left out:
+# their bags are already counted.
 EXCLUDED_FROM_BAGS_SOLD = """
 SELECT
     COALESCE(pt."name", '<<unknown>>')                       AS "Item",
     COALESCE(pcat."name", 'No category')                     AS "Category",
     CASE
-        WHEN COALESCE(pl.is_combo_line, FALSE)
-          OR COALESCE(pt.is_combo, FALSE)                    THEN 'Combo bundle (contents counted instead)'
         WHEN pt."name" ILIKE '%Delivery Fee%'                THEN 'Delivery fee'
         WHEN pt."name" ILIKE '%KES discount%'                THEN 'Order discount'
         WHEN COALESCE(pcat."name", '') ILIKE '%Pos%'         THEN 'POS material'
@@ -4155,6 +3976,11 @@ CROSS JOIN (
 WHERE p.date_order::date BETWEEN dr.start_date AND dr.end_date
   AND p.state IN ('done', 'paid', 'invoiced')
   AND pl.qty <> 0
+  -- Combo containers are not excluded stock: the bags inside them are counted
+  -- in bags sold on their own lines, so listing the container here as well
+  -- read as if those sales had gone missing.
+  AND COALESCE(pl.is_combo_line, FALSE) = FALSE
+  AND COALESCE(pt.is_combo, FALSE) = FALSE
   -- The complement of the bags-sold rule: a bag or gift bag that is not a
   -- combo container and was sold at a shop till is counted there, not here.
   AND NOT (

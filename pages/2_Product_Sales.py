@@ -3,6 +3,7 @@ plus a wide by-category x store breakdown."""
 from __future__ import annotations
 
 from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -265,13 +266,13 @@ def render_by_location(start_date: date, end_date: date) -> None:
     cols = st.columns(min(len(by_reason), 4) or 1)
     for col, (_, row) in zip(cols, by_reason.iterrows()):
         with col.container(border=True):
-            st.metric(row["Reason"].split(" (")[0], f"{row['Items']:,.0f}",
+            st.metric(row["Reason"], f"{row['Items']:,.0f}",
                       f"KES {row['KES']:,.0f}", delta_color="off")
     st.caption(
-        "Why each line is out of the bag count: a combo bundle is a price "
-        "container whose contents are counted instead, straps and accessories "
-        "are not bags, and delivery fees and order-level discounts are money "
-        "rather than stock. They still count towards revenue."
+        "Why each line is out of the bag count: straps and accessories are not "
+        "bags, and delivery fees and order-level discounts are money rather than "
+        "stock. They still count towards revenue. Combo bundles are not listed — "
+        "the bags inside them are already counted in Bags Sold."
     )
     with st.container(border=True):
         grid.filterable_table(wide, pinned_columns=("Item",))
@@ -656,57 +657,72 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         grid.filterable_table(display_df, currency_columns=("Price", "Total"))
 
 
+NEW_PRODUCTS_FILE = "new_products.csv"
+
+
+def _tracked_new_products() -> list[str]:
+    """The collections the team is tracking as new, one per line in the file."""
+    path = Path(__file__).resolve().parent.parent / "lib" / "data" / NEW_PRODUCTS_FILE
+    try:
+        names = pd.read_csv(path)["product"].dropna().astype(str).str.strip()
+    except (FileNotFoundError, KeyError, pd.errors.EmptyDataError):
+        return []
+    return [n for n in dict.fromkeys(names) if n]
+
+
 @st.fragment()
 def render_new_products(start_date: date, end_date: date) -> None:
-    df = db.run_query(
-        queries.NEW_PRODUCTS,
-        {"start_date": start_date, "end_date": end_date},
-    )
-
-    if df.empty:
-        st.info("No new collections in the last 6 months that meet the volume/price bar yet.")
+    families = _tracked_new_products()
+    if not families:
+        st.info(f"No new collections listed — add them to lib/data/{NEW_PRODUCTS_FILE}.")
         return
 
-    total_products = len(df)
+    df = db.run_query(
+        queries.NEW_PRODUCTS,
+        {"start_date": start_date, "end_date": end_date, "families": families},
+    )
+
     total_revenue = df["Revenue"].sum()
     total_qty = df["Quantity Sold"].sum()
 
     k1, k2, k3 = st.columns(3)
     with k1.container(border=True):
-        st.metric("New Collections", f"{total_products:,}")
+        selling = int((df["Quantity Sold"] > 0).sum())
+        st.metric("New Collections", f"{len(df):,}", f"{selling} selling in this range",
+                  delta_color="off")
     with k2.container(border=True):
         st.metric("Revenue", f"KES {total_revenue:,.0f}")
     with k3.container(border=True):
         st.metric("Units Sold", f"{total_qty:,.0f}")
 
     st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "Quantity Sold and Revenue reflect the date range selected above. Which products "
-        "qualify as a new collection doesn't change with that range, though — a product "
-        "counts as new once its first-ever sale falls within the last 6 months, it has sold "
-        "at least 30 units, and averages at least KES 1,000/unit, all measured over the full "
-        "6 months — separates genuine new collections from one-off corporate/custom orders "
-        "and cheap accessories, picked up and aged out automatically, no list to maintain by "
-        "hand. Combos and internal samples are excluded."
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · the collections listed in "
+        f"lib/data/{NEW_PRODUCTS_FILE} — edit that file to add or retire one. Each covers "
+        "every colour and variant of the bag (Loop BP includes Loop BP CN and reject stock). "
+        "Quantity Sold and Revenue follow the date range above; Units Since Launch does not. "
+        "Bags are counted the way Bags Sold counts them, and revenue nets refunds."
     )
 
-    selling = df[df["Revenue"] > 0]
-    if not selling.empty:
+    selling_rows = df[df["Revenue"] > 0]
+    if not selling_rows.empty:
         with st.container(border=True):
-            top = selling.nlargest(15, "Revenue").sort_values("Revenue", ascending=True)
+            top = selling_rows.sort_values("Revenue", ascending=True)
             fig = go.Figure()
             fig.add_bar(
                 y=top["Product"], x=top["Revenue"], orientation="h",
                 marker=dict(color=theme.sequential_colors(len(top)), cornerradius=4),
+                customdata=top[["Quantity Sold"]],
+                hovertemplate=("<b>%{y}</b><br>KES %{x:,.0f}<br>"
+                               "%{customdata[0]:,.0f} bags<extra></extra>"),
             )
             theme.apply_layout(fig, show_legend=False)
-            fig.update_layout(title="New Collections by Revenue", height=max(360, 28 * len(top)))
+            fig.update_layout(title="New Collections by Revenue",
+                              height=max(360, 32 * len(top) + 80), hovermode="closest")
             theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")
         grid.filterable_table(df, currency_columns=("Revenue",))
-
 
 with tab_shop:
     render_by_shop(start_date, end_date)
