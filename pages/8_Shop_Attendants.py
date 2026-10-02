@@ -203,10 +203,14 @@ def _feedback_table(start_date: date, end_date: date, location: str, person: str
         grid.filterable_table(table, pinned_columns=("Shop Attendant / BA",), height=420)
 
     if person != ALL_PEOPLE:
-        with st.expander(f"{person}'s customers and their feedback"):
-            detail = per_customer[["Customer", "Phone", "Locations", "Bought", "Orders",
-                                   "Gave Feedback", "Feedback On"]].copy()
-            detail["Gave Feedback"] = detail["Gave Feedback"].map({True: "Yes", False: "No"})
+        # A section, not an expander: the grid draws inside an iframe, and in a
+        # collapsed expander it sizes itself to nothing and stays blank when
+        # the expander is opened.
+        st.markdown(f"**{person}'s customers and their feedback**")
+        detail = per_customer[["Customer", "Phone", "Locations", "Bought", "Orders",
+                               "Gave Feedback", "Feedback On"]].copy()
+        detail["Gave Feedback"] = detail["Gave Feedback"].map({True: "Yes", False: "No"})
+        with st.container(border=True):
             grid.filterable_table(detail.sort_values(["Gave Feedback", "Bought"],
                                                      ascending=[False, False]),
                                   pinned_columns=("Customer",), height=420)
