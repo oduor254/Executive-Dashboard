@@ -4049,7 +4049,11 @@ SELECT
     ROUND(SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%'
                    THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
                    ELSE 0 END)::NUMERIC, 2)                          AS "Sales Made",
-    COALESCE(NULLIF(TRIM(att_p.name), ''), 'Not recorded')           AS "Shop Attendant",
+    -- An order carries a shop attendant or a brand ambassador, never both
+    -- (BAs started at Hilton on 1 Oct 2026); "Not recorded" means neither.
+    CASE WHEN NULLIF(TRIM(att_p.name), '') IS NULL AND NULLIF(TRIM(ba.name), '') IS NULL
+         THEN 'Not recorded' ELSE COALESCE(TRIM(att_p.name), '') END AS "Shop Attendant",
+    COALESCE(TRIM(ba.name), '')                                      AS "Brand Ambassador (BA)",
     COALESCE(NULLIF(TRIM(open_p.name), ''), 'Not recorded')          AS "Cashier",
     ps.name                                                          AS "Session",
     COUNT(DISTINCT po.id)                                            AS "Orders"
@@ -4064,10 +4068,80 @@ LEFT JOIN stock_warehouse      sw     ON sw.id = spt.warehouse_id
 LEFT JOIN stock_location       sl     ON sl.id = spt.default_location_src_id
 LEFT JOIN res_users            att    ON att.id = po.attendant_id
 LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
+LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
 LEFT JOIN res_users            opener ON opener.id = ps.user_id
 LEFT JOIN res_partner          open_p ON open_p.id = opener.partner_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
   AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
-GROUP BY 1, 2, 4, 5, 6
+GROUP BY 1, 2, 4, 5, 6, 7
 ORDER BY "Date" DESC, "Location", "Session", "Sales Made" DESC
+"""
+
+
+# Everything one shop attendant or brand ambassador sold: one line per customer
+# and product for each day, units bundled together (two Kai Black on the same
+# day read as one line of 2). Refunds are folded into the sale they reverse —
+# every September 2026 refund was rung the same day — so a returned bag
+# disappears and a part-refunded line shows what was kept. Delivery fees and
+# order-level discount lines are money rather than products, so they are left
+# out; a combo appears as its own line with its price, beside the bags inside
+# it at no charge.
+SHOP_ATTENDANT_SALES = """
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id,
+           SUM(r.qty) AS qty, SUM(r.price_subtotal_incl) AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+),
+lines AS (
+    SELECT
+        po.date_order::DATE                                          AS sale_date,
+        po.name                                                      AS order_ref,
+        COALESCE(NULLIF(TRIM(cust.name), ''), 'Walk-in (no name)')   AS customer,
+        NULLIF(REGEXP_REPLACE(
+            REGEXP_REPLACE(COALESCE(cust.phone, cust.mobile, ''), '[^0-9]', '', 'g'),
+            '^(254|255|256)', '0'), '')                              AS phone,
+        pt.name                                                      AS product,
+        pol.qty + COALESCE(ref.qty, 0)                               AS qty,
+        (pol.price_subtotal_incl + COALESCE(ref.amount, 0))
+            / COALESCE(NULLIF(po.currency_rate, 0), 1)               AS total,
+        CASE
+            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') THEN 'Website'
+            WHEN lower(pconf.name) = 'staff pos' THEN 'Staff POS'
+            WHEN lower(pconf.name) IN ('dar-es-alam', 'sinza') THEN 'Sinza'
+            ELSE INITCAP(TRIM(REGEXP_REPLACE(COALESCE(pconf.name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+        END                                                          AS location
+    FROM pos_order po
+    JOIN pos_order_line       pol   ON pol.order_id = po.id
+    JOIN product_product      pp    ON pp.id = pol.product_id
+    JOIN product_template     pt    ON pt.id = pp.product_tmpl_id
+    LEFT JOIN refunded        ref   ON ref.line_id = pol.id
+    LEFT JOIN res_partner     cust  ON cust.id = po.partner_id
+    LEFT JOIN pos_session     ps    ON ps.id = po.session_id
+    LEFT JOIN pos_config      pconf ON pconf.id = ps.config_id
+    LEFT JOIN res_users       att   ON att.id = po.attendant_id
+    LEFT JOIN res_partner     att_p ON att_p.id = att.partner_id
+    LEFT JOIN pos_shop_ba     ba    ON ba.id = po.ba_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND (TRIM(att_p.name) = :person OR TRIM(ba.name) = :person)
+      AND pol.qty > 0
+      AND pt.name NOT ILIKE '%Delivery Fee%'
+      AND pt.name NOT ILIKE '%KES discount%'
+      AND NOT (pol.qty + COALESCE(ref.qty, 0) = 0
+               AND pol.price_subtotal_incl + COALESCE(ref.amount, 0) = 0)
+)
+SELECT
+    sale_date                                   AS "Date",
+    customer                                    AS "Customer",
+    phone                                       AS "Phone",
+    product                                     AS "Product",
+    SUM(qty)                                    AS "Quantity",
+    ROUND(SUM(total)::NUMERIC, 2)               AS "Total",
+    location                                    AS "Location",
+    string_agg(DISTINCT order_ref, ', ')        AS "Orders"
+FROM lines
+GROUP BY sale_date, customer, phone, product, location
+ORDER BY "Date" DESC, "Customer", "Product"
 """
