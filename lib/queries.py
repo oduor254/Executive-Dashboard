@@ -4023,3 +4023,51 @@ GROUP BY 1, 2, 3, 4
 HAVING SUM(pl.qty) <> 0
 ORDER BY "Reason", SUM(pl.qty) DESC
 """
+
+
+# One row per POS session for each shop attendant who served in it, with the
+# sales that attendant made. Cashier is the person who opened the session (the
+# till's "Opened By"): the order-level "cashier" field Odoo fills from the
+# logged-in user was the same name as the attendant on every one of 13,151
+# orders in September 2026, so it says nothing the attendant column does not.
+# Sales Made follows the Sales page: every line except delivery fees, in KES
+# at each order's own rate, refunds netted.
+SHOP_ATTENDANT_SESSIONS = """
+SELECT
+    po.date_order::DATE                                              AS "Date",
+    CASE
+        WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+            THEN 'Website'
+        WHEN lower(pconf.name) = 'staff pos'
+            THEN 'Staff POS'
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+            THEN 'Sinza'
+        ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'),
+                '\s*Shop\s*', '', 'gi')))
+    END                                                              AS "Location",
+    ROUND(SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%'
+                   THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+                   ELSE 0 END)::NUMERIC, 2)                          AS "Sales Made",
+    COALESCE(NULLIF(TRIM(att_p.name), ''), 'Not recorded')           AS "Shop Attendant",
+    COALESCE(NULLIF(TRIM(open_p.name), ''), 'Not recorded')          AS "Cashier",
+    ps.name                                                          AS "Session",
+    COUNT(DISTINCT po.id)                                            AS "Orders"
+FROM pos_order po
+JOIN pos_order_line            pol    ON pol.order_id = po.id
+JOIN product_product           pp     ON pp.id = pol.product_id
+JOIN product_template          pt     ON pt.id = pp.product_tmpl_id
+LEFT JOIN pos_session          ps     ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf  ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt    ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw     ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl     ON sl.id = spt.default_location_src_id
+LEFT JOIN res_users            att    ON att.id = po.attendant_id
+LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
+LEFT JOIN res_users            opener ON opener.id = ps.user_id
+LEFT JOIN res_partner          open_p ON open_p.id = opener.partner_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+GROUP BY 1, 2, 4, 5, 6
+ORDER BY "Date" DESC, "Location", "Session", "Sales Made" DESC
+"""
