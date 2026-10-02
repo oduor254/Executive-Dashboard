@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, filters, grid, queries, theme
+from lib import auth, db, feedback, filters, grid, queries, theme
 
 st.set_page_config(page_title="Shop Attendants · Denri Executive Dashboard",
                    page_icon="🧑‍💼", layout="wide")
@@ -99,6 +99,8 @@ def render_attendants(start_date: date, end_date: date) -> None:
                    "narrow it.")
         grid.filterable_table(shown[COLUMNS], currency_columns=("Sales Made",), height=440)
 
+    _feedback_table(start_date, end_date, location, person)
+
     if person != ALL_PEOPLE:
         _person_sales(person, start_date, end_date, location)
 
@@ -127,6 +129,87 @@ def _by_person_chart(shown: pd.DataFrame) -> None:
         fig.update_xaxes(showgrid=True, gridcolor=theme.GRIDLINE)
         fig.update_yaxes(showgrid=False)
         theme.show(fig)
+
+
+def _feedback_table(start_date: date, end_date: date, location: str, person: str) -> None:
+    """How many of each person's converted customers then left feedback."""
+    st.subheader("Customer Feedback by Shop Attendant / BA")
+    try:
+        responses = feedback.load()
+    except feedback.FeedbackUnavailable as exc:
+        st.warning(
+            f"{exc} The feedback lives in the Google Sheet the POS Request Hub reads "
+            f"(\"{feedback.WORKSHEET}\" tab). Share that sheet with "
+            f"**{feedback.service_account_email()}** as a Viewer and this table fills in "
+            "on the next refresh.",
+            icon="🔒",
+        )
+        return
+
+    customers = db.run_query(queries.SHOP_ATTENDANT_CUSTOMERS,
+                             {"start_date": start_date, "end_date": end_date})
+    if location != "All Locations":
+        customers = customers[customers["Location"] == location]
+    if person != ALL_PEOPLE:
+        customers = customers[customers["Served By"] == person]
+    customers = customers[customers["Served By"] != NOT_RECORDED]
+    if customers.empty:
+        st.info("No converted customers in this range.")
+        return
+
+    # Feedback counts if it came in during the range, on or after the day the
+    # customer bought — feedback given before the purchase is about an earlier
+    # visit, not this attendant's sale.
+    window = responses[(responses["Submitted"].dt.date >= start_date)
+                       & (responses["Submitted"].dt.date <= end_date)
+                       & responses["Phone Key"].notna()]
+    first_feedback = window.groupby("Phone Key")["Submitted"].min()
+
+    # One customer per person, however many shops or orders they bought across.
+    per_customer = (customers.assign(Key=customers["Phone Key"].fillna(
+                        "name:" + customers["Customer"]))
+                    .groupby(["Served By", "Key"], as_index=False)
+                    .agg(Customer=("Customer", "first"), Phone=("Phone", "first"),
+                         Locations=("Location", lambda v: ", ".join(sorted(set(v)))),
+                         Bought=("First Purchase", "min"), Orders=("Orders", "sum")))
+    fed = per_customer["Key"].map(first_feedback)
+    per_customer["Feedback On"] = fed.dt.date
+    per_customer["Gave Feedback"] = fed.notna() & (fed.dt.date >= pd.to_datetime(per_customer["Bought"]).dt.date)
+
+    table = (per_customer.groupby("Served By")
+             .agg(Location=("Locations", lambda v: ", ".join(sorted({x for s in v for x in s.split(", ")}))),
+                  **{"Customers Converted": ("Key", "size"),
+                     "Gave Feedback": ("Gave Feedback", "sum")})
+             .reset_index().rename(columns={"Served By": "Shop Attendant / BA"}))
+    table["Feedback Rate"] = (table["Gave Feedback"] / table["Customers Converted"] * 100).round(1)
+    table = table.sort_values(["Feedback Rate", "Customers Converted"], ascending=[False, False])
+
+    converted, gave = int(table["Customers Converted"].sum()), int(table["Gave Feedback"].sum())
+    items = [
+        ("Customers Converted", f"{converted:,}", None),
+        ("Gave Feedback", f"{gave:,}", f"{gave / converted * 100:.1f}% of converted" if converted else None),
+        ("Feedback Received", f"{len(window):,}", "all responses in this range"),
+    ]
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+    st.caption(
+        "A converted customer counts as giving feedback when a response with their phone "
+        "number (matched on the last nine digits) came in during this range, on or after the "
+        "day they bought. Each customer counts once per attendant or BA, however many orders "
+        "they placed."
+    )
+    with st.container(border=True):
+        grid.filterable_table(table, pinned_columns=("Shop Attendant / BA",), height=420)
+
+    if person != ALL_PEOPLE:
+        with st.expander(f"{person}'s customers and their feedback"):
+            detail = per_customer[["Customer", "Phone", "Locations", "Bought", "Orders",
+                                   "Gave Feedback", "Feedback On"]].copy()
+            detail["Gave Feedback"] = detail["Gave Feedback"].map({True: "Yes", False: "No"})
+            grid.filterable_table(detail.sort_values(["Gave Feedback", "Bought"],
+                                                     ascending=[False, False]),
+                                  pinned_columns=("Customer",), height=420)
 
 
 def _person_sales(person: str, start_date: date, end_date: date, location: str) -> None:

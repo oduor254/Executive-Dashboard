@@ -4145,3 +4145,60 @@ FROM lines
 GROUP BY sale_date, customer, phone, product, location
 ORDER BY "Date" DESC, "Customer", "Product"
 """
+
+
+# The customers each shop attendant or brand ambassador converted: one row per
+# person and customer, with the phone number feedback is matched on. A
+# conversion is an order still worth something once refunds against its lines
+# are taken off, so a sale refunded in full does not count. Phone Key is the
+# last nine digits, which is how the same number written 07..., 2547... or
+# +254 7... compares equal.
+SHOP_ATTENDANT_CUSTOMERS = """
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id, SUM(r.price_subtotal_incl) AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+),
+orders AS (
+    SELECT
+        po.id,
+        po.date_order::DATE                                          AS sale_date,
+        CASE WHEN NULLIF(TRIM(ba.name), '') IS NOT NULL THEN TRIM(ba.name) || ' (BA)'
+             ELSE COALESCE(NULLIF(TRIM(att_p.name), ''), 'Not recorded') END AS person,
+        CASE
+            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') THEN 'Website'
+            WHEN lower(pconf.name) = 'staff pos' THEN 'Staff POS'
+            WHEN lower(pconf.name) IN ('dar-es-alam', 'sinza') THEN 'Sinza'
+            ELSE INITCAP(TRIM(REGEXP_REPLACE(COALESCE(pconf.name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+        END                                                          AS location,
+        COALESCE(NULLIF(TRIM(cust.name), ''), 'Walk-in (no name)')   AS customer,
+        REGEXP_REPLACE(COALESCE(cust.phone, cust.mobile, ''), '[^0-9]', '', 'g') AS digits,
+        SUM(pol.price_subtotal_incl + COALESCE(ref.amount, 0))       AS net
+    FROM pos_order po
+    JOIN pos_order_line   pol   ON pol.order_id = po.id
+    LEFT JOIN refunded    ref   ON ref.line_id = pol.id
+    LEFT JOIN res_partner cust  ON cust.id = po.partner_id
+    LEFT JOIN pos_session ps    ON ps.id = po.session_id
+    LEFT JOIN pos_config  pconf ON pconf.id = ps.config_id
+    LEFT JOIN res_users   att   ON att.id = po.attendant_id
+    LEFT JOIN res_partner att_p ON att_p.id = att.partner_id
+    LEFT JOIN pos_shop_ba ba    ON ba.id = po.ba_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND pol.qty > 0
+    GROUP BY 1, 2, 3, 4, 5, 6
+)
+SELECT
+    person                                                           AS "Served By",
+    location                                                         AS "Location",
+    customer                                                         AS "Customer",
+    CASE WHEN LENGTH(digits) >= 9 THEN '0' || RIGHT(digits, 9) END   AS "Phone",
+    CASE WHEN LENGTH(digits) >= 9 THEN RIGHT(digits, 9) END          AS "Phone Key",
+    MIN(sale_date)                                                   AS "First Purchase",
+    COUNT(*)                                                         AS "Orders"
+FROM orders
+WHERE net > 0
+GROUP BY 1, 2, 3, 4, 5
+ORDER BY 1, 3
+"""
