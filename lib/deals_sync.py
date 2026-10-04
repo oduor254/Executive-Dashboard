@@ -61,6 +61,10 @@ MANUAL_ALIASES = {
     "aria sling": "Aria Sling", "cess handbag": "Cess HB", "karina handbag": "Karina",
     "luna man bag": "Luna", "sarai travel": "Sarai", "sky handbag": "Skye HB",
     "zane man bag": "Zane Man",
+    # Names as the monthly Power Deals PDF prints them ("OCTOBER OFFERS")
+    "standard travel bag": "Standard Travel", "jumbo travel": "Jumbo",
+    "aria sling bag": "Aria Sling", "nizana sling bag": "Nizana", "nizana sling": "Nizana",
+    "moon sling bag": "Moon Bag", "moon sling": "Moon Bag",
     # Kenya Power Deals
     "aria": "Aria Sling", "big man": "Big Man Bag", "cathy": "Cathy Handbag",
     "claire": "Claire Handbag", "monah": "Monah Bp", "zane": "Zane Man",
