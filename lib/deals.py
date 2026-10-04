@@ -146,13 +146,34 @@ def _with_year(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
+def _read_deal_file(name: str, modified: float) -> pd.DataFrame:
+    """Read one deals CSV. Cached against the file's modification time, so
+    an edit to the file is picked up on the next run by itself.
+
+    Caching on the name alone kept whatever was read first for the life of
+    the app: October 2026's Power Deals were added while it was running and
+    the Offer Types tab went on reporting "no Power Deal list recorded",
+    with KES 0 of Power Deals, until someone pressed Refresh.
+    """
+    return _with_year(pd.read_csv(_DATA_DIR / name))
+
+
+def _modified(name: str) -> float:
+    path = _DATA_DIR / name
+    return path.stat().st_mtime if path.exists() else 0.0
+
+
 def _load_power_deals() -> pd.DataFrame:
-    return _with_year(pd.read_csv(_DATA_DIR / "power_deals.csv"))
+    return _read_deal_file("power_deals.csv", _modified("power_deals.csv"))
 
 
-@st.cache_data(show_spinner=False)
 def _load_deals_of_week() -> pd.DataFrame:
-    return _with_year(pd.read_csv(_DATA_DIR / "deals_of_week.csv"))
+    return _read_deal_file("deals_of_week.csv", _modified("deals_of_week.csv"))
+
+
+# Callers clear these after a sync; both now share one cache.
+_load_power_deals.clear = _read_deal_file.clear
+_load_deals_of_week.clear = _read_deal_file.clear
 
 
 def _is_discounted(price: float, original: float) -> bool:
