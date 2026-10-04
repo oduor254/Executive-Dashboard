@@ -4202,3 +4202,113 @@ WHERE net > 0
 GROUP BY 1, 2, 3, 4, 5
 ORDER BY 1, 3
 """
+
+
+# Shop performance by week or month (:grain = 'week' | 'month'). One row per
+# location and period, counted the same way as the rest of the dashboard:
+#   Revenue  — every line except delivery fees, in KES, refunds netted (Sales page)
+#   Bags     — bags and gift bags, no combo containers, refunds netted (Bags Sold)
+#   Orders   — orders still worth something after refunds; refund slips are not sales
+#   Customers / New Customers — distinct buyers; "new" means their first purchase
+#              anywhere in the company falls in this period
+#   Refunded — the value handed back, as a positive amount
+SHOP_PERFORMANCE = """
+WITH
+-- A customer is their phone number (last nine digits), falling back to the
+-- Odoo customer record: 12,108 numbers sit on more than one record, and the
+-- same person should not count as new twice.
+buyers AS (
+    SELECT po.id AS order_id,
+           COALESCE(NULLIF(RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9), ''),
+                    'p' || po.partner_id::TEXT)               AS customer_key
+    FROM pos_order po
+    JOIN res_partner rp ON rp.id = po.partner_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+),
+first_purchase AS (
+    SELECT b.customer_key, MIN(po.date_order)::DATE AS first_day
+    FROM pos_order po
+    JOIN buyers b ON b.order_id = po.id
+    WHERE po.amount_total > 0
+    GROUP BY b.customer_key
+),
+orders AS (
+    SELECT
+        po.id,
+        b.customer_key,
+        DATE_TRUNC(CAST(:grain AS TEXT), po.date_order)::DATE        AS period,
+        CASE
+            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+                THEN 'Website'
+            WHEN lower(pconf.name) = 'staff pos'
+                THEN 'Staff POS'
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+                THEN 'Sinza'
+            ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                    COALESCE(sw.name, sl.complete_name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+        END                                                          AS location,
+        SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%'
+                 THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+                 ELSE 0 END)                                         AS revenue,
+        SUM(CASE WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
+                  AND COALESCE(pol.is_combo_line, FALSE) = FALSE
+                  AND COALESCE(pt.is_combo, FALSE) = FALSE
+                 THEN pol.qty ELSE 0 END)                            AS bags,
+        -- Genuine returns only: a refund of 50+ units is a mis-keyed sale being
+        -- reversed (Kakamega's 4,444 Remi Grey on 12 Sep 2026), and counting it
+        -- would put Kakamega's September refund rate at 1,500%.
+        SUM(CASE WHEN pol.qty < 0 AND pol.qty > -50
+                 THEN -pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+                 ELSE 0 END)                                         AS refunded
+    FROM pos_order po
+    JOIN pos_order_line           pol   ON pol.order_id = po.id
+    JOIN product_product          pp    ON pp.id = pol.product_id
+    JOIN product_template         pt    ON pt.id = pp.product_tmpl_id
+    LEFT JOIN product_category    pc    ON pc.id = pt.categ_id
+    LEFT JOIN buyers              b     ON b.order_id = po.id
+    LEFT JOIN pos_session         ps    ON ps.id = po.session_id
+    LEFT JOIN pos_config          pconf ON pconf.id = ps.config_id
+    LEFT JOIN stock_picking_type  spt   ON spt.id = pconf.picking_type_id
+    LEFT JOIN stock_warehouse     sw    ON sw.id = spt.warehouse_id
+    LEFT JOIN stock_location      sl    ON sl.id = spt.default_location_src_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+    GROUP BY 1, 2, 3, 4
+)
+SELECT
+    o.location                                                       AS "Location",
+    o.period                                                         AS "Period",
+    ROUND(SUM(o.revenue)::NUMERIC, 2)                                AS "Revenue",
+    COUNT(*) FILTER (WHERE o.revenue > 0)                            AS "Orders",
+    SUM(o.bags)                                                      AS "Bags",
+    COUNT(DISTINCT o.customer_key) FILTER (WHERE o.revenue > 0)      AS "Customers",
+    COUNT(DISTINCT o.customer_key) FILTER (
+        WHERE o.revenue > 0
+          AND DATE_TRUNC(CAST(:grain AS TEXT), fp.first_day)::DATE = o.period)  AS "New Customers",
+    ROUND(SUM(o.refunded)::NUMERIC, 2)                               AS "Refunded"
+FROM orders o
+LEFT JOIN first_purchase fp ON fp.customer_key = o.customer_key
+GROUP BY 1, 2
+ORDER BY 1, 2
+"""
+
+# Sales targets per location for each week or month (:grain = 'week' | 'month'),
+# from the same table and name matching the Sales page uses (a target is named
+# after its till, e.g. "HAZINA (…)").
+SHOP_TARGETS = """
+WITH mapping(location, target_branch) AS (
+    VALUES ('Sinza', 'DAR-ES-ALAM'), ('Website', 'WEBSITE SALES'), ('Ktda', 'KTDA Shop'),
+           ('Hilton', 'HILTON'), ('Busia', 'BUSIA'), ('Kisumu', 'KISUMU'), ('Thika', 'THIKA'),
+           ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
+           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
+           ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
+           ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
+)
+SELECT m.location AS "Location",
+       DATE_TRUNC(CAST(:grain AS TEXT), t.start_date)::DATE AS "Period",
+       SUM(t.target_amount) AS "Target"
+FROM sales_pos_target t
+JOIN mapping m ON t.name ILIKE m.target_branch || '%'
+WHERE t.period = CAST(:grain AS TEXT)
+GROUP BY 1, 2
+"""
