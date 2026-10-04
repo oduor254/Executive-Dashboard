@@ -46,7 +46,7 @@ def _load(grain: str) -> pd.DataFrame:
     """Enough history for the trend and its same-period-last-year comparison."""
     if grain == "week":
         start = TODAY - timedelta(days=7 * 80)
-        start -= timedelta(days=start.weekday())
+        start -= timedelta(days=(start.weekday() + 1) % 7)   # back to a Sunday
     else:
         start = date(TODAY.year - 2, TODAY.month, 1)
     raw = db.run_query(queries.SHOP_PERFORMANCE,
@@ -133,7 +133,8 @@ def _trend(df: pd.DataFrame, loc: str, grain: str, metric: str, periods: int = 1
     kind = sp.METRICS[metric][0]
     last = [sp.last_year(p, grain) for p in recent.index]
     ly_values = [mine[metric].get(p) for p in last]
-    labels = [sp.period_label(p, grain, TODAY).replace("Week of ", "") for p in recent.index]
+    # Weeks by their Sunday on the axis; the full Sun–Sat span is in the period picker.
+    labels = [f"{p:%d %b}" if grain == "week" else f"{p:%b %Y}" for p in recent.index]
 
     fig = go.Figure()
     fig.add_bar(x=labels, y=recent[metric], name="This year",

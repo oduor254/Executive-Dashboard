@@ -4236,7 +4236,8 @@ orders AS (
     SELECT
         po.id,
         b.customer_key,
-        DATE_TRUNC(CAST(:grain AS TEXT), po.date_order)::DATE        AS period,
+        -- Weeks run Sunday to Saturday, as the business reports them.
+        (CASE WHEN CAST(:grain AS TEXT) = 'week' THEN po.date_order::DATE - EXTRACT(DOW FROM po.date_order)::INT ELSE DATE_TRUNC('month', po.date_order)::DATE END) AS period,
         CASE
             WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
                 THEN 'Website'
@@ -4284,7 +4285,7 @@ SELECT
     COUNT(DISTINCT o.customer_key) FILTER (WHERE o.revenue > 0)      AS "Customers",
     COUNT(DISTINCT o.customer_key) FILTER (
         WHERE o.revenue > 0
-          AND DATE_TRUNC(CAST(:grain AS TEXT), fp.first_day)::DATE = o.period)  AS "New Customers",
+          AND (CASE WHEN CAST(:grain AS TEXT) = 'week' THEN fp.first_day::DATE - EXTRACT(DOW FROM fp.first_day)::INT ELSE DATE_TRUNC('month', fp.first_day)::DATE END) = o.period)  AS "New Customers",
     ROUND(SUM(o.refunded)::NUMERIC, 2)                               AS "Refunded"
 FROM orders o
 LEFT JOIN first_purchase fp ON fp.customer_key = o.customer_key
@@ -4304,11 +4305,25 @@ WITH mapping(location, target_branch) AS (
            ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
            ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
 )
-SELECT m.location AS "Location",
-       DATE_TRUNC(CAST(:grain AS TEXT), t.start_date)::DATE AS "Period",
+-- Monthly targets: one per month.
+SELECT m.location AS "Location", DATE_TRUNC('month', t.start_date)::DATE AS "Period",
        SUM(t.target_amount) AS "Target"
 FROM sales_pos_target t
 JOIN mapping m ON t.name ILIKE m.target_branch || '%'
-WHERE t.period = CAST(:grain AS TEXT)
+WHERE t.period = 'month' AND CAST(:grain AS TEXT) = 'month'
+GROUP BY 1, 2
+
+UNION ALL
+
+-- Weekly targets are stored one per month (the 1st to the last day), holding
+-- the target for each week in it. Every Sunday-to-Saturday week whose Sunday
+-- falls in that month takes it.
+SELECT m.location, weeks.sunday::DATE, SUM(t.target_amount)
+FROM sales_pos_target t
+JOIN mapping m ON t.name ILIKE m.target_branch || '%'
+CROSS JOIN LATERAL generate_series(
+    t.start_date + ((7 - EXTRACT(DOW FROM t.start_date)::INT) % 7),
+    t.end_date, INTERVAL '7 days') AS weeks(sunday)
+WHERE t.period = 'week' AND CAST(:grain AS TEXT) = 'week'
 GROUP BY 1, 2
 """

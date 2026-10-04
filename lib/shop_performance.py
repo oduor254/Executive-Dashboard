@@ -101,7 +101,7 @@ def period_label(start: pd.Timestamp, grain: str, today: date) -> str:
     start = pd.Timestamp(start)
     if grain == "week":
         end = start + timedelta(days=6)
-        label = f"Week of {start:%d %b %Y}"
+        label = f"Week {start:%a %d %b} – {end:%a %d %b %Y}"
     else:
         end = start + pd.offsets.MonthEnd(0)
         label = f"{start:%B %Y}"
