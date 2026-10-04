@@ -18,8 +18,27 @@ from datetime import date, timedelta
 
 import pandas as pd
 
-# Locations that are not shops: kept out of the league table and benchmarks.
-NOT_SHOPS = {"Staff POS", "Corporate", "Marketing", "N/A"}
+# The locations tracked, in the order the business lists them. A location that
+# starts selling later and is not in NOT_SHOPS is added after these on its own,
+# so a new shop appears without anyone editing this file.
+SHOP_ORDER = ["Starmall", "Mombasa", "Nakuru", "Eldoret", "Kisumu", "Meru", "Thika",
+              "Hazina", "Kitengela", "Nanyuki", "Kakamega", "Hilton", "Sinza", "Uganda",
+              "Kisii", "KTDA", "Busia", "Rongai", "Website"]
+
+# Tills that ring sales but are not shops: kept out of the location list, the
+# league table, the benchmarks and the "All Locations" total.
+NOT_SHOPS = {"Staff POS", "Corporate", "Marketing", "Rejects", "Shoot", "N/A",
+             "Accessories & Materials Store", "Flash Sale Warehouse"}
+
+# Names as the business writes them, where the data spells them otherwise.
+DISPLAY_NAMES = {"Ktda": "KTDA"}
+
+
+def shop_locations(found) -> list[str]:
+    """Every shop with sales: the listed ones first, in order, then any new ones."""
+    found = {f for f in found if f not in NOT_SHOPS and f != "All Locations"}
+    listed = [s for s in SHOP_ORDER if s in found]
+    return listed + sorted(found - set(SHOP_ORDER))
 
 # Fewer sales than this in a period and the ratios swing too much to judge.
 MIN_ORDERS = 20
@@ -63,6 +82,7 @@ def derive(df: pd.DataFrame, targets: pd.DataFrame | None = None) -> pd.DataFram
     else:
         out["Target"] = float("nan")
         out["% of Target"] = float("nan")
+    out["Location"] = out["Location"].replace(DISPLAY_NAMES)
     return out
 
 

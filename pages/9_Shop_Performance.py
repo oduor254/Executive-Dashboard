@@ -59,8 +59,7 @@ def _load(grain: str) -> pd.DataFrame:
 with st.spinner("Loading shop performance…"):
     data = _load(grain)
 
-locations = sorted(l for l in data["Location"].unique()
-                   if l not in sp.NOT_SHOPS and l != ALL)
+locations = sp.shop_locations(data["Location"].unique())
 with col_loc:
     location = st.selectbox("Location", [ALL] + locations, key="shopperf_location")
 
