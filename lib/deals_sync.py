@@ -271,9 +271,15 @@ def _merge_with_existing(fresh: pd.DataFrame, filename: str, key: list[str]) -> 
     # Only whole periods the sheet re-stated are replaced — dropping a single
     # product from a month the sheet still lists means it stopped being on
     # offer, and that should be reflected rather than kept alive forever.
-    restated = set(zip(*(fresh[c] for c in ("year", "month"))))
+    # Where the file carries tiers, the period is the month's tier: a sheet
+    # listing only October's Tier 2 must not wipe a Tier 1 recorded from
+    # elsewhere (October 2026's Tier 1 was taken from the shop posters).
+    period = ["year", "month"] + (["tier"] if "tier" in fresh.columns
+                                  and "tier" in existing.columns else [])
+    existing = existing.assign(**{c: existing[c].fillna("") for c in period if c == "tier"})
+    restated = set(zip(*(fresh[c].fillna("") if c == "tier" else fresh[c] for c in period)))
     kept = existing[
-        ~existing.apply(lambda r: (r["year"], r["month"]) in restated, axis=1)
+        ~existing.apply(lambda r: tuple(r[c] for c in period) in restated, axis=1)
     ]
 
     merged = pd.concat([kept, fresh], ignore_index=True)
