@@ -52,7 +52,17 @@ _COLOR_SUFFIXES = sorted([
     "Cracked", "Green", "Grey", "Gold", "Lilac", "Maroon",
     "Mustard", "Nude", "Orange", "Pink", "Purple",
     "Red", "Spice", "White", "Yellow",
+    # Colours on bags since added to Odoo; without them "Lamora Sky Blue"
+    # was read as a bag called "Lamora Sky" with its own subtotal.
+    "Sky Blue", "Dark Green", "Jungle Green", "Baby Pink", "Chocolate Brown",
+    "Amber", "Caramel", "Silver", "Cream", "Creame", "Melon", "Peach",
+    "Croc.Mustard", "Croc.Brown", "Croc.Orange", "Croc.Pink", "Y.Dotted",
 ], key=len, reverse=True)
+
+# Two colours on one bag, written "Maroon/Mustard": stripped as one colour
+# when both halves are colours ("Kate Maroon/Mustard" is a Kate).
+_SINGLE_COLOURS = {c.lower() for c in _COLOR_SUFFIXES if " " not in c and "/" not in c}
+_COLOUR_PAIR_RE = re.compile(r"\s+([\w.]+)/([\w.]+)$")
 
 # Same catalog PRODUCT_SALES_BY_SHOP ranks the masterfile against — see
 # master_order_raw there. Kept as one Python list here rather than a second
@@ -393,6 +403,9 @@ def _strip_color(name: str) -> str:
         suffix = " " + color_lower
         if lowered.endswith(suffix):
             return name[: -len(suffix)].strip()
+    pair = _COLOUR_PAIR_RE.search(name)
+    if pair and {pair.group(1).lower(), pair.group(2).lower()} <= _SINGLE_COLOURS:
+        return name[: pair.start()].strip()
     return name
 
 
