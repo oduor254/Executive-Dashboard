@@ -4327,3 +4327,25 @@ CROSS JOIN LATERAL generate_series(
 WHERE t.period = 'week' AND CAST(:grain AS TEXT) = 'week'
 GROUP BY 1, 2
 """
+
+
+# Every sales target row, named to the Sales page's branch names. Odoo stores
+# one row per shop per month for each kind of target (day, week, month), the
+# amount being one day's, one week's or the whole month's target. lib.targets
+# picks and scales them to the period being viewed.
+SALES_TARGET_ROWS = """
+WITH mapping(location, target_branch) AS (
+    VALUES ('Sinza', 'DAR-ES-ALAM'), ('Website', 'WEBSITE SALES'), ('Ktda', 'KTDA Shop'),
+           ('Hilton', 'HILTON'), ('Busia', 'BUSIA'), ('Kisumu', 'KISUMU'), ('Thika', 'THIKA'),
+           ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
+           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
+           ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
+           ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
+)
+SELECT m.location AS "Location", t.period AS "Kind", t.start_date AS "Starts",
+       t.end_date AS "Ends", SUM(t.target_amount) AS "Target"
+FROM sales_pos_target t
+JOIN mapping m ON t.name ILIKE m.target_branch || '%'
+WHERE t.start_date <= CAST(:end_date AS DATE) AND t.end_date >= CAST(:start_date AS DATE)
+GROUP BY 1, 2, 3, 4
+"""

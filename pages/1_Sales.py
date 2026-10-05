@@ -1,7 +1,6 @@
 """Sales Performance — revenue, orders, and target attainment by branch."""
 from __future__ import annotations
 
-import calendar
 from datetime import date, datetime
 
 import plotly.graph_objects as go
@@ -10,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, charts, db, filters, grid, queries, theme
+from lib import auth, charts, db, filters, grid, queries, targets, theme
 
 st.set_page_config(page_title="Sales · Denri Executive Dashboard", page_icon="💰", layout="wide")
 
@@ -48,21 +47,6 @@ PACE_BANDS = [
 NO_TARGET = ("No target", theme.OTHER)
 
 
-def _expected_share(start_date: date, end_date: date) -> float:
-    """How much of its target a branch should have reached by end_date.
-
-    Targets are set for a whole day, week or month (the query picks which from
-    the length of the range). A month-to-date range is judged against the
-    share of the month elapsed, otherwise every branch reads "behind" until
-    the last day of the month.
-    """
-    span = (end_date - start_date).days
-    if span > 7 and start_date.day == 1 and start_date.month == end_date.month:
-        days = calendar.monthrange(end_date.year, end_date.month)[1]
-        return end_date.day / days
-    return 1.0
-
-
 def _band(achieved: float, target: float, expected: float) -> tuple[str, str]:
     if not target:
         return NO_TARGET
@@ -73,7 +57,7 @@ def _band(achieved: float, target: float, expected: float) -> tuple[str, str]:
     return PACE_BANDS[-1][1:]
 
 
-def _attainment_chart(branches, expected: float) -> go.Figure:
+def _attainment_chart(branches, expected: float, basis_label: str) -> go.Figure:
     """Revenue bar per branch against a target tick, coloured by pace."""
     rows = branches.fillna({"Target": 0, "% Achieved": 0})
     bands = [_band(a, t, expected) for a, t in zip(rows["% Achieved"], rows["Target"])]
@@ -115,9 +99,9 @@ def _attainment_chart(branches, expected: float) -> go.Figure:
                         marker=dict(color=color), hoverinfo="skip")
 
     theme.apply_layout(fig, show_legend=True)
-    title = "Revenue vs Target by Branch"
+    title = f"Revenue vs Target by Branch · {basis_label}"
     if expected < 1:
-        title += f" · {expected:.0%} of the month elapsed"
+        title += f" · {expected:.0%} of the period gone"
     fig.update_layout(
         title=title, barmode="overlay", hovermode="closest",
         height=max(420, 30 * len(rows) + 90),
@@ -142,10 +126,24 @@ def render_sales(start_date: date, end_date: date) -> None:
         st.info("No sales recorded for this date range yet.")
         return
 
-    # SUM() over an empty group in SQL yields NULL, not 0 (e.g. a branch with no
-    # matching target row) — treat that the same as zero for display.
-    totals = df.loc[df["Branch"] == "GRAND TOTAL"].iloc[0].fillna(0)
+    # The target follows the period picked: Month to Date and whole months use
+    # the monthly target, a week (Last 7 Days, a custom week) the weekly one, a
+    # single day the daily one — see lib.targets. The query's own choice went
+    # by the range's length alone and judged Month to Date against a week.
+    basis = targets.basis_for(
+        start_date, end_date,
+        db.run_query(queries.SALES_TARGET_ROWS, {"start_date": start_date, "end_date": end_date}))
+    is_total = df["Branch"] == "GRAND TOTAL"
+    df.loc[~is_total, "Target"] = df.loc[~is_total, "Branch"].map(basis.targets).fillna(0)
+    # The total is the branches' targets added up, so it matches the rows above
+    # it; the corporate target is left out because corporate sales are not POS.
+    df.loc[is_total, "Target"] = df.loc[~is_total, "Target"].sum()
+    df["% Achieved"] = (df["Revenue"] / df["Target"].where(df["Target"] > 0) * 100).round(2)
+    branches = df.loc[~is_total].copy()
+
+    totals = df.loc[is_total].iloc[0].fillna(0)
     pct = totals["% Achieved"]
+    pace = basis.expected * 100
 
     k1, k2, k3, k4 = st.columns(4)
     with k1.container(border=True):
@@ -155,9 +153,13 @@ def render_sales(start_date: date, end_date: date) -> None:
     with k3.container(border=True):
         st.metric("Units Sold", f"{totals['Qty']:,.0f}")
     with k4.container(border=True):
-        st.metric("Target Achieved", f"{pct:,.1f}%", delta=f"{pct - 100:,.1f} pts vs target")
+        st.metric("Target Achieved", f"{pct:,.1f}%",
+                  delta=f"{pct - pace:+,.1f} pts vs {pace:.0f}% expected by now",
+                  help=f"Revenue against the {basis.label}: KES {totals['Target']:,.0f}. "
+                       f"{pace:.0f}% of the period has passed, so that is the pace to match.")
 
-    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · measured against the "
+               f"{basis.label} (KES {totals['Target']:,.0f})")
 
     if branches.empty:
         with st.container(border=True):
@@ -165,10 +167,8 @@ def render_sales(start_date: date, end_date: date) -> None:
         return
 
     branches = branches.sort_values("Revenue", ascending=True)
-    expected = _expected_share(start_date, end_date)
-
     with st.container(border=True):
-        theme.show(_attainment_chart(branches, expected))
+        theme.show(_attainment_chart(branches, basis.expected, basis.label))
 
     col_share, col_channel = st.columns(2)
     with col_share:
