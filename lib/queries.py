@@ -4408,3 +4408,42 @@ GROUP BY 1, 2, 3, 7
 HAVING SUM(c.qty) > 0
 ORDER BY 1 DESC, 2, 3
 """
+
+
+# Every order with a customer in the range, with the phone exactly as saved
+# and who served it, for checking phone numbers (lib/phones.py). One row per
+# order; refunds left out.
+CUSTOMER_PHONES = """
+SELECT
+    po.date_order::DATE                                              AS "Date",
+    CASE
+        WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+            THEN 'Website'
+        WHEN lower(pconf.name) = 'staff pos'
+            THEN 'Staff POS'
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+            THEN 'Sinza'
+        ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'),
+                '\s*Shop\s*', '', 'gi')))
+    END                                                              AS "Location",
+    COALESCE(NULLIF(TRIM(att_p.name), ''), NULLIF(TRIM(ba.name), ''),
+             'Not recorded')                                         AS "Served By",
+    rp.id                                                            AS "Customer ID",
+    rp.name                                                          AS "Raw Name",
+    COALESCE(rp.phone, '')                                           AS "Phone as Saved",
+    po.name                                                          AS "Order"
+FROM pos_order po
+JOIN res_partner               rp     ON rp.id = po.partner_id
+LEFT JOIN pos_session          ps     ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf  ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt    ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw     ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl     ON sl.id = spt.default_location_src_id
+LEFT JOIN res_users            att    ON att.id = po.attendant_id
+LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
+LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND po.amount_total > 0
+  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""

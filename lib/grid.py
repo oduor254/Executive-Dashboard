@@ -32,7 +32,7 @@ def _stringify_dates(df: pd.DataFrame) -> pd.DataFrame:
 
 # Columns not worth adding up: shares, rates, averages, prices, positions.
 _NOT_SUMMED = re.compile(r"%|rate|avg|average|price|share|rank|per order|per bag|"
-                         r"\bid\b|year|month|week|phone|value$|score", re.IGNORECASE)
+                         r"\bid\b|year|month|week|phone|digits|value$|score", re.IGNORECASE)
 
 
 def _total_row_js(label_col: str | None, sum_cols: list[str]) -> JsCode:

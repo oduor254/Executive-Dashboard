@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, filters, gender, grid, names, queries, theme
+from lib import auth, db, filters, gender, grid, names, phones, queries, theme
 
 st.set_page_config(page_title="Customers · Denri Executive Dashboard", page_icon="🧑‍🤝‍🧑", layout="wide")
 
@@ -62,7 +62,13 @@ def render_customers(start_date: date, end_date: date) -> None:
     to_fix = df[df["Name"] == "N/A"].copy()
     df = df.drop(columns=["Raw Name"])
     df["First Name"] = df["Name"].str.split().str[0].fillna("")
+    # Slips at the till ("Meercy", "Briyan") corrected first, so the gender
+    # check below reads the real name. Then a gender recorded against an
+    # obvious name ("John" as Female) is corrected for the dashboard; both
+    # are listed at the bottom of the page to put right in Odoo.
+    df, misspelt = names.fix_spelling(df)
     mismatches = gender.find_mismatches(df)
+    df = gender.correct_recorded(df).drop(columns=["Recorded Gender"])
     df = gender.apply_gender_fallback(df)
 
     total_revenue = df["Total"].sum()
@@ -99,18 +105,6 @@ def render_customers(start_date: date, end_date: date) -> None:
                 width="stretch",
                 hide_index=True,
             )
-
-    if not mismatches.empty:
-        with st.expander(
-            f"⚠️ {len(mismatches)} possible gender data-entry mismatches "
-            "(recorded gender disagrees with the name)", expanded=False,
-        ):
-            st.caption(
-                "Recorded Gender is what staff entered in the system; Name-Implied Gender is "
-                "what the name-based lookup expects. This doesn't change any recorded data — "
-                "it's a heads-up to double check these specific entries."
-            )
-            st.dataframe(mismatches, width="stretch", hide_index=True)
 
     df = df.drop(columns=["First Name"])  # internal-only, used above for gender matching
 
@@ -184,6 +178,9 @@ def render_customers(start_date: date, end_date: date) -> None:
         grid.filterable_table(display_df)
 
     _names_to_fix(to_fix)
+    _genders_to_fix(mismatches)
+    _spelling_to_fix(misspelt)
+    _phones_to_fix(start_date, end_date)
 
 
 def _names_to_fix(rows) -> None:
@@ -206,6 +203,61 @@ def _names_to_fix(rows) -> None:
     with st.container(border=True):
         grid.filterable_table(fix, currency_columns=("Total",), pinned_columns=("Name in Odoo",),
                               height=320)
+
+
+
+def _genders_to_fix(rows) -> None:
+    """Customers whose recorded gender contradicts their name."""
+    st.subheader("Gender Corrections to Make in Odoo")
+    if rows.empty:
+        st.success("Every recorded gender in this range matches the customer's name.", icon="✅")
+        return
+    st.caption(
+        f"{len(rows):,} customer records where the gender entered at the till contradicts a "
+        "name that is clearly one gender (e.g. John saved as Female). The dashboard already "
+        "counts them under the Name-Implied Gender; change the gender in Odoo (search by phone) "
+        "so exports agree. Names staff record both ways (Valentine, Terry…) are never flagged."
+    )
+    with st.container(border=True):
+        grid.filterable_table(rows, pinned_columns=("Name",), height=320)
+
+
+def _spelling_to_fix(rows) -> None:
+    """Customers whose first name looks like a typing slip of a common name."""
+    st.subheader("Misspelt Names to Fix in Odoo")
+    if rows.empty:
+        st.success("No likely misspelt first names in this range.", icon="✅")
+        return
+    st.caption(
+        f"{len(rows):,} customer records whose first name is one letter off a common name "
+        "(missing, extra, swapped or mistyped — \"Meercy\" for Mercy, \"Briyan\" for Brian). "
+        "The dashboard already shows the corrected name. Only rare spellings close to exactly "
+        "one common name are corrected, and never a real name in its own right (Gary, Merry) "
+        "or against the recorded gender (Alfreda stays Alfreda)."
+    )
+    with st.container(border=True):
+        grid.filterable_table(rows, pinned_columns=("Name as Typed",), height=320)
+
+
+
+def _phones_to_fix(start_date: date, end_date: date) -> None:
+    """Customer phone numbers that can't be a valid East African mobile number."""
+    st.subheader("Phone Numbers to Check with Attendants")
+    orders = db.run_query(queries.CUSTOMER_PHONES, {"start_date": start_date, "end_date": end_date})
+    rows = phones.to_check(orders)
+    if rows.empty:
+        st.success("Every customer phone number in this range has 10 digits starting "
+                   "07, 01 or 06.", icon="✅")
+        return
+    st.caption(
+        f"{len(rows):,} customers served in this range whose number is not 10 digits starting "
+        "07, 01 or 06 (+254, +255 and +256 numbers are read as their 0 form). Ask the attendant "
+        "in Served By for the right number, or the customer on their next visit, and update it "
+        "in Odoo. Likely Number is filled where only the leading 0 is missing. Customers with "
+        "no number saved are not listed."
+    )
+    with st.container(border=True):
+        grid.filterable_table(rows, pinned_columns=("Name",), height=360)
 
 
 render_customers(start_date, end_date)

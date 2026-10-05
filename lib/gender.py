@@ -27,6 +27,63 @@ def _load_lookup() -> dict[str, str]:
     return {str(name).strip().lower(): gender for name, gender in zip(df["name"], df["gender"])}
 
 
+# What staff have recorded is the better guide to a name's gender here than
+# the general name list: across 28,219 customers recorded male or female (Oct
+# 2026), 21 first names with 3+ consistent records disagreed with the list —
+# Valentine 96% female over 48 records, Flavian and Terry female, Teddy, Sean
+# and Lee male. A name needs this many records, this one-sided, to count.
+LEARNED_MIN_RECORDS = 3
+LEARNED_MIN_SHARE = 0.8
+
+_RECORDED_GENDERS = """
+SELECT rp.name, LOWER(TRIM(rp.gender)) AS gender
+FROM res_partner rp
+WHERE LOWER(TRIM(COALESCE(rp.gender, ''))) IN ('male', 'female')
+"""
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _learned() -> dict[str, tuple[str | None, int]]:
+    """First name -> (gender it reliably is, or None if records are split; record count)."""
+    from lib import db, names
+    rows = db.run_query(_RECORDED_GENDERS)
+    if rows.empty:
+        return {}
+    rows["first"] = rows["name"].map(names.clean).str.split().str[0].str.lower()
+    rows = rows[rows["first"].notna() & (rows["first"] != "n/a")]
+    out = {}
+    for first, g in rows.groupby("first")["gender"]:
+        share = (g == "female").mean()
+        sure = None
+        if len(g) >= LEARNED_MIN_RECORDS:
+            sure = "Female" if share >= LEARNED_MIN_SHARE else "Male" if share <= 1 - LEARNED_MIN_SHARE else None
+        out[first] = (sure, len(g))
+    return out
+
+
+def _expected(token: str, lookup: dict[str, str], learned: dict) -> tuple[str, bool]:
+    """(gender a first name implies, whether that is reliable enough to flag a
+    recorded value against).
+
+    Recorded data first; then the name list, exact matches only. A name staff
+    have recorded both ways, or only once or twice, is not reliable — Yvon
+    (once, female) and Flavin (twice, split) were being called male by the
+    list. Prefix guesses ("Doricas" via "Doric") are never reliable.
+    """
+    key = str(token).strip().lower()
+    if not key:
+        return "N/A", False
+    if key in learned:
+        sure, count = learned[key]
+        if sure:
+            return sure, True
+        if count:
+            return "N/A", False
+    if key in lookup:
+        return lookup[key], True
+    return _resolve(token, lookup), False
+
+
 def _resolve(token: str, lookup: dict[str, str]) -> str:
     key = str(token).strip().lower()
     if not key:
@@ -49,9 +106,11 @@ def apply_gender_fallback(df: pd.DataFrame) -> pd.DataFrame:
     shop concatenated with a second name (see module docstring).
     """
     lookup = _load_lookup()
+    learned = _learned()
     df = df.copy()
     unresolved = df["Gender"] == "N/A"
-    df.loc[unresolved, "Gender"] = df.loc[unresolved, "First Name"].apply(_resolve, lookup=lookup)
+    df.loc[unresolved, "Gender"] = df.loc[unresolved, "First Name"].apply(
+        lambda n: _expected(n, lookup, learned)[0])
     return df
 
 
@@ -62,25 +121,30 @@ def top_unmapped_names(df: pd.DataFrame, n: int = 25) -> pd.Series:
     return unresolved.value_counts().head(n)
 
 
-def find_mismatches(df: pd.DataFrame, n: int = 25) -> pd.DataFrame:
+def find_mismatches(df: pd.DataFrame, n: int | None = None) -> pd.DataFrame:
     """Rows where the recorded Gender (keyed in by staff) disagrees with what
     the name-based lookup would predict — e.g. "John" recorded as Female.
 
     Only flags cases where the lookup has a confident, different opinion; a
-    recorded value with no lookup match at all isn't a mismatch. Meant as a
-    data-entry cross-check, not a correction — recorded values are never
-    changed based on this.
+    recorded value with no lookup match at all isn't a mismatch. The list of
+    records to change in Odoo; correct_recorded applies the same rule to the
+    dashboard's figures.
     """
     lookup = _load_lookup()
-    recorded = df[df["Gender"] != "N/A"].copy()
+    learned = _learned()
+    # Male/female only: "Corporate" is an account type, not a gender to check.
+    recorded = df[df["Gender"].isin(["Male", "Female"])].copy()
     if recorded.empty:
         return recorded.iloc[0:0][["Name", "Phone", "First Name", "Gender"]].rename(
             columns={"Gender": "Recorded Gender"}
         ).assign(**{"Name-Implied Gender": [], "Occurrences": []})
 
-    recorded["Name-Implied Gender"] = recorded["First Name"].apply(_resolve, lookup=lookup)
+    expected = recorded["First Name"].apply(lambda n: _expected(n, lookup, learned))
+    recorded["Name-Implied Gender"] = expected.str[0]
+    reliable = expected.str[1].astype(bool)
     mismatches = recorded[
-        (recorded["Name-Implied Gender"] != "N/A")
+        reliable
+        & (recorded["Name-Implied Gender"] != "N/A")
         & (recorded["Name-Implied Gender"] != recorded["Gender"])
     ]
     if mismatches.empty:
@@ -96,6 +160,29 @@ def find_mismatches(df: pd.DataFrame, n: int = 25) -> pd.DataFrame:
         .reset_index(name="Occurrences")
         .rename(columns={"Gender": "Recorded Gender"})
         .sort_values("Occurrences", ascending=False)
-        .head(n)
     )
+    if n is not None:
+        summary = summary.head(n)
     return summary
+
+
+def correct_recorded(df: pd.DataFrame) -> pd.DataFrame:
+    """Use the name's gender where staff recorded the opposite one — "John"
+    saved as Female counts as Male on the dashboard. Only reliable
+    expectations override (see _expected), so a name staff record both ways,
+    or one the list doesn't know exactly, keeps what was recorded. The
+    original value is kept in "Recorded Gender" for the corrections table.
+    """
+    lookup = _load_lookup()
+    learned = _learned()
+    df = df.copy()
+    df["Recorded Gender"] = df["Gender"]
+    recorded = df["Gender"].isin(["Male", "Female"])
+    if not recorded.any():
+        return df
+    expected = df.loc[recorded, "First Name"].apply(lambda n: _expected(n, lookup, learned))
+    implied = expected.str[0]
+    wrong = expected.str[1].astype(bool) & implied.isin(["Male", "Female"]) & (
+        implied != df.loc[recorded, "Gender"])
+    df.loc[wrong[wrong].index, "Gender"] = implied[wrong]
+    return df
