@@ -74,7 +74,7 @@ def find_mismatches(df: pd.DataFrame, n: int = 25) -> pd.DataFrame:
     lookup = _load_lookup()
     recorded = df[df["Gender"] != "N/A"].copy()
     if recorded.empty:
-        return recorded.iloc[0:0][["Name", "First Name", "Gender"]].rename(
+        return recorded.iloc[0:0][["Name", "Phone", "First Name", "Gender"]].rename(
             columns={"Gender": "Recorded Gender"}
         ).assign(**{"Name-Implied Gender": [], "Occurrences": []})
 
@@ -84,12 +84,14 @@ def find_mismatches(df: pd.DataFrame, n: int = 25) -> pd.DataFrame:
         & (recorded["Name-Implied Gender"] != recorded["Gender"])
     ]
     if mismatches.empty:
-        return mismatches[["Name", "First Name", "Gender", "Name-Implied Gender"]].rename(
+        return mismatches[["Name", "Phone", "First Name", "Gender", "Name-Implied Gender"]].rename(
             columns={"Gender": "Recorded Gender"}
         ).assign(Occurrences=[])
 
     summary = (
-        mismatches.groupby(["Name", "First Name", "Gender", "Name-Implied Gender"])
+        # By phone as well as name: two customers both called "Mercy" are two
+        # records to check, and the phone is how they are found in Odoo.
+        mismatches.groupby(["Name", "Phone", "First Name", "Gender", "Name-Implied Gender"])
         .size()
         .reset_index(name="Occurrences")
         .rename(columns={"Gender": "Recorded Gender"})
