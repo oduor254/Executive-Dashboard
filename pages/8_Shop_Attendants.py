@@ -105,8 +105,36 @@ def render_attendants(start_date: date, end_date: date) -> None:
             _by_person_chart(shown)
         with st.container(border=True):
             st.caption(f"{len(shown):,} rows · click a column header's filter icon to search or "
-                       "narrow it.")
-            grid.filterable_table(shown[COLUMNS], currency_columns=("Sales Made",), height=440)
+                       "narrow it. The last row is the total for the range.")
+            sessions = shown[COLUMNS].copy()
+            total = {c: "" for c in COLUMNS}
+            total.update({"Date": "TOTAL", "Sales Made": round(sessions["Sales Made"].sum(), 2),
+                          "Session": f"{shown['Session'].nunique():,} sessions",
+                          "Orders": int(sessions["Orders"].sum())})
+            grid.filterable_table(pd.concat([sessions, pd.DataFrame([total])], ignore_index=True),
+                                  currency_columns=("Sales Made",), height=440)
+
+        st.subheader("By Shop Attendant / BA")
+        with st.container(border=True):
+            st.caption("Each attendant's and BA's sales for the whole range, highest first, "
+                       "with the total at the bottom.")
+            per = (shown.groupby("Served By", as_index=False)
+                   .agg(Locations=("Location", lambda v: ", ".join(sorted(set(v)))),
+                        Sessions=("Session", "nunique"), Orders=("Orders", "sum"),
+                        **{"Sales Made": ("Sales Made", "sum")})
+                   .rename(columns={"Served By": "Shop Attendant / BA"})
+                   .sort_values("Sales Made", ascending=False))
+            per["Share %"] = (per["Sales Made"] / per["Sales Made"].sum() * 100).round(1)
+            per["Avg Sale"] = (per["Sales Made"] / per["Orders"].where(per["Orders"] > 0)).round(0)
+            per["Sales Made"] = per["Sales Made"].round(2)
+            total = {"Shop Attendant / BA": "TOTAL",
+                     "Locations": f"{shown['Location'].nunique()} locations",
+                     "Sessions": shown["Session"].nunique(), "Orders": int(per["Orders"].sum()),
+                     "Sales Made": round(per["Sales Made"].sum(), 2), "Share %": 100.0,
+                     "Avg Sale": round(per["Sales Made"].sum() / max(per["Orders"].sum(), 1), 0)}
+            grid.filterable_table(pd.concat([per, pd.DataFrame([total])], ignore_index=True),
+                                  currency_columns=("Sales Made", "Avg Sale"),
+                                  pinned_columns=("Shop Attendant / BA",), height=440)
     elif section == "Sales Breakdown":
         _person_sales(person, start_date, end_date, location)
     else:

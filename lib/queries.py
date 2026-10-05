@@ -4349,3 +4349,59 @@ JOIN mapping m ON t.name ILIKE m.target_branch || '%'
 WHERE t.start_date <= CAST(:end_date AS DATE) AND t.end_date >= CAST(:start_date AS DATE)
 GROUP BY 1, 2, 3, 4
 """
+
+
+# Every combo sold: one row per location, combo and day, from the combo
+# container line (the one carrying the price; the bags inside are their own
+# zero-priced lines). Refunds are folded into the sale they reverse.
+# "First Sold" is the combo's first sale ever, so a made-to-order combo
+# created for one customer can be told from a running one.
+COMBO_SALES = """
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id,
+           SUM(r.qty) AS qty, SUM(r.price_subtotal_incl) AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+),
+combo_lines AS (
+    SELECT po.date_order::DATE AS sale_date, pt.id AS tmpl_id, pt.name AS combo,
+           CASE
+               WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+                   THEN 'Website'
+               WHEN lower(pconf.name) = 'staff pos' THEN 'Staff POS'
+               WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+               ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                       COALESCE(sw.name, sl.complete_name, 'N/A'), '\\s*Shop\\s*', '', 'gi')))
+           END AS location,
+           pol.qty + COALESCE(ref.qty, 0) AS qty,
+           (pol.price_subtotal_incl + COALESCE(ref.amount, 0))
+               / COALESCE(NULLIF(po.currency_rate, 0), 1) AS total,
+           po.id AS order_id
+    FROM pos_order po
+    JOIN pos_order_line           pol   ON pol.order_id = po.id
+    JOIN product_product          pp    ON pp.id = pol.product_id
+    JOIN product_template         pt    ON pt.id = pp.product_tmpl_id
+    LEFT JOIN refunded            ref   ON ref.line_id = pol.id
+    LEFT JOIN pos_session         ps    ON ps.id = po.session_id
+    LEFT JOIN pos_config          pconf ON pconf.id = ps.config_id
+    LEFT JOIN stock_picking_type  spt   ON spt.id = pconf.picking_type_id
+    LEFT JOIN stock_warehouse     sw    ON sw.id = spt.warehouse_id
+    LEFT JOIN stock_location      sl    ON sl.id = spt.default_location_src_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND pol.qty > 0
+      AND (COALESCE(pol.is_combo_line, FALSE) OR COALESCE(pt.is_combo, FALSE))
+),
+first_sale AS (
+    SELECT tmpl_id, MIN(sale_date) AS first_sold FROM combo_lines GROUP BY tmpl_id
+)
+SELECT c.sale_date AS "Date", c.location AS "Location", c.combo AS "Combo",
+       SUM(c.qty) AS "Bundles", ROUND(SUM(c.total)::NUMERIC, 2) AS "Revenue",
+       COUNT(DISTINCT c.order_id) AS "Orders", f.first_sold AS "First Sold"
+FROM combo_lines c
+JOIN first_sale f ON f.tmpl_id = c.tmpl_id
+WHERE c.sale_date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+GROUP BY 1, 2, 3, 7
+HAVING SUM(c.qty) > 0
+ORDER BY 1 DESC, 2, 3
+"""

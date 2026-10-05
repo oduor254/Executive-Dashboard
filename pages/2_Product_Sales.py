@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import (auth, db, deals, deals_sync, filters, grid, pricelists, queries,
+from lib import (auth, charts, combos, db, deals, deals_sync, filters, grid, pricelists, queries,
                  sheets_sync, taxonomy, theme)
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
@@ -64,136 +64,242 @@ OFFER_COLORS = {
 # One section at a time, not st.tabs: Streamlit runs every tab's body on every
 # rerun, hidden or not, so a date change on this page ran all six sections'
 # queries (~26s for a month) to show one. Only the chosen section loads now.
-SECTIONS = ["By Shop", "By Category", "By Location", "Sales Value", "Offer Types",
-            "New Products"]
+SECTIONS = ["By Shop & Category", "By Location", "Sales Value", "Offer Types",
+            "Self/Running Combos", "New Products"]
 section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0],
                                key="products_section", label_visibility="collapsed")
 section = section if section in SECTIONS else SECTIONS[0]
 
 
 @st.fragment()
-def render_by_shop(start_date: date, end_date: date) -> None:
-    df = db.run_query(
-        queries.PRODUCT_SALES_BY_SHOP,
-        {"start_date": start_date, "end_date": end_date},
-    )
+def render_by_shop_category(start_date: date, end_date: date) -> None:
+    """By Shop and By Category in one: every bag, its category and its sales
+    at each shop, from the single Bags Sold query.
 
+    The masterfile/off-catalog split is worked out here from the bag names
+    rather than from a second query, so the merged section costs no more than
+    By Category did on its own.
+    """
+    df = db.run_query(queries.BAGS_SOLD_BY_CATEGORY,
+                      {"start_date": start_date, "end_date": end_date})
     if df.empty:
-        st.info("No units sold for this date range yet.")
-        return
-
-    totals = df[df["PRODUCT"].isin(TOTAL_LABELS)]
-    detail = df[~df["PRODUCT"].isin(TOTAL_LABELS)].copy()
-
-    masterfile_qty = totals.loc[totals["PRODUCT"] == "MASTERFILE TOTAL", "QTY SOLD"].sum()
-    non_masterfile_qty = totals.loc[totals["PRODUCT"] == "NON-MASTERFILE TOTAL", "QTY SOLD"].sum()
-    total_qty = masterfile_qty + non_masterfile_qty
-    pct_masterfile = (masterfile_qty / total_qty * 100) if total_qty else 0.0
-
-    k1, k2, k3, k4 = st.columns(4)
-    with k1.container(border=True):
-        st.metric("Total Units Sold", f"{total_qty:,.0f}")
-    with k2.container(border=True):
-        st.metric("Masterfile Units", f"{masterfile_qty:,.0f}")
-    with k3.container(border=True):
-        st.metric("Off-Catalog Units", f"{non_masterfile_qty:,.0f}")
-    with k4.container(border=True):
-        st.metric("% Masterfile", f"{pct_masterfile:,.1f}%")
-
-    st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "combo/bundle products count as the bags actually inside the bundle, not "
-        "one unit per bundle sold, and file under Off-Catalog since the bundle "
-        "name itself isn't a masterfile product."
-    )
-
-    if detail.empty:
-        return
-
-    shops = sorted(s for s in detail["SHOP"].unique() if s)
-    selected_shop = st.selectbox("Shop", ["All Shops"] + shops, key="products_shop_filter")
-    filtered = detail if selected_shop == "All Shops" else detail[detail["SHOP"] == selected_shop]
-
-    top_products = (
-        filtered.groupby("PRODUCT", as_index=False)["QTY SOLD"]
-        .sum()
-        .nlargest(15, "QTY SOLD")
-        .sort_values("QTY SOLD", ascending=True)
-    )
-
-    with st.container(border=True):
-        fig = go.Figure()
-        fig.add_bar(
-            y=top_products["PRODUCT"], x=top_products["QTY SOLD"], orientation="h",
-            name="Qty Sold",
-            marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
-        )
-        theme.apply_layout(fig, show_legend=False)
-        fig.update_layout(
-            title=f"Top Products — {selected_shop}",
-            height=max(360, 28 * len(top_products)),
-        )
-        theme.show(fig, width="stretch")
-
-    with st.container(border=True):
-        grid.filterable_table(filtered)
-
-
-@st.fragment()
-def render_by_category(start_date: date, end_date: date) -> None:
-    df = db.run_query(
-        queries.BAGS_SOLD_BY_CATEGORY,
-        {"start_date": start_date, "end_date": end_date},
-    )
-
-    if df.empty:
-        st.info("No units sold for this date range yet.")
+        st.info("No bags sold for this date range yet.")
         return
 
     detail = df[df["sort_priority"] == 0].copy()
-    category_totals = df[df["sort_priority"] == 1].copy()
-    grand_total = df[df["sort_priority"] == 2].iloc[0].fillna(0) if (df["sort_priority"] == 2).any() else None
+    shop_cols = [c for c in df.columns
+                 if c not in ("Bag", "TOTAL", "Category", "sort_priority")]
+    sold_at = [c for c in shop_cols if detail[c].sum() != 0]
 
-    k1, k2, k3, k4 = st.columns(4)
-    with k1.container(border=True):
-        st.metric("Total Bags Sold", f"{grand_total['TOTAL']:,.0f}" if grand_total is not None else "0")
-    with k2.container(border=True):
-        st.metric("Categories Sold", f"{len(category_totals):,}")
-    with k3.container(border=True):
-        top_cat = category_totals.nlargest(1, "TOTAL")
-        st.metric("Top Category", top_cat["Category"].iloc[0] if not top_cat.empty else "—")
-    with k4.container(border=True):
-        st.metric("Bag Styles Sold", f"{len(detail):,}")
+    shop = st.selectbox("Shop", ["All Shops"] + sold_at, key="products_shop_filter")
+    detail["Qty"] = detail["TOTAL"] if shop == "All Shops" else detail[shop]
+    shown = detail[detail["Qty"] != 0]
+    shown = shown.assign(Masterfile=shown["Bag"].map(
+        lambda b: taxonomy.family_of(b) != taxonomy.UNMAPPED))
 
+    total = shown["Qty"].sum()
+    masterfile = shown.loc[shown["Masterfile"], "Qty"].sum()
+    by_cat = shown.groupby("Category", as_index=False)["Qty"].sum().sort_values("Qty")
+    items = [
+        ("Total Bags Sold", f"{total:,.0f}", shop),
+        ("Masterfile", f"{masterfile / total * 100:.1f}%" if total else "—",
+         f"{total - masterfile:,.0f} off-catalog bags"),
+        ("Categories Sold", f"{len(by_cat):,}", None),
+        ("Top Category", by_cat["Category"].iloc[-1] if not by_cat.empty else "—",
+         f"{by_cat['Qty'].iloc[-1]:,.0f} bags" if not by_cat.empty else None),
+        ("Bag Styles Sold", f"{len(shown):,}", None),
+    ]
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
     st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · "
-        "grouped by Odoo's own bag category (Travel Bags, Backpacks, Handbags, ...), "
-        "plus Gift Bags and Straps as their own categories · excludes Accessories "
-        "(production components) and uncategorized items · combo/bundle products "
-        "count as the individual bags actually sold inside the bundle, not the "
-        "bundle itself."
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · bags and gift bags, refunds "
+        "netted, combos counted as the bags inside them · grouped by Odoo's bag category · "
+        "a bag counts as masterfile when its family is in the masterfile, with style-code "
+        "variants (\"Zula Black 018\") counted as their bag."
     )
-
-    if category_totals.empty:
+    if shown.empty:
         return
 
-    with st.container(border=True):
-        top_categories = category_totals.nlargest(15, "TOTAL").sort_values("TOTAL", ascending=True)
+    col_cat, col_prod = st.columns(2)
+    with col_cat, st.container(border=True):
+        top_cat = by_cat.tail(15)
         fig = go.Figure()
-        fig.add_bar(
-            y=top_categories["Category"], x=top_categories["TOTAL"], orientation="h",
-            marker=dict(color=theme.sequential_colors(len(top_categories)), cornerradius=4),
-        )
+        fig.add_bar(y=top_cat["Category"], x=top_cat["Qty"], orientation="h",
+                    marker=dict(color=theme.sequential_colors(len(top_cat)), cornerradius=4),
+                    hovertemplate="<b>%{y}</b><br>%{x:,.0f} bags<extra></extra>")
         theme.apply_layout(fig, show_legend=False)
-        fig.update_layout(
-            title="Top Categories by Bags Sold",
-            height=max(360, 28 * len(top_categories)),
-        )
-        theme.show(fig, width="stretch")
+        fig.update_layout(title=f"Bags Sold by Category — {shop}", hovermode="closest",
+                          height=max(360, 28 * len(top_cat) + 80))
+        theme.show(fig)
+    with col_prod, st.container(border=True):
+        top = shown.nlargest(15, "Qty").sort_values("Qty")
+        fig = go.Figure()
+        fig.add_bar(y=top["Bag"], x=top["Qty"], orientation="h",
+                    marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+                    customdata=top[["Category"]],
+                    hovertemplate="<b>%{y}</b><br>%{x:,.0f} bags · %{customdata[0]}<extra></extra>")
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title=f"Top Bags — {shop}", hovermode="closest",
+                          height=max(360, 28 * len(top) + 80))
+        theme.show(fig)
 
     with st.container(border=True):
-        st.caption("Click a column header's filter icon to search or narrow that column. Rows ending in \"Total\" are category subtotals.")
-        grid.filterable_table(df.drop(columns=["sort_priority"]), pinned_columns=("Bag",))
+        if shop == "All Shops":
+            st.caption("Every bag by shop. Rows ending in \"Total\" are category subtotals.")
+            table = df.drop(columns=["sort_priority"])
+            table = table[["Bag", "Category"] + sold_at + ["TOTAL"]]
+        else:
+            st.caption(f"Bags sold at {shop}, by category.")
+            table = (shown[["Bag", "Category", "Qty", "Masterfile"]]
+                     .sort_values(["Category", "Qty"], ascending=[True, False])
+                     .rename(columns={"Qty": "Qty Sold"}))
+            table["Masterfile"] = table["Masterfile"].map({True: "Yes", False: "No"})
+        grid.filterable_table(table, pinned_columns=("Bag",))
+
+    off = shown[~shown["Masterfile"]]
+    if not off.empty:
+        with st.container(border=True):
+            st.caption(f"Off-catalog bags — sold but not in the masterfile ({off['Qty'].sum():,.0f} bags).")
+            grid.filterable_table(off[["Bag", "Category", "Qty"]].sort_values("Qty", ascending=False)
+                                  .rename(columns={"Qty": "Qty Sold"}), height=260)
+
+
+@st.fragment()
+def render_combos(start_date: date, end_date: date) -> None:
+    """Running combos against self-made ones, and what customers ask to combine."""
+    raw = db.run_query(queries.COMBO_SALES, {"start_date": start_date, "end_date": end_date})
+    if raw.empty:
+        st.info("No combos sold in this date range.")
+        return
+    df = combos.classify(raw)
+
+    locations = sorted(df["Location"].unique())
+    location = st.selectbox("Location", ["All Locations"] + locations, key="combos_location")
+    if location != "All Locations":
+        df = df[df["Location"] == location]
+    if df.empty:
+        st.info("No combos sold at this location in this range.")
+        return
+
+    running = df[df["Type"] == combos.RUNNING]
+    selfmade = df[df["Type"] == combos.SELF_MADE]
+    total_rev = df["Revenue"].sum()
+    items = [
+        ("Running Combos", f"KES {running['Revenue'].sum():,.0f}",
+         f"{running['Bundles'].sum():,.0f} bundles · {running['Combo'].nunique()} combos"),
+        ("Self-made Combos", f"KES {selfmade['Revenue'].sum():,.0f}",
+         f"{selfmade['Bundles'].sum():,.0f} bundles · {selfmade['Combo'].nunique()} combos"),
+        ("Self-made Share", f"{selfmade['Revenue'].sum() / total_rev * 100:.1f}%" if total_rev else "—",
+         "of combo revenue"),
+        ("Avg Bundle Price", f"KES {total_rev / max(df['Bundles'].sum(), 1):,.0f}",
+         f"running KES {running['Revenue'].sum() / max(running['Bundles'].sum(), 1):,.0f} · "
+         f"self-made KES {selfmade['Revenue'].sum() / max(selfmade['Bundles'].sum(), 1):,.0f}"),
+    ]
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+    st.caption(
+        "Running combos are the catalogue offers (\"Jumbo + Standard or Liam Travel + …\"). "
+        "Self-made combos are put together for a customer: the name says \"Combo\" and usually "
+        "gives each bag's colour (\"Mega Green + Man Bag Brown Combo\"). Bundles and revenue "
+        "are net of refunds."
+    )
+
+    st.subheader("Running Combos")
+    if running.empty:
+        st.info("No running combos sold in this range.")
+    else:
+        perf = (running.groupby("Combo", as_index=False)
+                .agg(Bundles=("Bundles", "sum"), Revenue=("Revenue", "sum"),
+                     Locations=("Location", "nunique"))
+                .sort_values("Revenue", ascending=False))
+        perf["Avg Price"] = (perf["Revenue"] / perf["Bundles"]).round(0)
+        perf["Share %"] = (perf["Revenue"] / perf["Revenue"].sum() * 100).round(1)
+        with st.container(border=True):
+            top = perf.head(12).sort_values("Revenue")
+            fig = go.Figure()
+            fig.add_bar(y=top["Combo"], x=top["Revenue"], orientation="h",
+                        marker=dict(color=theme.CATEGORICAL[4], cornerradius=4),
+                        customdata=top[["Bundles"]],
+                        hovertemplate="<b>%{y}</b><br>KES %{x:,.0f}<br>%{customdata[0]:,.0f} bundles"
+                                      "<extra></extra>")
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="Running Combos by Revenue", hovermode="closest",
+                              height=max(360, 30 * len(top) + 80))
+            fig.update_yaxes(automargin=True)
+            theme.show(fig)
+        with st.container(border=True):
+            grid.filterable_table(perf, currency_columns=("Revenue", "Avg Price"),
+                                  pinned_columns=("Combo",), height=320)
+
+    st.subheader("Self-made Combos")
+    if selfmade.empty:
+        st.info("No self-made combos sold in this range.")
+        return
+    patterns = combos.self_made_patterns(selfmade)
+    st.caption("What customers ask to have combined. Each pairing groups every self-made combo "
+               "that put those two bags together, whatever the colours — a pairing that keeps "
+               "coming back is a candidate for a future running combo.")
+    col_pairs, col_bags = st.columns(2)
+    with col_pairs, st.container(border=True):
+        top = patterns["pairs"].head(12).sort_values("Bundles")
+        fig = go.Figure()
+        fig.add_bar(y=top["Pairing"], x=top["Bundles"], orientation="h",
+                    marker=dict(color=theme.CATEGORICAL[2], cornerradius=4),
+                    customdata=top[["Revenue", "Versions"]],
+                    hovertemplate="<b>%{y}</b><br>%{x:,.0f} bundles · KES %{customdata[0]:,.0f}"
+                                  "<br>%{customdata[1]} colour versions<extra></extra>")
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Most-Requested Pairings", hovermode="closest",
+                          height=max(360, 30 * len(top) + 80))
+        theme.show(fig)
+    with col_bags, st.container(border=True):
+        top = patterns["bags"].head(12).sort_values("Bundles")
+        fig = go.Figure()
+        fig.add_bar(y=top["Bag"], x=top["Bundles"], orientation="h",
+                    marker=dict(color=theme.CATEGORICAL[6], cornerradius=4),
+                    hovertemplate="<b>%{y}</b><br>in %{x:,.0f} self-made bundles<extra></extra>")
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Bags Most Often in a Self-made Combo", hovermode="closest",
+                          height=max(360, 30 * len(top) + 80))
+        theme.show(fig)
+
+    col_colours, col_where = st.columns(2)
+    with col_colours, st.container(border=True):
+        colours = patterns["colours"]
+        if not colours.empty:
+            data = charts.fold_other(colours["Colour"], colours["Bundles"])
+            charts.share_chart(data, title="Colours Requested", key="combos_colour_kind",
+                               unit="bags", default="Bar")
+    with col_where, st.container(border=True):
+        where = (selfmade.groupby("Location", as_index=False)
+                 .agg(Bundles=("Bundles", "sum"), Revenue=("Revenue", "sum"))
+                 .sort_values("Bundles"))
+        fig = go.Figure()
+        fig.add_bar(y=where["Location"], x=where["Bundles"], orientation="h",
+                    marker=dict(color=theme.CATEGORICAL[3], cornerradius=4),
+                    customdata=where[["Revenue"]],
+                    hovertemplate="<b>%{y}</b><br>%{x:,.0f} bundles · KES %{customdata[0]:,.0f}"
+                                  "<extra></extra>")
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Self-made Combos by Location", hovermode="closest",
+                          height=max(360, 28 * len(where) + 80))
+        theme.show(fig)
+
+    with st.container(border=True):
+        st.caption("Pairings, with how many different colour versions were made.")
+        grid.filterable_table(patterns["pairs"], currency_columns=("Revenue",),
+                              pinned_columns=("Pairing",), height=300)
+    with st.container(border=True):
+        st.caption("Every self-made combo sold in the range.")
+        each = (selfmade.groupby(["Combo"], as_index=False)
+                .agg(Bundles=("Bundles", "sum"), Revenue=("Revenue", "sum"),
+                     Locations=("Location", lambda v: ", ".join(sorted(set(v)))),
+                     **{"First Sold": ("First Sold", "min"), "Last Sold": ("Date", "max")})
+                .sort_values(["Bundles", "Revenue"], ascending=False))
+        grid.filterable_table(each, currency_columns=("Revenue",), pinned_columns=("Combo",),
+                              height=360)
 
 
 def _with_family_subtotals(rows: pd.DataFrame, shops: list[str]) -> pd.DataFrame:
@@ -747,11 +853,11 @@ def render_new_products(start_date: date, end_date: date) -> None:
         grid.filterable_table(df, currency_columns=("Revenue",))
 
 RENDERERS = {
-    "By Shop": render_by_shop,
-    "By Category": render_by_category,
+    "By Shop & Category": render_by_shop_category,
     "By Location": render_by_location,
     "Sales Value": render_by_value,
     "Offer Types": render_by_offer,
+    "Self/Running Combos": render_combos,
     "New Products": render_new_products,
 }
 RENDERERS[section](start_date, end_date)
