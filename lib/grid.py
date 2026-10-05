@@ -97,6 +97,10 @@ def filterable_table(
         if col in df.columns:
             gb.configure_column(col, pinned="left", minWidth=180)
     options = gb.build()
+    # Let the text in a cell be selected (double-click a word, triple-click
+    # the whole cell, or drag) and copied, as in a spreadsheet export.
+    options["enableCellTextSelection"] = True
+    options["ensureDomOrder"] = True
     if total and not df.empty and not _has_total_rows(df):
         numeric = [c for c in df.columns
                    if pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c])
