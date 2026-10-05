@@ -273,19 +273,10 @@ def render_combos(start_date: date, end_date: date) -> None:
             charts.share_chart(data, title="Colours Requested", key="combos_colour_kind",
                                unit="bags", default="Bar")
     with col_where, st.container(border=True):
-        where = (selfmade.groupby("Location", as_index=False)
-                 .agg(Bundles=("Bundles", "sum"), Revenue=("Revenue", "sum"))
-                 .sort_values("Bundles"))
-        fig = go.Figure()
-        fig.add_bar(y=where["Location"], x=where["Bundles"], orientation="h",
-                    marker=dict(color=theme.CATEGORICAL[3], cornerradius=4),
-                    customdata=where[["Revenue"]],
-                    hovertemplate="<b>%{y}</b><br>%{x:,.0f} bundles · KES %{customdata[0]:,.0f}"
-                                  "<extra></extra>")
-        theme.apply_layout(fig, show_legend=False)
-        fig.update_layout(title="Self-made Combos by Location", hovermode="closest",
-                          height=max(360, 28 * len(where) + 80))
-        theme.show(fig)
+        where = (selfmade.groupby("Location", as_index=False)["Bundles"].sum())
+        charts.share_chart(charts.fold_other(where["Location"], where["Bundles"]),
+                           title="Self-made Combos by Location", key="combos_location_kind",
+                           unit="bundles", default="Bar")
 
     with st.container(border=True):
         st.caption("Pairings, with how many different colour versions were made.")
