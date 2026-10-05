@@ -91,18 +91,26 @@ def render_attendants(start_date: date, end_date: date) -> None:
         "like the Sales page (delivery fees out, refunds netted, in KES)."
     )
 
-    if person == ALL_PEOPLE:
-        _by_person_chart(shown)
-
-    with st.container(border=True):
-        st.caption(f"{len(shown):,} rows · click a column header's filter icon to search or "
-                   "narrow it.")
-        grid.filterable_table(shown[COLUMNS], currency_columns=("Sales Made",), height=440)
-
-    _feedback_table(start_date, end_date, location, person)
-
+    # One section at a time: the feedback section reads the Google Sheet and
+    # every converted customer, which is slow, so it only runs when opened.
+    sections = ["Sessions", "Customer Feedback"]
     if person != ALL_PEOPLE:
+        sections.insert(1, "Sales Breakdown")
+    section = st.segmented_control("Section", sections, default=sections[0],
+                                   key="attendants_section", label_visibility="collapsed")
+    section = section if section in sections else sections[0]
+
+    if section == "Sessions":
+        if person == ALL_PEOPLE:
+            _by_person_chart(shown)
+        with st.container(border=True):
+            st.caption(f"{len(shown):,} rows · click a column header's filter icon to search or "
+                       "narrow it.")
+            grid.filterable_table(shown[COLUMNS], currency_columns=("Sales Made",), height=440)
+    elif section == "Sales Breakdown":
         _person_sales(person, start_date, end_date, location)
+    else:
+        _feedback_table(start_date, end_date, location, person)
 
 
 def _by_person_chart(shown: pd.DataFrame) -> None:

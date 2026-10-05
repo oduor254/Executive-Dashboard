@@ -61,11 +61,14 @@ OFFER_COLORS = {
     "Regular": theme.TEXT_MUTED,
 }
 
-(tab_shop, tab_category, tab_locations, tab_value, tab_offers,
- tab_new_products) = st.tabs(
-    ["By Shop", "By Category", "By Location", "Sales Value", "Offer Types",
-     "New Products"]
-)
+# One section at a time, not st.tabs: Streamlit runs every tab's body on every
+# rerun, hidden or not, so a date change on this page ran all six sections'
+# queries (~26s for a month) to show one. Only the chosen section loads now.
+SECTIONS = ["By Shop", "By Category", "By Location", "Sales Value", "Offer Types",
+            "New Products"]
+section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0],
+                               key="products_section", label_visibility="collapsed")
+section = section if section in SECTIONS else SECTIONS[0]
 
 
 @st.fragment()
@@ -743,20 +746,12 @@ def render_new_products(start_date: date, end_date: date) -> None:
         st.caption("Click a column header's filter icon to search or narrow that column.")
         grid.filterable_table(df, currency_columns=("Revenue",))
 
-with tab_shop:
-    render_by_shop(start_date, end_date)
-
-with tab_category:
-    render_by_category(start_date, end_date)
-
-with tab_locations:
-    render_by_location(start_date, end_date)
-
-with tab_value:
-    render_by_value(start_date, end_date)
-
-with tab_offers:
-    render_by_offer(start_date, end_date)
-
-with tab_new_products:
-    render_new_products(start_date, end_date)
+RENDERERS = {
+    "By Shop": render_by_shop,
+    "By Category": render_by_category,
+    "By Location": render_by_location,
+    "Sales Value": render_by_value,
+    "Offer Types": render_by_offer,
+    "New Products": render_new_products,
+}
+RENDERERS[section](start_date, end_date)

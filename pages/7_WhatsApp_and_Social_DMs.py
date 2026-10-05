@@ -100,6 +100,17 @@ if unreadable:
 
 # --------------------------------------------------------------- helpers ---
 
+def _section(options: list[str], key: str) -> str:
+    """A section switcher that loads only the chosen section.
+
+    Used instead of st.tabs, which runs every tab's body on every rerun —
+    hidden ones included — so each filter change paid for all of them.
+    """
+    choice = st.segmented_control("Section", options, default=options[0], key=key,
+                                  label_visibility="collapsed")
+    return choice if choice in options else options[0]
+
+
 def _pct(part: float, whole: float) -> str:
     return f"{part / whole * 100:.1f}%" if whole else "—"
 
@@ -208,20 +219,23 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
     params = {"start_date": start_date, "end_date": end_date}
     df = db.run_query(queries.WA_INTERACTIONS, params)
 
-    t_dash, t_int, t_transfer, t_oos, t_follow = st.tabs(
-        ["📊 Dashboard", "💬 Interactions", "🔁 Transfers", "📭 Out of Stock", "📞 Follow-ups"])
+    # One sub-section at a time (see _section): only its charts and queries run.
+    wa_view = _section(["📊 Dashboard", "💬 Interactions", "🔁 Transfers",
+                        "📭 Out of Stock", "📞 Follow-ups"], "wa_section")
+    t_dash, t_int, t_transfer, t_oos, t_follow = (
+        wa_view == "📊 Dashboard", wa_view == "💬 Interactions", wa_view == "🔁 Transfers",
+        wa_view == "📭 Out of Stock", wa_view == "📞 Follow-ups")
 
     if df.empty:
-        for tab in (t_dash, t_int, t_transfer, t_oos):
-            with tab:
-                st.info("No WhatsApp interactions logged in this date range.")
+        if not t_follow:
+            st.info("No WhatsApp interactions logged in this date range.")
     else:
         total = len(df)
         purchased = int(df["Converted"].sum())
         transfers = df[df["Activity"] == "Transferred"]
         oos_count = int(df["Out of Stock"].sum())
 
-        with t_dash:
+        if t_dash:
             _kpis([
                 ("Interactions", f"{total:,}", f"{df['Contact'].nunique():,} customers"),
                 ("Purchased", f"{purchased:,}", f"{_pct(purchased, total)} conversion"),
@@ -258,14 +272,14 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                 grid.filterable_table(by_branch.sort_values("Interactions", ascending=False),
                                       height=360)
 
-        with t_int:
+        if t_int:
             branch = st.selectbox("Branch", ["All branches"] + sorted(df["Branch"].unique()),
                                   key="wa_int_branch")
             shown = df if branch == "All branches" else df[df["Branch"] == branch]
             with st.container(border=True):
                 _table(shown, INTERACTION_COLUMNS)
 
-        with t_transfer:
+        if t_transfer:
             linked = transfers[transfers["Destination Linked"]]
             converted = int(linked["Converted at Destination"].sum())
             transferred_in = df[df["Transferred In"]]
@@ -298,7 +312,7 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                                    "Outcome at Destination": "OUTCOME AT DESTINATION"},
                            pinned_columns=("NAME",))
 
-        with t_oos:
+        if t_oos:
             oos = db.run_query(queries.WA_OUT_OF_STOCK, params)
             flagged = df[df["Out of Stock"]]
             _kpis([
@@ -326,7 +340,7 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                                      "Branch": "BRANCH", "Product Wanted": "PRODUCT WANTED",
                                      "Reason": "REASON"}, pinned_columns=("NAME",))
 
-    with t_follow:
+    if t_follow:
         follow = db.run_query(queries.WA_FOLLOWUPS, params)
         lists = db.run_query(queries.WA_FOLLOWUP_LISTS, params).iloc[0]
         if follow.empty:
@@ -368,11 +382,10 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
 def render_social(start_date: date, end_date: date) -> None:
     df = db.run_query(queries.SOCIAL_DMS, {"start_date": start_date, "end_date": end_date})
 
-    t_dash, t_leads = st.tabs(["📊 Dashboard", "📇 Leads"])
+    dm_view = _section(["📊 Dashboard", "📇 Leads"], "dm_section")
+    t_dash, t_leads = dm_view == "📊 Dashboard", dm_view == "📇 Leads"
     if df.empty:
-        for tab in (t_dash, t_leads):
-            with tab:
-                st.info("No social DMs logged in this date range.")
+        st.info("No social DMs logged in this date range.")
         return
 
     total = len(df)
@@ -381,7 +394,7 @@ def render_social(start_date: date, end_date: date) -> None:
     awaiting = df["Call Status"].isin(["Awaiting Call 1", "Awaiting Call 2"])
     overdue = awaiting & (pd.to_datetime(df["Next Call Due"]) < pd.Timestamp(date.today()))
 
-    with t_dash:
+    if t_dash:
         _kpis([
             ("Social DMs", f"{total:,}", f"{(df['Customer'] == 'New').sum():,} new customers"),
             ("Converted", f"{converted:,}", f"{_pct(converted, total)} conversion"),
@@ -411,7 +424,7 @@ def render_social(start_date: date, end_date: date) -> None:
         with st.container(border=True):
             theme.show(_daily_trend(df, "DMs per Day by Platform", split="Platform"))
 
-    with t_leads:
+    if t_leads:
         c1, c2 = st.columns(2)
         with c1:
             platform = st.selectbox("Platform", ["All platforms"] + sorted(df["Platform"].unique()),
@@ -427,8 +440,8 @@ def render_social(start_date: date, end_date: date) -> None:
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 
 
-tab_wa, tab_dm = st.tabs(["💬 WhatsApp Monitor", "📱 Social DMs"])
-with tab_wa:
+app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs"], "engagement_app")
+if app_view == "💬 WhatsApp Monitor":
     render_whatsapp(start_date, end_date)
-with tab_dm:
+else:
     render_social(start_date, end_date)
