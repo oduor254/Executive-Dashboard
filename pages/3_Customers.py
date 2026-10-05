@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, filters, gender, grid, queries, theme
+from lib import auth, db, filters, gender, grid, names, queries, theme
 
 st.set_page_config(page_title="Customers · Denri Executive Dashboard", page_icon="🧑‍🤝‍🧑", layout="wide")
 
@@ -53,6 +53,14 @@ def render_customers(start_date: date, end_date: date) -> None:
     # since 2026-07-22). For records with nothing recorded, fall back to the
     # name-based lookup as before; where something IS recorded, cross-check it
     # against the name-based lookup to catch likely data-entry errors.
+    # Payment notes and banks typed into the name ("Ali(KCB)", "Anne -PDQ"),
+    # and names that only appear in brackets ("KCB (Emily)"), sorted out here.
+    df["Name"] = df["Raw Name"].map(names.clean)
+    # Sales whose customer record holds no name at all — only a bank or payment
+    # note ("KCB", "Co-op", "I&M", "Stanbic") or nothing. Listed at the bottom
+    # of the page so they can be put right in Odoo before an export.
+    to_fix = df[df["Name"] == "N/A"].copy()
+    df = df.drop(columns=["Raw Name"])
     df["First Name"] = df["Name"].str.split().str[0].fillna("")
     mismatches = gender.find_mismatches(df)
     df = gender.apply_gender_fallback(df)
@@ -174,6 +182,30 @@ def render_customers(start_date: date, end_date: date) -> None:
             display_df = display_df.head(MAX_TABLE_ROWS)
         st.caption("Click a column header's filter icon to search or narrow that column.")
         grid.filterable_table(display_df)
+
+    _names_to_fix(to_fix)
+
+
+def _names_to_fix(rows) -> None:
+    """Customer records with no usable name, one row per record, to fix in Odoo."""
+    st.subheader("Customer Names to Fix in Odoo")
+    if rows.empty:
+        st.success("Every customer in this range has a name recorded.", icon="✅")
+        return
+    rows["Name in Odoo"] = rows["Raw Name"].fillna("").str.strip().replace("", "(blank)")
+    fix = (rows.groupby(["Name in Odoo", "Phone"], as_index=False)
+           .agg(Locations=("Location", lambda v: ", ".join(sorted(set(v)))),
+                Orders=("Date", "size"), Total=("Total", "sum"),
+                **{"First Seen": ("Date", "min"), "Last Seen": ("Date", "max")})
+           .sort_values("Last Seen", ascending=False))
+    st.caption(
+        f"{len(fix):,} customer records whose name is only a bank or payment note (KCB, NCBA, "
+        "Co-op, I&M, Stanbic, PDQ…) or is blank. They show as N/A above. Search Odoo by the "
+        "phone number and enter the customer's name; the page picks it up on the next refresh."
+    )
+    with st.container(border=True):
+        grid.filterable_table(fix, currency_columns=("Total",), pinned_columns=("Name in Odoo",),
+                              height=320)
 
 
 render_customers(start_date, end_date)

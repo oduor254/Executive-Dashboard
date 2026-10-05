@@ -778,6 +778,9 @@ SELECT
             THEN 'N/A'
         ELSE cns.full_name
     END                                                             AS "Name",
+    -- As typed at the till; the page cleans it (lib.names), which can recover
+    -- a name the SQL clean-up above drops, e.g. "KCB (Emily)".
+    rp.name                                                         AS "Raw Name",
 
     -- Gender — direct from partner record (male / female / corporate / blank)
     COALESCE(INITCAP(NULLIF(TRIM(rp.gender), '')), 'N/A')           AS "Gender",
@@ -910,7 +913,7 @@ WHERE
 -- SALES/29213, 16 Sep 2026). A customer list reads that as one purchase
 -- of 22, so lines are combined per order and product.
 SELECT
-    "Date", "Name", "Gender", "Phone", "Product", "Color", "Category", "Location",
+    "Date", "Name", "Raw Name", "Gender", "Phone", "Product", "Color", "Category", "Location",
     ROUND(SUM("Total") / NULLIF(SUM("Quantity"), 0), 2)            AS "Price",
     SUM("Quantity")                                                 AS "Quantity",
     SUM("Total")                                                    AS "Total",
@@ -918,7 +921,7 @@ SELECT
 FROM line_rows
 GROUP BY
     order_id, product_id,
-    "Date", "Name", "Gender", "Phone", "Product", "Color", "Category",
+    "Date", "Name", "Raw Name", "Gender", "Phone", "Product", "Color", "Category",
     "Location", "Customer Type"
 ORDER BY MAX(ordered_at) DESC;
 """
