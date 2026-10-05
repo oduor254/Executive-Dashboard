@@ -76,7 +76,7 @@ def _benchmark(df: pd.DataFrame, period) -> pd.Series:
     return shops[list(sp.METRICS)].median(numeric_only=True)
 
 
-def _scorecard(df: pd.DataFrame, loc: str, period, grain: str) -> None:
+def _scorecard(df: pd.DataFrame, loc: str, period, grain: str, compare: str) -> None:
     now = _row(df, loc, period)
     if now is None:
         st.info("No sales for this location in the selected period.")
@@ -89,10 +89,11 @@ def _scorecard(df: pd.DataFrame, loc: str, period, grain: str) -> None:
              ("Avg Order Value", "Avg Order Value")]
     for col, (label, metric) in zip(st.columns(len(tiles)), tiles):
         kind = sp.METRICS[metric][0]
-        delta = sp.change(now[metric], ly[metric] if ly is not None else None)
+        base, name = (prev, f"previous {grain}") if compare == "previous" else (ly, "last year")
+        delta = sp.change(now[metric], base[metric] if base is not None else None)
         with col.container(border=True):
             st.metric(label, sp.fmt(now[metric], kind),
-                      f"{delta:+.1f}% vs last year" if delta is not None else "no data last year",
+                      f"{delta:+.1f}% vs {name}" if delta is not None else f"no data for {name}",
                       delta_color="normal" if delta is not None else "off")
     if pd.notna(now.get("% of Target")):
         expected = share * 100
@@ -158,7 +159,9 @@ def _trend(df: pd.DataFrame, loc: str, grain: str, metric: str, periods: int = 1
     theme.show(fig)
 
 
-def _league(df: pd.DataFrame, period, grain: str) -> None:
+def _league(df: pd.DataFrame, period, grain: str, compare: str) -> None:
+    unit = "week" if grain == "week" else "month"
+    base_name = f"Previous {unit}" if compare == "previous" else f"Same {unit} last year"
     rows = []
     for loc in locations:
         now = _row(df, loc, period)
@@ -168,10 +171,15 @@ def _league(df: pd.DataFrame, period, grain: str) -> None:
         ly = _row(df, loc, sp.last_year(pd.Timestamp(period), grain))
         vs_prev = sp.change(now["Revenue"], prev["Revenue"] if prev is not None else None)
         vs_ly = sp.change(now["Revenue"], ly["Revenue"] if ly is not None else None)
+        base = prev if compare == "previous" else ly
+        chosen = vs_prev if compare == "previous" else vs_ly
+        other = vs_ly if compare == "previous" else vs_prev
+        other_name = "vs Last Year %" if compare == "previous" else f"vs Previous {unit.title()} %"
         rows.append({
             "Location": loc, "Revenue": round(now["Revenue"], 0),
-            "vs Previous %": round(vs_prev, 1) if vs_prev is not None else None,
-            "vs Last Year %": round(vs_ly, 1) if vs_ly is not None else None,
+            f"Revenue {base_name}": round(base["Revenue"], 0) if base is not None else None,
+            "Change %": round(chosen, 1) if chosen is not None else None,
+            other_name: round(other, 1) if other is not None else None,
             "% of Target": round(now["% of Target"], 1) if pd.notna(now["% of Target"]) else None,
             "Orders": int(now["Orders"]), "Bags": int(now["Bags"]),
             "Customers": int(now["Customers"]),
@@ -185,7 +193,7 @@ def _league(df: pd.DataFrame, period, grain: str) -> None:
         return
     table = pd.DataFrame(rows).sort_values("Revenue", ascending=False)
     table.insert(0, "Rank", range(1, len(table) + 1))
-    grid.filterable_table(table, currency_columns=("Revenue", "Avg Order Value"),
+    grid.filterable_table(table, currency_columns=("Revenue", f"Revenue {base_name}", "Avg Order Value"),
                           pinned_columns=("Location",), height=560)
 
 
@@ -219,11 +227,21 @@ def render_period_view(grain: str, location: str) -> None:
     # against every comparison.
     finished = [l for l in labels if "(to date)" not in l]
     default = list(labels).index(finished[0]) if finished else 0
-    choice = st.selectbox("Period", list(labels), index=default, key=f"shopperf_period_{grain}")
+    col_period, col_compare = st.columns([3, 2])
+    with col_period:
+        choice = st.selectbox("Period", list(labels), index=default, key=f"shopperf_period_{grain}")
     period = labels[choice]
+    unit = "week" if grain == "week" else "month"
+    with col_compare:
+        compare_label = st.selectbox(
+            "Compare with", [f"Previous {unit}", f"Same {unit} last year"],
+            key=f"shopperf_compare_{grain}",
+            help="What the headline tiles and the league table's change column compare "
+                 "against. The full metrics table always shows both.")
+    compare = "previous" if compare_label.startswith("Previous") else "last_year"
 
     st.subheader(f"{location} — {choice}")
-    _scorecard(data, location, period, grain)
+    _scorecard(data, location, period, grain, compare)
 
     metric = st.selectbox("Trend", [m for m in sp.METRICS if m != "% of Target"],
                           key=f"shopperf_metric_{grain}")
@@ -231,9 +249,9 @@ def render_period_view(grain: str, location: str) -> None:
         _trend(data, location, grain, metric)
 
     st.subheader("League Table")
-    st.caption(f"Every location for {choice}, ranked by revenue. Changes are revenue against the "
-               "previous period and the same period last year.")
-    _league(data, period, grain)
+    st.caption(f"Every location for {choice}, ranked by revenue. Change % is revenue against "
+               f"the {compare_label.lower()}; the next column gives the other comparison.")
+    _league(data, period, grain, compare)
 
     st.subheader("Improvement Plan")
     st.caption("Generated from the numbers: each location against its target, its previous "
