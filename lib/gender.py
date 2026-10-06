@@ -134,10 +134,10 @@ def find_mismatches(df: pd.DataFrame, n: int | None = None) -> pd.DataFrame:
     learned = _learned()
     # Male/female only: "Corporate" is an account type, not a gender to check.
     recorded = df[df["Gender"].isin(["Male", "Female"])].copy()
+    columns = ["Location", "Name", "Phone", "First Name", "Recorded Gender",
+               "Name-Implied Gender", "Occurrences"]
     if recorded.empty:
-        return recorded.iloc[0:0][["Name", "Phone", "First Name", "Gender"]].rename(
-            columns={"Gender": "Recorded Gender"}
-        ).assign(**{"Name-Implied Gender": [], "Occurrences": []})
+        return pd.DataFrame(columns=columns)
 
     expected = recorded["First Name"].apply(lambda n: _expected(n, lookup, learned))
     recorded["Name-Implied Gender"] = expected.str[0]
@@ -148,19 +148,20 @@ def find_mismatches(df: pd.DataFrame, n: int | None = None) -> pd.DataFrame:
         & (recorded["Name-Implied Gender"] != recorded["Gender"])
     ]
     if mismatches.empty:
-        return mismatches[["Name", "Phone", "First Name", "Gender", "Name-Implied Gender"]].rename(
-            columns={"Gender": "Recorded Gender"}
-        ).assign(Occurrences=[])
+        return pd.DataFrame(columns=columns)
 
     summary = (
         # By phone as well as name: two customers both called "Mercy" are two
         # records to check, and the phone is how they are found in Odoo.
+        # Location first, so each shop can pick out its own records; a
+        # customer served at several shops lists them all.
         mismatches.groupby(["Name", "Phone", "First Name", "Gender", "Name-Implied Gender"])
-        .size()
-        .reset_index(name="Occurrences")
+        .agg(Location=("Location", lambda v: ", ".join(sorted(set(v.dropna())))),
+             Occurrences=("Location", "size"))
+        .reset_index()
         .rename(columns={"Gender": "Recorded Gender"})
-        .sort_values("Occurrences", ascending=False)
-    )
+        .sort_values(["Location", "Occurrences"], ascending=[True, False])
+    )[columns]
     if n is not None:
         summary = summary.head(n)
     return summary
