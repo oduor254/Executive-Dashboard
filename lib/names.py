@@ -100,7 +100,7 @@ _REAL_NAMES = {"gary", "merry", "marty", "marg", "mara", "maria", "marie", "mari
                "christin", "dianna", "dian", "otondi", "rushid", "margy", "nicki", "annex",
                "mofile", "morah", "neri", "sabrah", "roben", "kayte", "vela", "clarks",
                "elis", "even", "elosi", "sherah", "mathia", "lorren", "alica", "magrine",
-               "belly", "jessa", "nanny", "loiza"}
+               "belly", "jessa", "nanny", "loiza", "valessa"}
 
 _CUSTOMER_NAMES = """
 SELECT rp.name
