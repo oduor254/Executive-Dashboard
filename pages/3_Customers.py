@@ -251,7 +251,10 @@ def _phones_to_fix(start_date: date, end_date: date) -> None:
         return
     st.caption(
         f"{len(rows):,} customers served in this range whose number is not 10 digits starting "
-        "07, 01 or 06 (+254, +255 and +256 numbers are read as their 0 form). Ask the attendant "
+        "07, 01 or 06 (+254, +255 and +256 numbers are read as their 0 form). Numbers from "
+        "other countries, with or without the + (91…, 90…, 211…), are accepted as "
+        "international when they have 8 to 15 digits. Numbers starting 00 are always listed "
+        "as typing mistakes. Ask the attendant "
         "in Served By for the right number, or the customer on their next visit, and update it "
         "in Odoo. Likely Number is filled where only the leading 0 is missing. Customers with "
         "no number saved are not listed."
