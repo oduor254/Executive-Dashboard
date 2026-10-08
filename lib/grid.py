@@ -11,7 +11,7 @@ from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 _CURRENCY_FORMATTER = JsCode(
     "function(params) {"
     "  if (params.value === null || params.value === undefined) return '';"
-    "  return 'KES ' + Number(params.value).toLocaleString(undefined, "
+    "  return Number(params.value).toLocaleString(undefined, "
     "    {minimumFractionDigits: 2, maximumFractionDigits: 2});"
     "}"
 )
