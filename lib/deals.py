@@ -644,6 +644,10 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         offer[df["In Bundle"].fillna(False).astype(bool)] = "Combo"
     df["Offer Type"] = offer
 
+    # How many combos each bundle line sold, for the Combo view; the query
+    # provides it, otherwise it is the line's quantity before it becomes bags.
+    if "Bundles" not in df.columns:
+        df["Bundles"] = df["Quantity"].where(is_combo, 0)
     if "In Bundle" in df.columns:
         # The container is priced but holds no bag of its own; the bags are
         # the lines inside it. Counting both read 774 bags for 24 Sep 2026

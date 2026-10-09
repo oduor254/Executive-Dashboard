@@ -3493,6 +3493,11 @@ SELECT
     (COALESCE(pol.is_combo_line, FALSE)
         OR COALESCE(pt.is_combo, FALSE))                            AS "Bundle",
     COALESCE(pol.sub_product_line, FALSE)                           AS "In Bundle",
+    -- Combos sold on a bundle's container line, net of refunds (0 elsewhere).
+    CASE
+        WHEN COALESCE(pol.is_combo_line, FALSE) OR COALESCE(pt.is_combo, FALSE)
+        THEN pol.qty + COALESCE(ref.qty, 0) ELSE 0
+    END                                                             AS "Bundles",
 
     ROUND(
         (pol.price_subtotal_incl + COALESCE(ref.amount, 0))

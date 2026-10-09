@@ -724,6 +724,12 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         if tier_choice != "All Periods":
             filtered = filtered[tier_labels == tier_choice]
 
+    if offer_choice == "Combo" and "Bundles" in filtered.columns:
+        # The combos themselves, not the bags packed inside them: one row per
+        # bundle sold, its Quantity the number of combos.
+        filtered = filtered[filtered["Bundles"] > 0].assign(Quantity=lambda f: f["Bundles"])
+    unit = "combo" if offer_choice == "Combo" else "bag"
+
     if not filtered.empty and offer_choice != "All Offer Types":
         with st.container(border=True):
             top_products = (
@@ -749,8 +755,8 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     if not filtered.empty:
         with st.container(border=True):
             st.caption(
-                f"Bags sold — {offer_choice} · {country_choice} · {location_choice} — "
-                "with total quantity and revenue per bag."
+                f"{unit.title()}s sold — {offer_choice} · {country_choice} · {location_choice} — "
+                f"with total quantity and revenue per {unit}."
             )
             bag_summary = (
                 filtered.groupby("Product", as_index=False)
@@ -766,7 +772,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             grid.filterable_table(bag_summary, currency_columns=("Total",))
 
     with st.container(border=True):
-        display_df = filtered.sort_values("Date", ascending=False)
+        display_df = filtered.drop(columns=["Bundles"], errors="ignore").sort_values("Date", ascending=False)
         if len(display_df) > MAX_TABLE_ROWS:
             st.caption(f"Showing first {MAX_TABLE_ROWS:,} of {len(display_df):,} rows.")
             display_df = display_df.head(MAX_TABLE_ROWS)
