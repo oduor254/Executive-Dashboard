@@ -95,6 +95,37 @@ _DEALS_OF_WEEK_START = (2026, 1)
 _LEGACY_YEAR = 2026
 
 
+# Deal of the Week runs in fixed two-week cycles, Sunday to the Saturday
+# after next, back to back: 27 Sep - 10 Oct 2026, 11 - 24 Oct, 25 Oct - 7 Nov
+# and so on. Each cycle's list comes from the shop posters, uploaded as a
+# batch (rows carry the cycle's first day in "starts"). Counting begins with
+# the 27 September cycle: the earlier month-and-tier lists could not be
+# trusted (Oct 2026), so sales before it are never labelled Deal of the Week.
+DOW_FIRST_CYCLE = pd.Timestamp(2026, 9, 27)
+DOW_CYCLE_DAYS = 14
+
+
+def dow_cycle(when) -> tuple[pd.Timestamp, pd.Timestamp] | None:
+    """(first day, last day) of the Deal of the Week cycle a date falls in,
+    or None before the first cycle."""
+    when = pd.Timestamp(when).normalize()
+    if when < DOW_FIRST_CYCLE:
+        return None
+    start = DOW_FIRST_CYCLE + pd.Timedelta(
+        days=(when - DOW_FIRST_CYCLE).days // DOW_CYCLE_DAYS * DOW_CYCLE_DAYS)
+    return start, start + pd.Timedelta(days=DOW_CYCLE_DAYS - 1)
+
+
+def dow_cycles(start_date, end_date) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Every cycle overlapping [start_date, end_date], oldest first."""
+    out, day = [], pd.Timestamp(max(pd.Timestamp(start_date), DOW_FIRST_CYCLE))
+    while day <= pd.Timestamp(end_date):
+        cycle = dow_cycle(day)
+        out.append(cycle)
+        day = cycle[1] + pd.Timedelta(days=1)
+    return out
+
+
 SYNCED_AT_FILE = "offers_synced_at.json"
 
 # Deal of the Week rotates weekly, so the sheet gains a fresh set of products
@@ -142,6 +173,12 @@ def _with_year(frame: pd.DataFrame) -> pd.DataFrame:
         frame = frame.assign(tier=frame["tier"].fillna("").astype(str))
     elif "location" in frame.columns:
         frame = frame.assign(tier="")
+    # "starts": the first day of a Deal of the Week cycle; blank on the
+    # month-long Singles and Special Offers rows.
+    if "starts" in frame.columns:
+        frame = frame.assign(starts=frame["starts"].fillna("").astype(str))
+    elif "location" in frame.columns:
+        frame = frame.assign(starts="")
     return frame
 
 
@@ -215,7 +252,9 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
         return {(int(r["year"]), r["month"]) for _, r in frame.iterrows()}
 
     has_power = recorded(_load_power_deals())
-    has_dow = recorded(_load_deals_of_week())
+    dow = _load_deals_of_week()
+    has_dow = recorded(dow[dow["starts"] == ""])
+    uploaded = set(dow.loc[dow["starts"] != "", "starts"])
 
     out: list[str] = []
     for p in pd.period_range(pd.Timestamp(start_date), pd.Timestamp(end_date), freq="M"):
@@ -224,7 +263,10 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
         tracked = (p.year, p.month)
 
         missing_power = tracked >= _POWER_DEALS_START and period not in has_power
-        missing_dow = tracked >= _DEALS_OF_WEEK_START and period not in has_dow
+        # Month-long lists (Uganda and Sinza) only for the months before the
+        # two-week cycles; from then on each cycle is checked below.
+        missing_dow = (_DEALS_OF_WEEK_START <= tracked < (DOW_FIRST_CYCLE.year, DOW_FIRST_CYCLE.month)
+                       and period not in has_dow)
 
         if missing_power and missing_dow:
             out.append(f"{label} — no offer lists recorded")
@@ -232,6 +274,11 @@ def periods_without_definitions(start_date, end_date) -> list[str]:
             out.append(f"{label} — no Power Deal list recorded")
         elif missing_dow:
             out.append(f"{label} — no Deal of the Week list recorded")
+    today = pd.Timestamp.today().normalize()
+    for first, last in dow_cycles(start_date, min(pd.Timestamp(end_date), today)):
+        if f"{first:%Y-%m-%d}" not in uploaded:
+            out.append(f"Deal of the Week {_window_label(first, last)} {last.year} — "
+                       "this cycle's deals have not been uploaded yet")
     return out
 
 
@@ -334,9 +381,16 @@ def apply_pricelist_deals(df: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame
             labels.append(None); tiers.append(""); windows.append("")
             continue
         _, _, _, kind, tier, window = hit
-        labels.append(DOW if kind == pricelists.TIER else TIMED_OFFER)
-        tiers.append(tier if kind == pricelists.TIER else "")
-        windows.append(window)
+        if kind == pricelists.TIER:
+            # Deal of the Week is counted from the first two-week cycle on,
+            # and named by its cycle rather than the shop's Odoo window.
+            cycle = dow_cycle(when)
+            if cycle is None:
+                labels.append(None); tiers.append(""); windows.append("")
+                continue
+            labels.append(DOW); tiers.append(""); windows.append(_window_label(*cycle))
+        else:
+            labels.append(TIMED_OFFER); tiers.append(""); windows.append(window)
 
     if "Tier" not in df.columns:
         df["Tier"] = ""
@@ -519,7 +573,7 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     for _, row in dow.iterrows():
         dow_rows.setdefault(
             (int(row["year"]), row["month"], row["product"].lower(), row["location"]), []
-        ).append((row.get("tier", ""), row["price_then"], row["type"]))
+        ).append((row.get("tier", ""), row["price_then"], row["type"], row.get("starts", "")))
 
     window_for = _tier_window_finder()
 
@@ -532,9 +586,16 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
         # the neighbouring months' lists are checked too; the dates decide.
         for year, month in _months_around(when):
             for loc in locations:
-                for tier, price_then, offer_type in dow_rows.get((year, month, product, loc), []):
-                    window = window_for(year, month, tier, loc)
-                    if (window is not None and window[0] <= when <= window[1]
+                for tier, price_then, offer_type, starts in dow_rows.get(
+                        (year, month, product, loc), []):
+                    if starts:
+                        # A two-week cycle: its own dates, no tier.
+                        first = pd.Timestamp(starts)
+                        window = (first, first + pd.Timedelta(days=DOW_CYCLE_DAYS - 1))
+                        tier = ""
+                    else:
+                        window = window_for(year, month, tier, loc)
+                    if (window is not None and window[0] <= when.normalize() <= window[1]
                             and _is_discounted(price, price_then)):
                         return offer_type, tier, window
         return None

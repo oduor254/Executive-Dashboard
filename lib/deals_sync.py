@@ -309,7 +309,11 @@ def sync() -> dict:
     # offers — see deals.classify.
     sheet_year = date.today().year
 
-    all_dow = pd.DataFrame(kenya_dow + uganda_rows + tanzania_rows)
+    # Kenya's Deal of the Week is no longer taken from the sheet: it runs in
+    # two-week cycles whose lists come from the shop posters, uploaded per
+    # cycle (see deals.DOW_FIRST_CYCLE). Writing the sheet's month-and-tier
+    # rows back would bring the old, unreliable lists back with them.
+    all_dow = pd.DataFrame(uganda_rows + tanzania_rows)
     all_dow["year"] = sheet_year
     # Uganda and Tanzania have no tiers; blank means "the whole month".
     all_dow["tier"] = all_dow.get("tier", pd.Series(dtype=str)).fillna("")

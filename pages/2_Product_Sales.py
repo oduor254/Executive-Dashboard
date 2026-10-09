@@ -574,7 +574,8 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             "a sale only counts under an offer if the price actually charged is below "
             "that offer's original price — full-price sales of the same product are "
             "correctly excluded. Power Deals apply to Kenya-side shops only; Deals of "
-            "the Week vary by shop and are curated monthly. Uganda and Sinza use "
+            "the Week vary by shop and run in two-week cycles, Sunday to the Saturday after "
+            "next (27 Sep - 10 Oct 2026, 11 - 24 Oct, …), counted from 27 Sep 2026. Uganda and Sinza use "
             "their own sheets' category names — Singles and Special Offers — rather "
             "than Deal of the Week."
         )
@@ -600,8 +601,8 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                         )
                     result = deals_sync.sync()
                     st.success(
-                        f"Kenya: {result['kenya_dow']} Deal of the Week, {result['kenya_power']} "
-                        f"Power Deal row(s). Uganda: {result['uganda']} row(s). Sinza: "
+                        f"Kenya: {result['kenya_power']} Power Deal row(s) (Deal of the Week "
+                        f"comes from each cycle's posters, not the sheet). Uganda: {result['uganda']} row(s). Sinza: "
                         f"{result['tanzania']} row(s). Written: {result['dow_rows_written']} "
                         f"Deal-of-the-Week-style + {result['power_rows_written']} Power Deal product(s)."
                     )
@@ -710,20 +711,17 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     filtered = filtered if location_choice == "All Locations" else filtered[filtered["Location"] == location_choice]
 
     if offer_choice == deals.DOW and not filtered.empty:
-        # A tier is named with its dates ("Tier 2 · 12-26 Sep"): the same tier
-        # number comes round every month, and at the CBD shops a tier can
-        # start in the month before the one the sheet files it under.
+        # Each two-week cycle by its dates ("27 Sep - 10 Oct").
         tier_labels = (filtered["Tier"].fillna("").astype(str).str.strip() + " · "
                        + filtered["Deal Window"].fillna("").astype(str).str.strip())
-        tier_labels = tier_labels.str.strip(" ·").replace("", "No tier recorded")
+        tier_labels = tier_labels.str.strip(" ·").replace("", "No period recorded")
         options = sorted(tier_labels.unique(),
-                         key=lambda label: (label == "No tier recorded", label))
+                         key=lambda label: (label == "No period recorded", label))
         tier_choice = st.selectbox(
-            "Tier", ["All Tiers"] + options, key="offer_type_tier_filter",
-            help="Deal of the Week runs as Tier 1 then Tier 2 each month; "
-                 "the dates are each shop's own tier window in Odoo.",
+            "Deal Period", ["All Periods"] + options, key="offer_type_tier_filter",
+            help="Deal of the Week runs in two-week cycles, Sunday to the Saturday after next.",
         )
-        if tier_choice != "All Tiers":
+        if tier_choice != "All Periods":
             filtered = filtered[tier_labels == tier_choice]
 
     if not filtered.empty and offer_choice != "All Offer Types":
