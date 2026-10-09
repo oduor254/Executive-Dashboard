@@ -769,6 +769,16 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                 "Total": bag_summary["Total"].sum(),
             }])
             bag_summary = pd.concat([bag_summary, totals_row], ignore_index=True)
+            if offer_choice == "Combo":
+                # Bags sold, with the combos they came in bracketed: "4 (2)"
+                # is two two-bag combos. A combo's bags are the "+" parts of
+                # its name — Odoo's parent link on the bag lines does not
+                # point at the combo line, so it can't be used.
+                bags = bag_summary["Product"].map(deals._combo_bag_count) * bag_summary["Quantity"]
+                bags.iloc[-1] = bags.iloc[:-1].sum()
+                bag_summary["Quantity"] = [f"{b:,.0f} ({q:,.0f})" for b, q in
+                                           zip(bags, bag_summary["Quantity"])]
+                bag_summary = bag_summary.rename(columns={"Quantity": "Bags (Combos)"})
             grid.filterable_table(bag_summary, currency_columns=("Total",))
 
     with st.container(border=True):
