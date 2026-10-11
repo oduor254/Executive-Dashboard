@@ -3801,6 +3801,14 @@ SELECT
         OR i.oos_bag_id IS NOT NULL
         OR i.oos_product_id IS NOT NULL)                            AS "Out of Stock",
     i.response_time_first                                           AS "First Response (min)",
+    -- Feedback link sent to the customer from this chat, and which kind.
+    COALESCE(i.feedback_sent, FALSE)                                AS "Feedback Sent",
+    CASE i.feedback_type
+        WHEN 'after_purchase' THEN 'Purchase Link'
+        WHEN 'enquiry'        THEN 'Enquiry Link'
+        WHEN 'walkin'         THEN 'Walk-in Link'
+        ELSE CASE WHEN i.feedback_sent THEN 'Type not recorded' END
+    END                                                             AS "Feedback Link",
     -- Transfers: where it went, why, and what happened once it got there.
     to_sh.name                                                      AS "Transferred To",
     trs.name                                                        AS "Transfer Reason",

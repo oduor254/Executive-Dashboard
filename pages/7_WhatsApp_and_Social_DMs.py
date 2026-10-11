@@ -56,6 +56,12 @@ FOLLOWUP_COLORS = {
     "Out of Stock": theme.CATEGORICAL[5],       # orange
     "Not Reachable": theme.CATEGORICAL[7],      # red
 }
+FEEDBACK_COLORS = {
+    "Purchase Link": theme.CATEGORICAL[1],      # green
+    "Enquiry Link": theme.CATEGORICAL[0],       # blue
+    "Walk-in Link": theme.CATEGORICAL[3],       # yellow
+    "Type not recorded": theme.OTHER,
+}
 # Sources as both apps name them. Fixed per source so Meta Ad - Instagram is
 # the same colour on the WhatsApp tab and the Social DMs tab.
 SOURCE_COLORS = {
@@ -221,10 +227,10 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
 
     # One sub-section at a time (see _section): only its charts and queries run.
     wa_view = _section(["📊 Dashboard", "💬 Interactions", "🔁 Transfers",
-                        "📭 Out of Stock", "📞 Follow-ups"], "wa_section")
-    t_dash, t_int, t_transfer, t_oos, t_follow = (
+                        "📭 Out of Stock", "📞 Follow-ups", "📝 Feedback"], "wa_section")
+    t_dash, t_int, t_transfer, t_oos, t_follow, t_feedback = (
         wa_view == "📊 Dashboard", wa_view == "💬 Interactions", wa_view == "🔁 Transfers",
-        wa_view == "📭 Out of Stock", wa_view == "📞 Follow-ups")
+        wa_view == "📭 Out of Stock", wa_view == "📞 Follow-ups", wa_view == "📝 Feedback")
 
     if df.empty:
         if not t_follow:
@@ -340,6 +346,9 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                                      "Branch": "BRANCH", "Product Wanted": "PRODUCT WANTED",
                                      "Reason": "REASON"}, pinned_columns=("NAME",))
 
+        if t_feedback:
+            _render_feedback(df)
+
     if t_follow:
         follow = db.run_query(queries.WA_FOLLOWUPS, params)
         lists = db.run_query(queries.WA_FOLLOWUP_LISTS, params).iloc[0]
@@ -374,6 +383,64 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                        pinned_columns=("NAME",))
 
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+
+
+def _render_feedback(df: pd.DataFrame) -> None:
+    """Feedback links sent from WhatsApp chats, by location and kind of link."""
+    sent = df[df["Feedback Sent"]]
+    total = len(df)
+    kinds = sent["Feedback Link"].value_counts()
+    _kpis([
+        ("Feedback Links Sent", f"{len(sent):,}", f"{_pct(len(sent), total)} of interactions"),
+        ("Purchase Links", f"{kinds.get('Purchase Link', 0):,}", "after a purchase"),
+        ("Enquiry Links", f"{kinds.get('Enquiry Link', 0):,}", "after an enquiry"),
+        ("Walk-in Links", f"{kinds.get('Walk-in Link', 0):,}", "to walk-in customers"),
+        ("Locations Sending", f"{sent['Branch'].nunique():,}", f"of {df['Branch'].nunique():,}"),
+    ])
+    if sent.empty:
+        st.info("No feedback links were sent in this date range.")
+        return
+
+    with st.container(border=True):
+        theme.show(_stacked_by_branch(sent, "Feedback Link", FEEDBACK_COLORS,
+                                      "Feedback Links Sent by Location"))
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        _share(sent, "Feedback Link", title="Kind of Link Sent", key="wa_feedback_kind",
+               unit="links", colors=FEEDBACK_COLORS)
+    with c2, st.container(border=True):
+        theme.show(_daily_trend(sent, "Feedback Links per Day", split="Feedback Link",
+                                colors=FEEDBACK_COLORS))
+
+    with st.container(border=True):
+        st.caption("Feedback links by location. Purchases Covered is the share of the "
+                   "location's purchases that got a purchase link.")
+        by_kind = (sent.pivot_table(index="Branch", columns="Feedback Link", values="ID",
+                                    aggfunc="count", fill_value=0))
+        order = [k for k in FEEDBACK_COLORS if k in by_kind.columns]
+        table = by_kind[order].copy()
+        table["Links Sent"] = table.sum(axis=1)
+        base = df.groupby("Branch").agg(Interactions=("ID", "count"),
+                                        Purchases=("Converted", "sum"))
+        table = base.join(table, how="left").fillna(0)
+        table["% of Interactions"] = (table["Links Sent"] / table["Interactions"] * 100).round(1)
+        if "Purchase Link" in table.columns:
+            table["Purchases Covered %"] = (table["Purchase Link"]
+                                            / table["Purchases"].where(table["Purchases"] > 0)
+                                            * 100).round(1).fillna(0)
+        counts = ["Interactions", "Purchases"] + order + ["Links Sent"]
+        table[counts] = table[counts].astype(int)
+        table = (table.reset_index().rename(columns={"Branch": "Location"})
+                 .sort_values("Links Sent", ascending=False))
+        grid.filterable_table(table, pinned_columns=("Location",), height=420)
+
+    with st.container(border=True):
+        branch = st.selectbox("Location", ["All locations"] + sorted(sent["Branch"].unique()),
+                              key="wa_feedback_branch")
+        shown = sent if branch == "All locations" else sent[sent["Branch"] == branch]
+        _table(shown, {"Date": "DATE", "Name": "NAME", "Contact": "CONTACT",
+                       "Branch": "LOCATION", "Activity": "ACTIVITY",
+                       "Feedback Link": "LINK SENT"}, pinned_columns=("NAME",))
 
 
 # ------------------------------------------------------------ Social DMs ---
