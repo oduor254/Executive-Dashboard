@@ -3746,6 +3746,7 @@ ENGAGEMENT_TABLES = [
     "denri_monitor_reason", "denri_monitor_bag", "denri_monitor_transfer_reason",
     "denri_monitor_interaction_oos_product_rel", "denri_monitor_followup",
     "denri_social_dm", "denri_social_channel", "denri_social_shop_outcome",
+    "denri_lead", "denri_lead_branch", "denri_lead_style", "denri_lead_colour",
 ]
 
 ENGAGEMENT_UNREADABLE = """
@@ -4459,4 +4460,87 @@ LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
   AND po.amount_total > 0
   AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""
+
+
+# Walk-in leads (the Leads module, denri.lead): a customer who asked for a bag
+# the shop could not sell them there and then — out of stock, waiting for an
+# offer, coming back later — captured with the bag wanted so the branch can
+# follow up. One row per active lead captured in the range. Status labels are
+# the module's own; "Stage" is its grouping of them (Won, Working, Blocked…).
+# Leads dated after today are left out: a few imported rows carry typo'd
+# future dates (December 2026).
+WALKIN_LEADS = """
+SELECT
+    l.id                                                            AS "ID",
+    l.reference                                                     AS "Reference",
+    l.capture_date                                                  AS "Date",
+    CASE
+        WHEN b.code = 'websitesales' THEN 'Website'
+        WHEN b.code = 'daresalam'    THEN 'Sinza'
+        WHEN b.code = 'ktdashop'     THEN 'Ktda'
+        WHEN b.code = 'staffpos'     THEN 'Staff POS'
+        ELSE COALESCE(INITCAP(b.name), 'Not recorded')
+    END                                                             AS "Branch",
+    COALESCE(NULLIF(TRIM(l.collected_by), ''), NULLIF(TRIM(l.attendant_text), ''),
+             att_p.name, 'Not recorded')                            AS "Attendant",
+    INITCAP(NULLIF(TRIM(l.customer_name), ''))                      AS "Name",
+    NULLIF(TRIM(l.phone), '')                                       AS "Contact",
+    COALESCE(st.name, pt.name, INITCAP(NULLIF(TRIM(l.product_text), '')),
+             'Not recorded')                                        AS "Bag Wanted",
+    COALESCE(c.name, INITCAP(NULLIF(TRIM(l.colour_text), '')))      AS "Colour",
+    COALESCE(l.on_offer, FALSE)                                     AS "On Offer",
+    CASE l.contact_method
+        WHEN 'walk_in'       THEN 'Walk-in'
+        WHEN 'call'          THEN 'Call'
+        WHEN 'whatsapp'      THEN 'WhatsApp'
+        WHEN 'sms'           THEN 'SMS'
+        WHEN 'call_whatsapp' THEN 'Call + WhatsApp'
+        WHEN 'call_sms'      THEN 'Call + SMS'
+        WHEN 'online'        THEN 'Online'
+        WHEN 'instagram'     THEN 'Instagram'
+        WHEN 'facebook'      THEN 'Facebook'
+        ELSE 'Not recorded'
+    END                                                             AS "Contact Method",
+    CASE l.state
+        WHEN 'needs_status'   THEN 'Needs a Status'
+        WHEN 'new'            THEN 'Not Yet Contacted'
+        WHEN 'awaiting_reply' THEN 'Awaiting Reply'
+        WHEN 'followup'       THEN 'Follow Up Later'
+        WHEN 'will_visit'     THEN 'Will Visit Shop'
+        WHEN 'awaiting_stock' THEN 'Awaiting Stock'
+        WHEN 'awaiting_offer' THEN 'Awaiting Offer'
+        WHEN 'purchased'      THEN 'Purchased'
+        WHEN 'unreachable'    THEN 'Not Reachable'
+        WHEN 'not_interested' THEN 'Not Interested'
+        WHEN 'wrong_number'   THEN 'Wrong Number'
+        ELSE COALESCE(l.state, 'Needs a Status')
+    END                                                             AS "Status",
+    CASE l.state_kind
+        WHEN 'won'   THEN 'Won'
+        WHEN 'work'  THEN 'Working'
+        WHEN 'block' THEN 'Blocked'
+        WHEN 'new'   THEN 'New'
+        WHEN 'lost'  THEN 'Lost'
+        ELSE 'No Status'
+    END                                                             AS "Stage",
+    l.state = 'purchased'                                           AS "Converted",
+    COALESCE(l.amount_paid, 0)                                      AS "Amount Paid",
+    l.bought_what_asked                                             AS "Bought What Asked",
+    l.pos_reference                                                 AS "Receipt",
+    LEAST(l.followup_date, COALESCE(l.followup2_date, l.followup_date))
+                                                                    AS "Follow-up Date",
+    NULLIF(TRIM(l.notes), '')                                       AS "Note"
+FROM denri_lead l
+LEFT JOIN denri_lead_branch  b     ON b.id = l.branch_id
+LEFT JOIN denri_lead_style   st    ON st.id = l.style_id
+LEFT JOIN denri_lead_colour  c     ON c.id = l.colour_id
+LEFT JOIN product_product    pp    ON pp.id = l.product_id
+LEFT JOIN product_template   pt    ON pt.id = pp.product_tmpl_id
+LEFT JOIN res_users          att   ON att.id = l.attendant_id
+LEFT JOIN res_partner        att_p ON att_p.id = att.partner_id
+WHERE l.active
+  AND l.capture_date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND l.capture_date <= CURRENT_DATE
+ORDER BY l.capture_date DESC, l.id DESC
 """

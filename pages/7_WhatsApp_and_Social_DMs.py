@@ -1,6 +1,7 @@
-"""WhatsApp & Social DMs — the WhatsApp Monitor and Social DMs apps, side by side.
+"""WhatsApp & Social DMs — the WhatsApp Monitor, Social DMs and walk-in Leads
+apps, side by side.
 
-Two apps, one page, kept apart: each has its own tab with its own touchpoints
+Three apps, one page, kept apart: each has its own tab with its own touchpoints
 and its own numbers, because a WhatsApp interaction and an Instagram DM are
 logged differently and convert through different routes.
 """
@@ -62,6 +63,20 @@ FEEDBACK_COLORS = {
     "Walk-in Link": theme.CATEGORICAL[3],       # yellow
     "Type not recorded": theme.OTHER,
 }
+# The Leads module's stages, in its own order: where each lead stands.
+STAGE_COLORS = {
+    "Won": theme.CATEGORICAL[1],        # green
+    "Working": theme.CATEGORICAL[0],    # blue
+    "Blocked": theme.CATEGORICAL[5],    # orange — waiting on stock or an offer
+    "New": theme.CATEGORICAL[4],        # aqua
+    "No Status": theme.OTHER,
+    "Lost": theme.CATEGORICAL[7],       # red
+}
+OPEN_STAGES = ("Working", "Blocked", "New", "No Status")
+LEADS_COLUMNS = {"Date": "DATE", "Reference": "REF", "Name": "NAME", "Contact": "CONTACT",
+                 "Branch": "LOCATION", "Attendant": "ATTENDANT", "Bag Wanted": "BAG WANTED",
+                 "Colour": "COLOUR", "Status": "STATUS", "Follow-up Date": "FOLLOW-UP",
+                 "Note": "NOTE"}
 # Sources as both apps name them. Fixed per source so Meta Ad - Instagram is
 # the same colour on the WhatsApp tab and the Social DMs tab.
 SOURCE_COLORS = {
@@ -507,8 +522,122 @@ def render_social(start_date: date, end_date: date) -> None:
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 
 
-app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs"], "engagement_app")
+# ----------------------------------------------------------------- Leads ---
+
+@st.fragment()
+def render_leads(start_date: date, end_date: date) -> None:
+    """Walk-in leads: customers who asked for a bag the shop could not sell
+    them there and then, captured so the branch can follow up."""
+    df = db.run_query(queries.WALKIN_LEADS, {"start_date": start_date, "end_date": end_date})
+    view = _section(["📊 Dashboard", "📇 Leads", "📞 Follow-ups Due"], "leads_section")
+    if df.empty:
+        st.info("No leads captured in this date range.")
+        return
+
+    total = len(df)
+    won = df[df["Converted"]]
+    open_ = df[df["Stage"].isin(OPEN_STAGES)]
+    stock = int((df["Status"] == "Awaiting Stock").sum())
+    offer = int((df["Status"] == "Awaiting Offer").sum())
+    lost = int((df["Stage"] == "Lost").sum())
+
+    if view == "📊 Dashboard":
+        _kpis([
+            ("Leads Captured", f"{total:,}", f"{df['Branch'].nunique():,} locations"),
+            ("Purchased", f"{len(won):,}", f"{_pct(len(won), total)} conversion"),
+            ("Still Open", f"{len(open_):,}", f"{_pct(len(open_), total)} of leads"),
+            ("Awaiting Stock", f"{stock:,}", f"+ {offer:,} awaiting an offer"),
+            ("Lost", f"{lost:,}", "unreachable, not interested, wrong number"),
+        ])
+        with st.container(border=True):
+            theme.show(_stacked_by_branch(df, "Stage", STAGE_COLORS,
+                                          "Leads by Location and Stage"))
+        c1, c2 = st.columns(2)
+        with c1, st.container(border=True):
+            _share(df, "Status", title="Where Leads Stand", key="leads_status_kind",
+                   unit="leads", default="Bar")
+        with c2, st.container(border=True):
+            theme.show(_ranked_bar(df["Bag Wanted"].value_counts().head(15),
+                                   "Most-Requested Bags", "leads"))
+        c1, c2 = st.columns(2)
+        with c1, st.container(border=True):
+            theme.show(_daily_trend(df, "Leads Captured per Day by Stage", split="Stage",
+                                    colors=STAGE_COLORS))
+        with c2, st.container(border=True):
+            _share(df, "Contact Method", title="How Leads Were Captured",
+                   key="leads_method_kind", unit="leads", default="Pie")
+
+        with st.container(border=True):
+            st.caption("Leads by location. Conversion % is purchased leads over all leads "
+                       "captured; Amount Paid is what converted leads paid where recorded.")
+            g = df.groupby("Branch")
+            table = pd.DataFrame({
+                "Leads": g.size(),
+                "Purchased": g["Converted"].sum(),
+                "Awaiting Stock": g["Status"].apply(lambda v: (v == "Awaiting Stock").sum()),
+                "Awaiting Offer": g["Status"].apply(lambda v: (v == "Awaiting Offer").sum()),
+                "Working": g["Stage"].apply(lambda v: (v == "Working").sum()),
+                "Not Started": g["Stage"].apply(lambda v: v.isin(["New", "No Status"]).sum()),
+                "Lost": g["Stage"].apply(lambda v: (v == "Lost").sum()),
+                "Amount Paid": g["Amount Paid"].sum(),
+            }).astype({"Purchased": int})
+            table.insert(2, "Conversion %", (table["Purchased"] / table["Leads"] * 100).round(1))
+            table = (table.reset_index().rename(columns={"Branch": "Location"})
+                     .sort_values("Leads", ascending=False))
+            grid.filterable_table(table, currency_columns=("Amount Paid",),
+                                  pinned_columns=("Location",), height=420)
+
+        with st.container(border=True):
+            st.caption("Leads by attendant — who captures leads, and how many of them buy.")
+            g = df.groupby(["Attendant", "Branch"])
+            people = pd.DataFrame({"Leads": g.size(), "Purchased": g["Converted"].sum()})
+            people["Conversion %"] = (people["Purchased"] / people["Leads"] * 100).round(1)
+            people = (people.reset_index().rename(columns={"Branch": "Location"})
+                      .astype({"Purchased": int}).sort_values("Leads", ascending=False))
+            grid.filterable_table(people, pinned_columns=("Attendant",), height=360)
+
+    elif view == "📇 Leads":
+        c1, c2 = st.columns(2)
+        branch = c1.selectbox("Location", ["All locations"] + sorted(df["Branch"].unique()),
+                              key="leads_branch")
+        status = c2.selectbox("Status", ["All statuses"] + sorted(df["Status"].unique()),
+                              key="leads_status")
+        shown = df if branch == "All locations" else df[df["Branch"] == branch]
+        shown = shown if status == "All statuses" else shown[shown["Status"] == status]
+        with st.container(border=True):
+            _table(shown, LEADS_COLUMNS, pinned_columns=("NAME",))
+
+    else:
+        today = pd.Timestamp(date.today())
+        due_on = pd.to_datetime(df["Follow-up Date"])
+        open_mask = df["Stage"].isin(OPEN_STAGES)
+        due = df[open_mask & due_on.notna() & (due_on <= today)].copy()
+        due["Days Overdue"] = (today - pd.to_datetime(due["Follow-up Date"])).dt.days
+        no_date = int((open_mask & due_on.isna()).sum())
+        _kpis([
+            ("Follow-ups Due", f"{len(due):,}", "open leads, follow-up date reached"),
+            ("Overdue a Week+", f"{int((due['Days Overdue'] >= 7).sum()):,}", None),
+            ("Open, No Follow-up Date", f"{no_date:,}", "no date set to call back"),
+            ("Locations", f"{due['Branch'].nunique():,}", "with follow-ups due"),
+        ])
+        if due.empty:
+            st.success("No open leads are past their follow-up date.", icon="✅")
+        else:
+            with st.container(border=True):
+                theme.show(_ranked_bar(due["Branch"].value_counts(),
+                                       "Follow-ups Due by Location", "leads"))
+            with st.container(border=True):
+                _table(due.sort_values("Days Overdue", ascending=False),
+                       {**LEADS_COLUMNS, "Days Overdue": "DAYS OVERDUE"},
+                       pinned_columns=("NAME",))
+    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · leads captured in the "
+               "Leads module (walk-in, call and WhatsApp), by the date they were captured.")
+
+
+app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads"], "engagement_app")
 if app_view == "💬 WhatsApp Monitor":
     render_whatsapp(start_date, end_date)
-else:
+elif app_view == "📱 Social DMs":
     render_social(start_date, end_date)
+else:
+    render_leads(start_date, end_date)
