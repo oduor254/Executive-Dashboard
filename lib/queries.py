@@ -4544,3 +4544,178 @@ WHERE l.active
   AND l.capture_date <= CURRENT_DATE
 ORDER BY l.capture_date DESC, l.id DESC
 """
+
+
+# ---------------------------------------------------------------------------
+# Stock prediction & movement (lib/stock_planning.py).
+#
+# Bags only: product categories under "Bags /", clothing and combo products
+# left out (a combo is stocked as the bags inside it). Every bag on hand is
+# put in one bucket:
+#   Shop       — on a shop's own shelves (<code>/Stock…), named as the sales
+#                queries name the shop;
+#   Transit    — dispatched from the finishing warehouse and on its way to a
+#                shop (FINWH/Goods in Transit/<shop>);
+#   Warehouse  — finished and ready to send: the Validation Warehouse (VLD)
+#                and the Nairobi CBD Warehouse that feeds the town shops;
+#   Production — cut and being made up (Cut Bag Store, CBS).
+# ---------------------------------------------------------------------------
+STOCK_POSITION = r"""
+WITH shops AS (
+    SELECT sw.code,
+           CASE sw.code WHEN 'DAR' THEN 'Sinza'
+                ELSE INITCAP(TRIM(REGEXP_REPLACE(sw.name, '\s*Shop\s*', '', 'gi'))) END AS shop
+    FROM stock_warehouse sw
+    WHERE sw.code IN ('STAR','HAZ','MSA','NAKS','ELD','KSM','MERU','THK','KITE','WEB','NAN',
+                      'KAK','HTN','DAR','UG','KSI','KTDA','BUSIA','RONG')
+),
+placed AS (
+    SELECT sq.product_id, sq.quantity,
+        CASE
+            WHEN s.code IS NOT NULL AND sl.complete_name ILIKE s.code || '/Stock%' THEN 'Shop'
+            WHEN sl.complete_name ILIKE 'FINWH/Goods in Transit/CBD STOCKS%'    THEN 'Warehouse'
+            WHEN sl.complete_name ILIKE 'FINWH/Goods in Transit/%'               THEN 'Transit'
+            WHEN sl.complete_name ILIKE 'VLD/Stock%'
+              OR sl.complete_name ILIKE 'VLD/Dispatch Staging%'
+              OR sl.complete_name ILIKE 'CBD/Stock%'                             THEN 'Warehouse'
+            WHEN sl.complete_name ILIKE 'CBS/Stock%'                             THEN 'Production'
+        END AS bucket,
+        CASE
+            WHEN s.code IS NOT NULL THEN s.shop
+            WHEN sl.complete_name ILIKE 'FINWH/Goods in Transit/%' THEN
+                CASE UPPER(split_part(sl.complete_name, '/', 3))
+                    WHEN 'DAR-ES-ALAM'   THEN 'Sinza'
+                    WHEN 'KTDA SHOP'     THEN 'Ktda'
+                    WHEN 'WEBSITE SALES' THEN 'Website'
+                    ELSE INITCAP(TRIM(REGEXP_REPLACE(split_part(sl.complete_name, '/', 3),
+                                                     '\s*Shop\s*', '', 'gi')))
+                END
+        END AS location
+    FROM stock_quant sq
+    JOIN stock_location sl ON sl.id = sq.location_id
+    LEFT JOIN shops s ON s.code = split_part(sl.complete_name, '/', 1)
+    WHERE sl.usage = 'internal'
+)
+SELECT p.bucket AS "Bucket", COALESCE(p.location, '') AS "Location",
+       p.product_id AS "Product ID", pt.name AS "SKU", pc.name AS "Category",
+       SUM(p.quantity) AS "Qty"
+FROM placed p
+JOIN product_product  pp ON pp.id = p.product_id
+JOIN product_template pt ON pt.id = pp.product_tmpl_id
+JOIN product_category pc ON pc.id = pt.categ_id
+WHERE p.bucket IS NOT NULL
+  AND pc.complete_name ILIKE 'Bags /%' AND pc.complete_name NOT ILIKE '%Clothing%'
+  AND NOT COALESCE(pt.is_combo, FALSE)
+  AND NOT (p.bucket = 'Transit' AND p.location IN ('Marketing', 'Complimentary'))
+GROUP BY 1, 2, 3, 4, 5
+HAVING SUM(p.quantity) <> 0
+"""
+
+# Bags sold per shop and SKU over the last 90 days, net of refunds, with the
+# last 30 days and the month to date alongside, for the moving averages.
+# Bags sold inside a combo count as sales of that bag. Staff POS and flash
+# sales are left out: neither sells from a shop's own stock.
+STOCK_DEMAND = r"""
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id, SUM(r.qty) AS qty
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+),
+lines AS (
+    SELECT
+        CASE
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+            ELSE INITCAP(TRIM(REGEXP_REPLACE(COALESCE(sw.name, sl.complete_name, 'N/A'),
+                                             '\s*Shop\s*', '', 'gi')))
+        END AS location,
+        pol.product_id, pt.name AS sku, pc.name AS category,
+        po.date_order::DATE AS sold_on,
+        pol.qty + COALESCE(ref.qty, 0) AS qty
+    FROM pos_order po
+    JOIN pos_order_line            pol   ON pol.order_id = po.id
+    LEFT JOIN refunded             ref   ON ref.line_id = pol.id
+    JOIN product_product           pp    ON pp.id = pol.product_id
+    JOIN product_template          pt    ON pt.id = pp.product_tmpl_id
+    JOIN product_category          pc    ON pc.id = pt.categ_id
+    LEFT JOIN pos_session          ps    ON ps.id = po.session_id
+    LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
+    LEFT JOIN stock_picking_type   spt   ON spt.id = pconf.picking_type_id
+    LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
+    LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND pol.qty > 0
+      AND po.date_order >= CURRENT_DATE - INTERVAL '90 days'
+      AND pc.complete_name ILIKE 'Bags /%' AND pc.complete_name NOT ILIKE '%Clothing%'
+      AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
+      AND COALESCE(lower(pconf.name), '') <> 'staff pos'
+      AND COALESCE(sw.name, sl.complete_name, '') NOT ILIKE '%Accessories%'
+      AND COALESCE(sw.name, sl.complete_name, '') NOT ILIKE '%Flash Sale%'
+)
+SELECT location AS "Location", product_id AS "Product ID", sku AS "SKU",
+       category AS "Category",
+       SUM(qty)                                                             AS "Sold 90d",
+       COALESCE(SUM(qty) FILTER (WHERE sold_on >= CURRENT_DATE - 30), 0)    AS "Sold 30d",
+       COALESCE(SUM(qty) FILTER (
+           WHERE sold_on >= DATE_TRUNC('month', CURRENT_DATE)), 0)          AS "Sold MTD",
+       MAX(sold_on)                                                         AS "Last Sold"
+FROM lines
+GROUP BY 1, 2, 3, 4
+HAVING SUM(qty) > 0
+"""
+
+# Monthly bag targets (target_qty) per shop for last, this and next month,
+# as the Sales page names the shops.
+STOCK_TARGETS = """
+WITH mapping(location, target_branch) AS (
+    VALUES ('Sinza', 'DAR-ES-ALAM'), ('Website', 'WEBSITE SALES'), ('Ktda', 'KTDA Shop'),
+           ('Hilton', 'HILTON'), ('Busia', 'BUSIA'), ('Kisumu', 'KISUMU'), ('Thika', 'THIKA'),
+           ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
+           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
+           ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
+           ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
+)
+SELECT m.location AS "Location", DATE_TRUNC('month', t.start_date)::DATE AS "Month",
+       SUM(t.target_qty) AS "Target Bags"
+FROM sales_pos_target t
+JOIN mapping m ON t.name ILIKE m.target_branch || '%'
+WHERE t.period = 'month'
+  AND t.start_date >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'
+  AND t.start_date <  DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '2 months'
+GROUP BY 1, 2
+"""
+
+# Daily bags sold over the last 180 days for a set of SKUs (one bag's
+# colours), network-wide or at one shop, for the moving-average chart.
+STOCK_DAILY_SALES = r"""
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id, SUM(r.qty) AS qty
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+)
+SELECT po.date_order::DATE AS "Date",
+       SUM(pol.qty + COALESCE(ref.qty, 0)) AS "Sold"
+FROM pos_order po
+JOIN pos_order_line            pol   ON pol.order_id = po.id
+LEFT JOIN refunded             ref   ON ref.line_id = pol.id
+LEFT JOIN pos_session          ps    ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt   ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND pol.qty > 0
+  AND po.date_order >= CURRENT_DATE - INTERVAL '180 days'
+  AND pol.product_id = ANY(CAST(:product_ids AS INT[]))
+  AND NOT COALESCE(pol.is_combo_line, FALSE)
+  AND COALESCE(lower(pconf.name), '') <> 'staff pos'
+  AND (CAST(:location AS TEXT) = ''
+       OR CASE
+              WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+              ELSE INITCAP(TRIM(REGEXP_REPLACE(COALESCE(sw.name, sl.complete_name, 'N/A'),
+                                               '\s*Shop\s*', '', 'gi')))
+          END = CAST(:location AS TEXT))
+GROUP BY 1
+ORDER BY 1
+"""
