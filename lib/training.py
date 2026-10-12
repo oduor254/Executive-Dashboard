@@ -21,6 +21,7 @@ import re
 import time
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -176,3 +177,58 @@ def load() -> dict:
             responses["Typed Location"])
     return {"responses": responses, "roster": roster, "days": sorted(days),
             "skipped": skipped}
+
+
+def due(data: dict, days: list[date]) -> pd.DataFrame:
+    """Everyone on the team list against every questionnaire in `days`:
+    whether they answered it and, if so, how they did."""
+    roster, responses = data["roster"], data["responses"]
+    rows = roster.assign(_k=1).merge(pd.DataFrame({"Day": days, "_k": 1}), on="_k").drop(columns="_k")
+    cols = ["Score %", "Completion %", "On Time"]
+    if rows.empty or responses.empty:
+        return rows.assign(Answered=False, **{c: np.nan for c in cols})
+    got = responses.set_index(["Email", "Day"])[cols]
+    rows = rows.join(got, on=["Email", "Day"])
+    rows["Answered"] = rows["Score %"].notna() | rows["Completion %"].notna()
+    for c in cols:
+        rows[c] = pd.to_numeric(rows[c].astype(object), errors="coerce")
+    return rows
+
+
+def training_score(rows: pd.DataFrame) -> float:
+    """Every questionnaire due at the score it got, a missed one at 0."""
+    return float(rows["Score %"].fillna(0).mean()) if len(rows) else float("nan")
+
+
+def _tokens(name: str) -> set[str]:
+    return {t for t in re.findall(r"[a-z]+", str(name).lower()) if len(t) >= 3}
+
+
+def _likeness(wanted: set[str], name: str, email: str) -> int:
+    """Name parts shared with a team-list entry, counting a part found inside
+    the email ("tobbyogare@" holds Tobias Ogare's "ogare")."""
+    local = email.split("@")[0].lower()
+    return sum(1 for t in wanted if t in _tokens(name) or t in local)
+
+
+def match_person(name: str, shop: str, roster: pd.DataFrame) -> str | None:
+    """The team-list email of an attendant known by their Odoo name.
+
+    The person at the same shop sharing the most name parts ("Nyangor Laura"
+    is "Laura Nyangor"), counting parts found in their email ("Faith Dawe" is
+    "chun", faithdawe65@). Someone serving away from their listed shop is
+    found anywhere when two or more parts match. None when nothing matches
+    or two people tie.
+    """
+    wanted = _tokens(re.sub(r"\(BA\)", "", str(name)))
+    if not wanted:
+        return None
+
+    def best(frame: pd.DataFrame, minimum: int) -> str | None:
+        scored = sorted(((_likeness(wanted, n, e), e) for n, e in zip(frame["Name"], frame["Email"])),
+                        reverse=True)
+        if not scored or scored[0][0] < minimum or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+            return None
+        return scored[0][1]
+
+    return best(roster[roster["Location"] == shop], 1) or best(roster, 2)

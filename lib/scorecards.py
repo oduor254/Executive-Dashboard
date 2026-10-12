@@ -20,6 +20,10 @@ Built from one row per order (queries.SCORECARD_ORDERS):
                        the share who bought again in this one. For a shop,
                        they came back to that shop; for an attendant, the
                        customers they served came back to the same shop.
+  Sales Training     — the daily questionnaire (lib/training.py): every one
+                       due at the score it got, a missed one at 0, against a
+                       target of 100%. A shop is its whole team list; an
+                       attendant is matched to the list by name at their shop.
   Feedback           — share of the customers served who sent a feedback
                        form on or after the day they bought (Google Sheet,
                        matched on the last nine digits of the phone).
@@ -65,6 +69,7 @@ MEASURES = [
     ("Repeat Score", "Repeat %", "rank"),
     ("Retention Score", "Retention %", "rank"),
     ("Feedback Score", "Feedback of Target %", "target"),
+    ("Training Score", "Training %", "target"),
 ]
 SCORE_COLUMNS = [m[0] for m in MEASURES]
 
@@ -151,7 +156,8 @@ def _score(table: pd.DataFrame, expected: float) -> pd.DataFrame:
 
 
 def shop_cards(df: pd.DataFrame, previous: pd.DataFrame,
-               targets: dict[str, float], expected: float = 1.0) -> pd.DataFrame:
+               targets: dict[str, float], expected: float = 1.0,
+               training: pd.Series | None = None) -> pd.DataFrame:
     g = df.groupby("Location")
     staff = df[df["Served By"] != NOT_RECORDED]
     table = pd.DataFrame({
@@ -172,13 +178,16 @@ def shop_cards(df: pd.DataFrame, previous: pd.DataFrame,
                                       / table["Attendants"].where(table["Attendants"] > 0)).round(0)
     table = table.join(_customer_rates(df, ["Location"]))
     table = table.join(retention(df, previous, ["Location"]))
+    table["Training %"] = (training.reindex(table.index).round(1) if training is not None
+                           else np.nan)
     table = _score(table, expected)
     table = table.reset_index().rename(columns={"index": "Location"})
     return table.sort_values("Score", ascending=False)
 
 
 def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame,
-                    targets: dict[str, float], expected: float = 1.0) -> pd.DataFrame:
+                    targets: dict[str, float], expected: float = 1.0,
+                    training: pd.Series | None = None) -> pd.DataFrame:
     """One row per attendant or BA (per shop they served at).
 
     Each person's revenue target is their shop's target for the period
@@ -213,6 +222,8 @@ def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame,
     table["Basket Size"] = (table["Bags"] / table["Orders"]).round(2)
     table = table.join(_customer_rates(staffed, keys))
     table = table.join(retention(df, previous[previous["Served By"] != NOT_RECORDED], keys))
+    table["Training %"] = (training.reindex(table.index).round(1) if training is not None
+                           else np.nan)
     table = _score(table, expected)
     table = table.reset_index().rename(columns={"Served By": "Attendant / BA"})
     return table.sort_values("Score", ascending=False)

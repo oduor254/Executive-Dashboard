@@ -314,23 +314,9 @@ def _training(start_date: date, end_date: date, location: str) -> None:
     answers = responses[responses["Day"].isin(days)] if not responses.empty else responses
     if location != "All Locations" and not answers.empty:
         answers = answers[answers["Location"] == location]
-
-    # Every team member against every closed questionnaire: answered or not.
-    grid_rows = team.assign(_k=1).merge(pd.DataFrame({"Day": closed, "_k": 1}), on="_k").drop(columns="_k")
-    got = answers.set_index(["Email", "Day"]) if not answers.empty else None
-    if got is not None and not grid_rows.empty:
-        keys = list(zip(grid_rows["Email"], grid_rows["Day"]))
-        pick = lambda col: [got[col].get(k) for k in keys]
-        grid_rows["Answered"] = [k in got.index for k in keys]
-        grid_rows["Score %"] = pick("Score %")
-        grid_rows["Completion %"] = pick("Completion %")
-        grid_rows["On Time"] = pick("On Time")
-    else:
-        grid_rows = grid_rows.assign(Answered=False, **{"Score %": None, "Completion %": None,
-                                                        "On Time": None})
-    for col in ("Score %", "Completion %", "On Time"):
-        grid_rows[col] = pd.to_numeric(grid_rows[col].astype(object), errors="coerce")
-    grid_rows["Answered"] = grid_rows["Answered"].astype(bool)
+    grid_rows = training.due(data, closed)
+    if location != "All Locations":
+        grid_rows = grid_rows[grid_rows["Location"] == location]
 
     expected = len(grid_rows)
     answered = int(grid_rows["Answered"].sum()) if expected else 0
@@ -534,7 +520,7 @@ def _pct(v) -> str:
 
 
 SCORE_COLORS = dict(zip(scorecards.SCORE_COLUMNS,
-                        [theme.CATEGORICAL[i] for i in (0, 2, 1, 3, 4, 6, 5)]))
+                        [theme.CATEGORICAL[i] for i in (0, 2, 1, 3, 4, 6, 5, 7)]))
 
 
 def _cumulative_chart(table: pd.DataFrame, name: str, title: str) -> None:
@@ -567,6 +553,32 @@ def _cumulative_chart(table: pd.DataFrame, name: str, title: str) -> None:
                    "the coloured parts show how much each measure adds to it.")
 
 
+def _training_scores(df: pd.DataFrame, start_date: date, end_date: date):
+    """Sales training per shop and per attendant (matched to the team list
+    by name at their shop) over the closed questionnaires in the range."""
+    try:
+        data = training.load()
+    except training.TrainingUnavailable as exc:
+        return None, None, f"Sales training is left out: {exc}"
+    days = [d for d in data["days"] if start_date <= d <= end_date and d < date.today()]
+    if not days:
+        return None, None, "No daily training questionnaire closed in this range, so Sales "                            "Training is not scored."
+    rows = training.due(data, days)
+    score = lambda v: v.fillna(0).mean() * 1.0
+    shop = rows.groupby("Location")["Score %"].apply(score)
+    by_email = rows.groupby("Email")["Score %"].apply(score)
+    pairs = df.loc[df["Served By"] != scorecards.NOT_RECORDED, ["Served By", "Location"]].drop_duplicates()
+    emails = [training.match_person(p, loc, data["roster"])
+              for p, loc in zip(pairs["Served By"], pairs["Location"])]
+    person = pd.Series([by_email.get(e) if e else None for e in emails],
+                       index=pd.MultiIndex.from_frame(pairs), dtype=float)
+    unmatched = int(pd.isna(person).sum())
+    note = (f"Sales Training covers {len(days)} questionnaire(s). {unmatched} attendant(s)/BA(s) "
+            "could not be matched to the training team list by name and are scored without it."
+            if unmatched else None)
+    return shop, person, note
+
+
 def _score_cards(start_date: date, end_date: date, location: str, person: str) -> None:
     orders = db.run_query(queries.SCORECARD_ORDERS,
                           {"start_date": start_date, "end_date": end_date})
@@ -593,6 +605,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                         {"start_date": start_date, "end_date": end_date})
     basis = targets.basis_for(start_date, end_date, rows)
     basket = f"KES {scorecards.BASKET_TARGET:,}"
+    shop_training, person_training, training_note = _training_scores(df, start_date, end_date)
     due = f"{basis.expected * 100:.0f}% due by now"
 
     view = st.segmented_control("Score cards", ["🏪 Shop Score Cards", "🧑‍💼 Attendant Score Cards"],
@@ -612,13 +625,18 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "or more different days in it. **Retention** is the share of the previous period's "
         f"customers ({prev_start:%d %b} – {prev_end:%d %b}, the same number of days) who bought "
         "again in this one, at the same shop. **Feedback** is the share who sent a feedback "
-        "form on or after the day they bought. Shop phone numbers typed in for customers who "
+        "form on or after the day they bought. **Sales Training** counts every daily "
+        "questionnaire due in the period at the score it got and a missed one at 0, against "
+        "a target of 100%. Shop phone numbers typed in for customers who "
         "gave none are not counted as customers.")
     if feedback_note:
         st.warning(f"Feedback is left out: {feedback_note}", icon="🔒")
+    if training_note:
+        st.caption(training_note)
 
     if view == "🏪 Shop Score Cards":
-        shops = scorecards.shop_cards(df, previous, basis.targets, basis.expected)
+        shops = scorecards.shop_cards(df, previous, basis.targets, basis.expected,
+                                      shop_training)
         shown = shops if location == "All Locations" else shops[shops["Location"] == location]
         _cumulative_chart(shown, "Location", "Cumulative Score Card — Shops")
         for _, r in shown.iterrows():
@@ -642,6 +660,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                 ("Feedback", _pct(r["Feedback %"]),
                  f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
                  if pd.notna(r["Feedback"]) else None),
+                ("Sales Training", _pct(r["Training %"]), "target 100%"),
             ])
         with st.container(border=True):
             st.caption("All shops side by side, best cumulative score first, with each measure's "
@@ -651,14 +670,15 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                        "Corporate Target", "Corporate %", "Orders",
                        "Basket Value", "Basket Value %", "Bags", "Basket Size", "Attendants",
                        "Revenue per Attendant", "Customers", "Repeat %", "Previous Customers",
-                       "Retained", "Retention %", "Feedback", "Feedback %"])
+                       "Retained", "Retention %", "Feedback", "Feedback %", "Training %"])
             grid.filterable_table(shops[cols], pinned_columns=("Location",),
                                   currency_columns=("Revenue", "Target", "Corporate Revenue", "Corporate Target",
                                                     "Basket Value", "Revenue per Attendant"),
                                   height=460)
         return
 
-    people = scorecards.attendant_cards(df, previous, basis.targets, basis.expected)
+    people = scorecards.attendant_cards(df, previous, basis.targets, basis.expected,
+                                         person_training)
     if location != "All Locations":
         people = people[people["Location"] == location]
     st.caption(
@@ -698,6 +718,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
             ("Feedback", _pct(r["Feedback %"]),
              f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
              if pd.notna(r["Feedback"]) else None),
+            ("Sales Training", _pct(r["Training %"]),
+             "target 100%" if pd.notna(r["Training %"]) else "not matched to the training list"),
         ])
     if person == ALL_PEOPLE and len(people) > 12:
         st.caption(f"The 12 best cumulative scores are shown as cards; all {len(people)} are in "
@@ -708,7 +730,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                    "Own Sales", "Orders", "Corporate Revenue", "Corporate Target", "Corporate %",
                    "Basket Value", "Basket Value %",
                    "Bags", "Basket Size", "Customers", "Repeat %", "Previous Customers",
-                   "Retained", "Retention %", "Feedback", "Feedback %"])
+                   "Retained", "Retention %", "Feedback", "Feedback %", "Training %"])
         grid.filterable_table(people[cols], pinned_columns=("Attendant / BA",),
                               currency_columns=("Target", "Revenue", "Revenue per Day", "Corporate Target",
                                                 "Own Sales", "Corporate Revenue", "Basket Value"),
