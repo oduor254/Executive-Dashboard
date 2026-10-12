@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, feedback, filters, grid, queries, scorecards, targets, theme
+from lib import auth, db, feedback, filters, grid, queries, scorecards, targets, theme, training
 
 st.set_page_config(page_title="Shop Attendants · Denri Executive Dashboard",
                    page_icon="🧑‍💼", layout="wide")
@@ -93,7 +93,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     # One section at a time: the feedback section reads the Google Sheet and
     # every converted customer, which is slow, so it only runs when opened.
-    sections = ["Sessions", "Score Cards", "Customer Feedback"]
+    sections = ["Sessions", "Score Cards", "Sales Training", "Customer Feedback"]
     if person != ALL_PEOPLE:
         sections.insert(1, "Sales Breakdown")
     section = st.segmented_control("Section", sections, default=sections[0],
@@ -135,6 +135,8 @@ def render_attendants(start_date: date, end_date: date) -> None:
             grid.filterable_table(pd.concat([per, pd.DataFrame([total])], ignore_index=True),
                                   currency_columns=("Sales Made", "Avg Sale"),
                                   pinned_columns=("Shop Attendant / BA",), height=440)
+    elif section == "Sales Training":
+        _training(start_date, end_date, location)
     elif section == "Score Cards":
         _score_cards(start_date, end_date, location, person)
     elif section == "Sales Breakdown":
@@ -290,6 +292,223 @@ def _person_sales(person: str, start_date: date, end_date: date, location: str) 
             sales[["Date", "Customer", "Phone", "Product", "Quantity", "Total", "Location",
                    "Orders"]],
             currency_columns=("Total",), pinned_columns=("Customer",), height=480)
+
+
+def _training(start_date: date, end_date: date, location: str) -> None:
+    """Daily sales training: who answered the questionnaire, how fully and how well."""
+    try:
+        data = training.load()
+    except training.TrainingUnavailable as exc:
+        st.warning(str(exc), icon="🔒")
+        return
+    roster, responses = data["roster"], data["responses"]
+    today = date.today()
+    days = [d for d in data["days"] if start_date <= d <= end_date]
+    closed = [d for d in days if d < today]
+    if not days:
+        st.info("No questionnaire was given in this date range. Questionnaires on record: "
+                + (", ".join(f"{d:%d %b}" for d in data["days"]) or "none") + ".")
+        return
+
+    team = roster if location == "All Locations" else roster[roster["Location"] == location]
+    answers = responses[responses["Day"].isin(days)] if not responses.empty else responses
+    if location != "All Locations" and not answers.empty:
+        answers = answers[answers["Location"] == location]
+
+    # Every team member against every closed questionnaire: answered or not.
+    grid_rows = team.assign(_k=1).merge(pd.DataFrame({"Day": closed, "_k": 1}), on="_k").drop(columns="_k")
+    got = answers.set_index(["Email", "Day"]) if not answers.empty else None
+    if got is not None and not grid_rows.empty:
+        keys = list(zip(grid_rows["Email"], grid_rows["Day"]))
+        pick = lambda col: [got[col].get(k) for k in keys]
+        grid_rows["Answered"] = [k in got.index for k in keys]
+        grid_rows["Score %"] = pick("Score %")
+        grid_rows["Completion %"] = pick("Completion %")
+        grid_rows["On Time"] = pick("On Time")
+    else:
+        grid_rows = grid_rows.assign(Answered=False, **{"Score %": None, "Completion %": None,
+                                                        "On Time": None})
+    for col in ("Score %", "Completion %", "On Time"):
+        grid_rows[col] = pd.to_numeric(grid_rows[col].astype(object), errors="coerce")
+    grid_rows["Answered"] = grid_rows["Answered"].astype(bool)
+
+    expected = len(grid_rows)
+    answered = int(grid_rows["Answered"].sum()) if expected else 0
+    done = grid_rows[grid_rows["Answered"]] if expected else grid_rows
+    latest = max(closed) if closed else None
+    missed_latest = (grid_rows[(grid_rows["Day"] == latest) & ~grid_rows["Answered"]]
+                     if latest else grid_rows.iloc[0:0])
+    _kpis_row([
+        ("Response Rate", f"{answered / expected * 100:.1f}%" if expected else "—",
+         f"{answered:,} of {expected:,} answers due"),
+        ("Answered Same Day", f"{done['On Time'].mean() * 100:.1f}%"
+         if not done.empty else "—", "of the answers given"),
+        ("Completion Rate", f"{done['Completion %'].mean():.1f}%"
+         if not done.empty else "—", "questions answered"),
+        ("Average Score", f"{done['Score %'].mean():.1f}%"
+         if not done.empty else "—", f"{len(closed)} questionnaires"),
+        (f"Missed {latest:%d %b}" if latest else "Missed Latest",
+         f"{len(missed_latest):,}", f"of {len(team):,} on the team list"),
+    ])
+    notes = [f"{len(days)} questionnaire(s) in this range"]
+    if today in days:
+        notes.append(f"today's ({today:%d %b}) is still open and not counted yet")
+    if data["skipped"]:
+        notes.append("left out: " + "; ".join(data["skipped"]))
+    st.caption(
+        " · ".join(notes) + ". Everyone on the team list is expected to answer every "
+        "questionnaire. An answer counts for the day of its questionnaire whenever it was "
+        "sent; **Answered Same Day** is the share sent that day. **Completion** is the share "
+        "of questions answered; **Score** is the form's own mark.")
+    if not expected:
+        return
+
+    view = st.segmented_control("Training view", ["🏪 By Shop", "✅ Tracker", "🧑‍💼 Respondents"],
+                                default="🏪 By Shop", key="training_view",
+                                label_visibility="collapsed") or "🏪 By Shop"
+    grain = st.radio("Group by", ["Day", "Week (Sun–Sat)", "Month"], horizontal=True,
+                     key="training_grain")
+    period = pd.to_datetime(grid_rows["Day"])
+    if grain == "Day":
+        grid_rows["Period"] = period.dt.strftime("%a %d %b")
+        order = sorted(set(zip(period, grid_rows["Period"])))
+    elif grain == "Month":
+        grid_rows["Period"] = period.dt.strftime("%B %Y")
+        order = sorted(set(zip(period.dt.to_period("M").dt.start_time, grid_rows["Period"])))
+    else:
+        sunday = period - pd.to_timedelta((period.dt.weekday + 1) % 7, unit="D")
+        grid_rows["Period"] = ("Week " + sunday.dt.strftime("%d %b") + " – "
+                               + (sunday + pd.Timedelta(days=6)).dt.strftime("%d %b"))
+        order = sorted(set(zip(sunday, grid_rows["Period"])))
+    periods = list(dict.fromkeys(label for _, label in order))
+
+    def summary(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
+        g = frame.groupby(by)
+        out = pd.DataFrame({
+            "Team": g["Email"].nunique(),
+            "Answers Due": g.size(),
+            "Answered": g["Answered"].sum().astype(int),
+        })
+        out["Missed"] = out["Answers Due"] - out["Answered"]
+        out["Response Rate %"] = (out["Answered"] / out["Answers Due"] * 100).round(1)
+        ans = frame[frame["Answered"]].groupby(by)
+        out["Same Day %"] = (ans["On Time"].mean() * 100).round(1)
+        out["Completion %"] = ans["Completion %"].mean().round(1)
+        out["Average Score %"] = ans["Score %"].mean().round(1)
+        return out
+
+    if view == "🏪 By Shop":
+        shops = summary(grid_rows, ["Location"]).reset_index().sort_values("Response Rate %",
+                                                                           ascending=False)
+        with st.container(border=True):
+            ranked = shops.sort_values("Response Rate %")
+            fig = go.Figure()
+            fig.add_bar(y=ranked["Location"], x=ranked["Response Rate %"], orientation="h",
+                        name="Response rate", marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+                        customdata=ranked[["Answered", "Answers Due"]],
+                        hovertemplate="<b>%{y}</b><br>%{x:.1f}% · %{customdata[0]} of "
+                                      "%{customdata[1]}<extra></extra>")
+            fig.add_bar(y=ranked["Location"], x=ranked["Average Score %"], orientation="h",
+                        name="Average score", marker=dict(color=theme.CATEGORICAL[1], cornerradius=4),
+                        hovertemplate="<b>%{y}</b><br>Average score %{x:.1f}%<extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Response Rate and Average Score by Shop", barmode="group",
+                              hovermode="closest", height=max(420, 40 * len(ranked) + 100))
+            fig.update_xaxes(range=[0, 105], ticksuffix="%")
+            theme.show(fig)
+        with st.container(border=True):
+            st.caption("Each shop over the range, with the total at the bottom.")
+            grid.filterable_table(shops, pinned_columns=("Location",), height=420)
+
+        trend = summary(grid_rows, ["Period"]).reindex(periods).reset_index()
+        with st.container(border=True):
+            fig = go.Figure()
+            for col, color in (("Response Rate %", theme.CATEGORICAL[0]),
+                               ("Completion %", theme.CATEGORICAL[3]),
+                               ("Average Score %", theme.CATEGORICAL[1])):
+                fig.add_scatter(x=trend["Period"], y=trend[col], name=col.replace(" %", ""),
+                                mode="lines+markers", line=dict(color=color, width=2),
+                                hovertemplate=f"%{{x}}<br>{col}: <b>%{{y:.1f}}%</b><extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title=f"Training by {grain.split(' ')[0]}", height=380)
+            fig.update_yaxes(range=[0, 105], ticksuffix="%")
+            theme.show(fig)
+        with st.container(border=True):
+            st.caption(f"Response rate by shop and {grain.split(' ')[0].lower()}.")
+            pivot = (summary(grid_rows, ["Location", "Period"])["Response Rate %"]
+                     .unstack("Period").reindex(columns=periods))
+            pivot["Overall"] = shops.set_index("Location")["Response Rate %"]
+            grid.filterable_table(pivot.reset_index(), pinned_columns=("Location",),
+                                  total=False, height=420)
+
+    elif view == "✅ Tracker":
+        c1, _ = st.columns(2)
+        show = c1.selectbox("Show", ["Everyone", "Missed at least one", "Missed the latest"],
+                            key="training_show")
+        cell = grid_rows.assign(Mark=[
+            (f"{s:.0f}" + ("" if t else " (late)")) if a else "✗ missed"
+            for a, s, t in zip(grid_rows["Answered"], grid_rows["Score %"].fillna(0),
+                               grid_rows["On Time"].fillna(1).astype(bool))])
+        matrix = cell.pivot_table(index=["Name", "Location"], columns="Period", values="Mark",
+                                  aggfunc=lambda v: " / ".join(v)).reindex(columns=periods)
+        per = summary(grid_rows, ["Name", "Location"])[["Answered", "Missed", "Response Rate %"]]
+        matrix = matrix.join(per).reset_index()
+        if show == "Missed at least one":
+            matrix = matrix[matrix["Missed"] > 0]
+        elif show == "Missed the latest":
+            gone = set(zip(missed_latest["Name"], missed_latest["Location"]))
+            matrix = matrix[[(n, l) in gone for n, l in zip(matrix["Name"], matrix["Location"])]]
+        st.caption("Every person on the team list against every questionnaire: the score they "
+                   "got, \"(late)\" when sent after the day, or ✗ when not answered.")
+        with st.container(border=True):
+            grid.filterable_table(matrix.sort_values(["Response Rate %", "Location"]),
+                                  pinned_columns=("Name",), height=520)
+        if not missed_latest.empty:
+            st.subheader(f"Not Yet Answered — {latest:%A %d %b}")
+            with st.container(border=True):
+                grid.filterable_table(
+                    missed_latest[["Name", "Location", "Email"]].sort_values(["Location", "Name"]),
+                    pinned_columns=("Name",), total=False, height=320)
+
+    else:
+        people = summary(grid_rows, ["Name", "Location"])
+        lowest = grid_rows[grid_rows["Answered"]].groupby(["Name", "Location"])["Score %"].min()
+        last = grid_rows[grid_rows["Answered"]].groupby(["Name", "Location"])["Day"].max()
+        people["Lowest Score %"] = lowest
+        people["Last Answered"] = last
+        people = people.drop(columns=["Team"]).reset_index()
+        with st.container(border=True):
+            top = people.sort_values(["Response Rate %", "Average Score %"]).tail(30)
+            fig = go.Figure()
+            fig.add_bar(y=top["Name"] + " — " + top["Location"], x=top["Response Rate %"],
+                        orientation="h", name="Response rate",
+                        marker=dict(color=theme.CATEGORICAL[0], cornerradius=4))
+            fig.add_bar(y=top["Name"] + " — " + top["Location"], x=top["Average Score %"],
+                        orientation="h", name="Average score",
+                        marker=dict(color=theme.CATEGORICAL[1], cornerradius=4))
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Respondents — Response Rate and Average Score",
+                              barmode="group", hovermode="closest",
+                              height=max(420, 34 * len(top) + 100))
+            fig.update_xaxes(range=[0, 105], ticksuffix="%")
+            theme.show(fig)
+        with st.container(border=True):
+            st.caption("Each person on the team list over the range: how many questionnaires "
+                       "they answered, how fully, how well, and when they last answered.")
+            grid.filterable_table(people.sort_values(["Response Rate %", "Average Score %"],
+                                                     ascending=False),
+                                  pinned_columns=("Name",), height=480)
+        strangers = answers[~answers["On List"]] if not answers.empty else answers
+        if not strangers.empty:
+            st.caption(f"{strangers['Email'].nunique()} people answered but are not on the "
+                       "team list (Sheet1): " + ", ".join(sorted(strangers["Email"].unique()))
+                       + ". Add them to the list to track them.")
+
+
+def _kpis_row(items: list[tuple[str, str, str | None]]) -> None:
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
 
 
 def _card(title: str, row: pd.Series, items: list[tuple[str, str, str | None]]) -> None:
