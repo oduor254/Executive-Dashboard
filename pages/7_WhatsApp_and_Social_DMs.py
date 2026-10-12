@@ -67,12 +67,12 @@ FEEDBACK_COLORS = {
 STAGE_COLORS = {
     "Won": theme.CATEGORICAL[1],        # green
     "Working": theme.CATEGORICAL[0],    # blue
-    "Blocked": theme.CATEGORICAL[5],    # orange — waiting on stock or an offer
+    "Waiting on Stock/Offer": theme.CATEGORICAL[5],  # orange — the module calls it Blocked
     "New": theme.CATEGORICAL[4],        # aqua
     "No Status": theme.OTHER,
     "Lost": theme.CATEGORICAL[7],       # red
 }
-OPEN_STAGES = ("Working", "Blocked", "New", "No Status")
+OPEN_STAGES = ("Working", "Waiting on Stock/Offer", "New", "No Status")
 LEADS_COLUMNS = {"Date": "DATE", "Reference": "REF", "Name": "NAME", "Contact": "CONTACT",
                  "Branch": "LOCATION", "Attendant": "ATTENDANT", "Bag Wanted": "BAG WANTED",
                  "Colour": "COLOUR", "Status": "STATUS", "Follow-up Date": "FOLLOW-UP",

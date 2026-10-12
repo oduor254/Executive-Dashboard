@@ -4467,7 +4467,7 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
 # the shop could not sell them there and then — out of stock, waiting for an
 # offer, coming back later — captured with the bag wanted so the branch can
 # follow up. One row per active lead captured in the range. Status labels are
-# the module's own; "Stage" is its grouping of them (Won, Working, Blocked…).
+# the module's own; "Stage" is its grouping of them (Won, Working, Waiting on Stock/Offer…).
 # Leads dated after today are left out: a few imported rows carry typo'd
 # future dates (December 2026).
 WALKIN_LEADS = """
@@ -4519,7 +4519,7 @@ SELECT
     CASE l.state_kind
         WHEN 'won'   THEN 'Won'
         WHEN 'work'  THEN 'Working'
-        WHEN 'block' THEN 'Blocked'
+        WHEN 'block' THEN 'Waiting on Stock/Offer'  -- the module's "Blocked"
         WHEN 'new'   THEN 'New'
         WHEN 'lost'  THEN 'Lost'
         ELSE 'No Status'
