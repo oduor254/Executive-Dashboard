@@ -10,9 +10,14 @@ Built from one row per order (queries.SCORECARD_ORDERS):
                        shared too. Own Sales is what the person keyed.
   Corporate Revenue  — orders for customers recorded as Corporate.
   Basket Value       — revenue per order; Basket Size — bags per order.
-  Repeat Purchase    — share of the customers served who had bought from
-                       Denri before (any shop, any time) or bought again in
-                       the range.
+  Repeat Purchase    — share of the period's unique customers who bought on
+                       two or more different days within the period (two
+                       orders on the same day are one visit).
+  Retention          — of the unique customers who bought in the previous
+                       period of the same length (1-7 Oct before 8-14 Oct),
+                       the share who bought again in this one. For a shop,
+                       they came back to that shop; for an attendant, the
+                       customers they served came back to the same shop.
   Feedback           — share of the customers served who sent a feedback
                        form on or after the day they bought (Google Sheet,
                        matched on the last nine digits of the phone).
@@ -38,21 +43,54 @@ SHOP_NUMBERS = {
 }
 PLACEHOLDER_MIN_RECORDS = 5
 
-# What the overall score is made of: each is ranked against the other shops
-# (or attendants) and the ranks averaged, so 100 is best on every measure.
-SHOP_SCORE = ["Target %", "Basket Value", "Basket Size", "Repeat %", "Feedback %"]
-PERSON_SCORE = ["Revenue per Day", "Basket Value", "Basket Size", "Repeat %", "Feedback %"]
+# Basket value is held to one benchmark everywhere.
+BASKET_TARGET = 3200
+
+# Each measure is scored out of 100, and the cumulative score is their
+# average. Revenue and basket value are scored against their targets (100 =
+# target met, capped there); the rest have no target, so they are scored by
+# rank against the other shops (or attendants): 100 is the best of them.
+#   (score column, measure, how it is scored)
+MEASURES = [
+    ("Revenue Score", "Pace %", "target"),
+    ("Basket Value Score", "Basket Value %", "target"),
+    ("Basket Size Score", "Basket Size", "rank"),
+    ("Repeat Score", "Repeat %", "rank"),
+    ("Retention Score", "Retention %", "rank"),
+    ("Feedback Score", "Feedback %", "rank"),
+]
+SCORE_COLUMNS = [m[0] for m in MEASURES]
 
 
-def prepare(orders: pd.DataFrame) -> pd.DataFrame:
+def placeholders(*frames: pd.DataFrame) -> set[str]:
+    """Phone numbers that are not a customer: the shops' own, and any shared
+    by many customer records."""
+    rows = pd.concat([f[["Customer", "Partner"]] for f in frames], ignore_index=True)
+    shared = rows.groupby("Customer")["Partner"].nunique()
+    return set(shared[shared >= PLACEHOLDER_MIN_RECORDS].index) | SHOP_NUMBERS
+
+
+def prepare(orders: pd.DataFrame, not_customers: set[str]) -> pd.DataFrame:
     df = orders[~orders["Location"].isin(NOT_SHOPS)].copy()
     df["Revenue"] = pd.to_numeric(df["Revenue"], errors="coerce").fillna(0)
     df["Bags"] = pd.to_numeric(df["Bags"], errors="coerce").fillna(0)
-    shared = df.groupby("Customer")["Partner"].nunique()
-    placeholders = set(shared[shared >= PLACEHOLDER_MIN_RECORDS].index) | SHOP_NUMBERS
-    df.loc[df["Customer"].isin(placeholders), "Customer"] = None
-    df["Bought Before"] = df["Bought Before"].fillna(False).astype(bool)
+    df.loc[df["Customer"].isin(not_customers), "Customer"] = None
     return df
+
+
+def retention(current: pd.DataFrame, previous: pd.DataFrame, group: list[str]) -> pd.DataFrame:
+    """Unique customers in the previous period, per group, and how many of
+    them bought again in this period at the same shop."""
+    prev = previous.dropna(subset=["Customer"])[group + ["Customer"]].drop_duplicates()
+    if prev.empty:
+        return pd.DataFrame(columns=["Previous Customers", "Retained", "Retention %"])
+    back = set(zip(current.dropna(subset=["Customer"])["Location"],
+                   current.dropna(subset=["Customer"])["Customer"]))
+    prev["Retained"] = [(loc, c) in back for loc, c in zip(prev["Location"], prev["Customer"])]
+    out = prev.groupby(group).agg(**{"Previous Customers": ("Customer", "size"),
+                                     "Retained": ("Retained", "sum")})
+    out["Retention %"] = (out["Retained"] / out["Previous Customers"] * 100).round(1)
+    return out
 
 
 def gave_feedback(df: pd.DataFrame, responses: pd.DataFrame | None) -> pd.Series:
@@ -69,10 +107,9 @@ def _customer_rates(df: pd.DataFrame, group: list[str]) -> pd.DataFrame:
     """Repeat and feedback rates over the customers in each group."""
     known = df.dropna(subset=["Customer"])
     per = (known.groupby(group + ["Customer"])
-           .agg(repeat=("Bought Before", "any"), orders=("Order ID", "size"),
-                fed=("Feedback", "max"))
+           .agg(days=("Date", "nunique"), fed=("Feedback", "max"))
            .reset_index())
-    per["repeat"] = per["repeat"] | (per["orders"] > 1)
+    per["repeat"] = per["days"] >= 2
     out = per.groupby(group).agg(Customers=("Customer", "size"), Repeat=("repeat", "sum"),
                                  Fed=("fed", "sum"), FedKnown=("fed", "count"))
     out["Repeat %"] = (out["Repeat"] / out["Customers"] * 100).round(1)
@@ -82,14 +119,27 @@ def _customer_rates(df: pd.DataFrame, group: list[str]) -> pd.DataFrame:
     return out[["Customers", "Repeat %", "Feedback", "Feedback %"]]
 
 
-def _score(table: pd.DataFrame, measures: list[str]) -> pd.Series:
-    ranks = [table[m].rank(pct=True) for m in measures if table[m].notna().any()]
-    if not ranks:
-        return pd.Series(np.nan, index=table.index)
-    return (pd.concat(ranks, axis=1).mean(axis=1) * 100).round(0)
+def _score(table: pd.DataFrame, expected: float) -> pd.DataFrame:
+    """A score out of 100 for each measure, and the cumulative score.
+
+    Revenue is judged against the share of the target due by now: eleven
+    days into a 31-day month, 35% of the monthly target is on pace and
+    scores 100.
+    """
+    out = table.copy()
+    out["Pace %"] = (out["Target %"] / expected).round(1) if expected else np.nan
+    for column, measure, how in MEASURES:
+        values = out[measure] if measure in out else pd.Series(np.nan, index=out.index)
+        if how == "target":
+            out[column] = values.clip(upper=100).round(0)
+        else:
+            out[column] = (values.rank(pct=True) * 100).round(0)
+    out["Score"] = out[SCORE_COLUMNS].mean(axis=1).round(0)
+    return out
 
 
-def shop_cards(df: pd.DataFrame, targets: dict[str, float]) -> pd.DataFrame:
+def shop_cards(df: pd.DataFrame, previous: pd.DataFrame,
+               targets: dict[str, float], expected: float = 1.0) -> pd.DataFrame:
     g = df.groupby("Location")
     staff = df[df["Served By"] != NOT_RECORDED]
     table = pd.DataFrame({
@@ -104,17 +154,24 @@ def shop_cards(df: pd.DataFrame, targets: dict[str, float]) -> pd.DataFrame:
     table["Target"] = pd.Series(targets).reindex(table.index)
     table["Target %"] = (table["Revenue"] / table["Target"] * 100).round(1)
     table["Basket Value"] = (table["Revenue"] / table["Orders"]).round(0)
+    table["Basket Value %"] = (table["Basket Value"] / BASKET_TARGET * 100).round(1)
     table["Basket Size"] = (table["Bags"] / table["Orders"]).round(2)
     table["Revenue per Attendant"] = (table["Revenue"]
                                       / table["Attendants"].where(table["Attendants"] > 0)).round(0)
     table = table.join(_customer_rates(df, ["Location"]))
-    table["Score"] = _score(table, SHOP_SCORE)
+    table = table.join(retention(df, previous, ["Location"]))
+    table = _score(table, expected)
     table = table.reset_index().rename(columns={"index": "Location"})
     return table.sort_values("Score", ascending=False)
 
 
-def attendant_cards(df: pd.DataFrame) -> pd.DataFrame:
-    """One row per attendant or BA (per shop they served at)."""
+def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame,
+                    targets: dict[str, float], expected: float = 1.0) -> pd.DataFrame:
+    """One row per attendant or BA (per shop they served at).
+
+    Each person's revenue target is their shop's target for the period
+    shared equally between the attendants and BAs who served there in it.
+    """
     staffed = df[df["Served By"] != NOT_RECORDED]
     team = staffed.groupby(["Location", "Date"])["Served By"].nunique().rename("Team")
     day_rev = df.groupby(["Location", "Date"])["Revenue"].sum().rename("Day Revenue")
@@ -133,10 +190,17 @@ def attendant_cards(df: pd.DataFrame) -> pd.DataFrame:
                                      include_groups=False),
     })
     table["Revenue"] = table["Revenue"].round(0)
+    team_size = staffed.groupby("Location")["Served By"].nunique()
+    shop = table.index.get_level_values("Location")
+    table["Team Size"] = team_size.reindex(shop).to_numpy()
+    table["Target"] = (pd.Series(targets).reindex(shop).to_numpy() / table["Team Size"]).round(0)
+    table["Target %"] = (table["Revenue"] / table["Target"] * 100).round(1)
     table["Revenue per Day"] = (table["Revenue"] / table["Days Worked"]).round(0)
     table["Basket Value"] = (table["Own Sales"] / table["Orders"]).round(0)
+    table["Basket Value %"] = (table["Basket Value"] / BASKET_TARGET * 100).round(1)
     table["Basket Size"] = (table["Bags"] / table["Orders"]).round(2)
     table = table.join(_customer_rates(staffed, keys))
-    table["Score"] = _score(table, PERSON_SCORE)
+    table = table.join(retention(df, previous[previous["Served By"] != NOT_RECORDED], keys))
+    table = _score(table, expected)
     table = table.reset_index().rename(columns={"Served By": "Attendant / BA"})
     return table.sort_values("Score", ascending=False)

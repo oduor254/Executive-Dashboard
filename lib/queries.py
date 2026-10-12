@@ -4729,9 +4729,10 @@ ORDER BY 1
 #   Bags     — bags and gift bags, bags inside a combo counted, the combo
 #              line itself not;
 #   Corporate — the customer is recorded as Corporate (res_partner.gender);
-#   Customer — the last nine digits of the phone, else the partner record;
-#   Bought Before — the customer has an earlier order than this one, at any
-#              shop and any time, which makes this a repeat purchase.
+#   Customer — the last nine digits of the phone, else the partner record,
+#              so one person under two records is still one customer.
+# Repeat purchase and retention are worked out from these rows in
+# lib/scorecards.py (distinct purchase days; this period against the last).
 SCORECARD_ORDERS = r"""
 WITH refunded AS (
     SELECT r.refunded_orderline_id AS line_id,
@@ -4794,25 +4795,13 @@ totals AS (
 keyed AS (
     SELECT o.*, ck.key, COALESCE(ck.corporate, FALSE) AS corporate
     FROM orders o LEFT JOIN customer_key ck ON ck.partner_id = o.partner_id
-),
-earlier AS (
-    -- The customer's first order ever, under any partner record with the
-    -- same phone number.
-    SELECT ck.key, MIN(po.date_order) AS first_order
-    FROM pos_order po
-    JOIN customer_key ck ON ck.partner_id = po.partner_id
-    WHERE po.state IN ('done', 'paid', 'invoiced')
-      AND ck.key IN (SELECT key FROM keyed WHERE key IS NOT NULL)
-    GROUP BY ck.key
 )
 SELECT k.id AS "Order ID", k.sale_date AS "Date", k.location AS "Location",
        k.person AS "Served By", k.key AS "Customer", k.partner_id AS "Partner",
        k.corporate AS "Corporate",
-       ROUND(t.revenue::NUMERIC, 2) AS "Revenue", t.bags AS "Bags",
-       (e.first_order IS NOT NULL AND e.first_order < k.date_order) AS "Bought Before"
+       ROUND(t.revenue::NUMERIC, 2) AS "Revenue", t.bags AS "Bags"
 FROM keyed k
 JOIN totals t ON t.id = k.id
-LEFT JOIN earlier e ON e.key = k.key
 WHERE t.revenue > 0
 """
 
