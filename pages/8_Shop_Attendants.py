@@ -520,7 +520,8 @@ def _pct(v) -> str:
 
 
 SCORE_COLORS = dict(zip(scorecards.SCORE_COLUMNS,
-                        [theme.CATEGORICAL[i] for i in (0, 2, 1, 3, 4, 6, 5, 7)]))
+                        [theme.CATEGORICAL[i] for i in (0, 2, 1, 3, 4, 6, 5, 7)]
+                        + [theme.OTHER]))
 
 
 def _cumulative_chart(table: pd.DataFrame, name: str, title: str) -> None:
@@ -551,6 +552,20 @@ def _cumulative_chart(table: pd.DataFrame, name: str, title: str) -> None:
         theme.show(fig)
         st.caption(f"Each bar is the cumulative score (the average of the {n} measure scores); "
                    "the coloured parts show how much each measure adds to it.")
+
+
+def _response_times(start_date: date, end_date: date) -> pd.DataFrame | None:
+    """Average first response to WhatsApp chats per shop (WhatsApp Monitor)."""
+    try:
+        chats = db.run_query(queries.WA_INTERACTIONS,
+                             {"start_date": start_date, "end_date": end_date})
+    except Exception:  # the dashboard user cannot read the monitor's tables
+        return None
+    if chats.empty:
+        return None
+    chats = chats.assign(Minutes=pd.to_numeric(chats["First Response (min)"], errors="coerce"))
+    g = chats.dropna(subset=["Minutes"]).groupby("Branch")["Minutes"]
+    return pd.DataFrame({"Response Time (min)": g.mean().round(1), "Chats": g.size()})
 
 
 def _training_scores(df: pd.DataFrame, start_date: date, end_date: date):
@@ -627,7 +642,11 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "again in this one, at the same shop. **Feedback** is the share who sent a feedback "
         "form on or after the day they bought. **Sales Training** counts every daily "
         "questionnaire due in the period at the score it got and a missed one at 0, against "
-        "a target of 100%. Shop phone numbers typed in for customers who "
+        "a target of 100%. **WhatsApp Response** (shops only) is the average first reply "
+        "to WhatsApp chats logged in the WhatsApp Monitor, against "
+        f"{scorecards.RESPONSE_TARGET_MIN} minutes: {scorecards.RESPONSE_TARGET_MIN} or "
+        "quicker scores 100, twice as slow scores 50. Shop phone numbers typed in for "
+        "customers who "
         "gave none are not counted as customers.")
     if feedback_note:
         st.warning(f"Feedback is left out: {feedback_note}", icon="🔒")
@@ -636,7 +655,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
 
     if view == "🏪 Shop Score Cards":
         shops = scorecards.shop_cards(df, previous, basis.targets, basis.expected,
-                                      shop_training)
+                                      shop_training, _response_times(start_date, end_date))
         shown = shops if location == "All Locations" else shops[shops["Location"] == location]
         _cumulative_chart(shown, "Location", "Cumulative Score Card — Shops")
         for _, r in shown.iterrows():
@@ -661,6 +680,10 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                  f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
                  if pd.notna(r["Feedback"]) else None),
                 ("Sales Training", _pct(r["Training %"]), "target 100%"),
+                ("WhatsApp Response", "—" if pd.isna(r["Response Time (min)"])
+                 else f"{r['Response Time (min)']:.1f} min",
+                 f"average first reply · target {scorecards.RESPONSE_TARGET_MIN} min · "
+                 f"{r['Chats']:,.0f} chats" if pd.notna(r["Chats"]) else "no chats logged"),
             ])
         with st.container(border=True):
             st.caption("All shops side by side, best cumulative score first, with each measure's "
@@ -670,7 +693,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                        "Corporate Target", "Corporate %", "Orders",
                        "Basket Value", "Basket Value %", "Bags", "Basket Size", "Attendants",
                        "Revenue per Attendant", "Customers", "Repeat %", "Previous Customers",
-                       "Retained", "Retention %", "Feedback", "Feedback %", "Training %"])
+                       "Retained", "Retention %", "Feedback", "Feedback %", "Training %",
+                       "Chats", "Response Time (min)"])
             grid.filterable_table(shops[cols], pinned_columns=("Location",),
                                   currency_columns=("Revenue", "Target", "Corporate Revenue", "Corporate Target",
                                                     "Basket Value", "Revenue per Attendant"),

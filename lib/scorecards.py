@@ -24,6 +24,9 @@ Built from one row per order (queries.SCORECARD_ORDERS):
                        due at the score it got, a missed one at 0, against a
                        target of 100%. A shop is its whole team list; an
                        attendant is matched to the list by name at their shop.
+  Response Time      — shops only: the average first response to WhatsApp
+                       chats in the WhatsApp Monitor, against 3 minutes
+                       (3 or quicker scores 100, 6 minutes scores 50).
   Feedback           — share of the customers served who sent a feedback
                        form on or after the day they bought (Google Sheet,
                        matched on the last nine digits of the phone).
@@ -55,6 +58,8 @@ BASKET_TARGET = 3200
 FEEDBACK_TARGET = 70
 # Corporate sales are expected to be this share of the revenue target.
 CORPORATE_SHARE = 0.10
+# WhatsApp: the average first response, in minutes, a shop should reply within.
+RESPONSE_TARGET_MIN = 3
 
 # Each measure is scored out of 100, and the cumulative score is their
 # average. Revenue and basket value are scored against their targets (100 =
@@ -70,6 +75,7 @@ MEASURES = [
     ("Retention Score", "Retention %", "rank"),
     ("Feedback Score", "Feedback of Target %", "target"),
     ("Training Score", "Training %", "target"),
+    ("Response Score", "Response vs Target %", "target"),
 ]
 SCORE_COLUMNS = [m[0] for m in MEASURES]
 
@@ -157,7 +163,8 @@ def _score(table: pd.DataFrame, expected: float) -> pd.DataFrame:
 
 def shop_cards(df: pd.DataFrame, previous: pd.DataFrame,
                targets: dict[str, float], expected: float = 1.0,
-               training: pd.Series | None = None) -> pd.DataFrame:
+               training: pd.Series | None = None,
+               response: pd.DataFrame | None = None) -> pd.DataFrame:
     g = df.groupby("Location")
     staff = df[df["Served By"] != NOT_RECORDED]
     table = pd.DataFrame({
@@ -180,6 +187,15 @@ def shop_cards(df: pd.DataFrame, previous: pd.DataFrame,
     table = table.join(retention(df, previous, ["Location"]))
     table["Training %"] = (training.reindex(table.index).round(1) if training is not None
                            else np.nan)
+    if response is not None and not response.empty:
+        table = table.join(response)
+        minutes = table["Response Time (min)"]
+        table["Response vs Target %"] = np.where(
+            minutes <= RESPONSE_TARGET_MIN, 100, RESPONSE_TARGET_MIN / minutes * 100).round(1)
+        table.loc[minutes.isna(), "Response vs Target %"] = np.nan
+    else:
+        table["Response Time (min)"] = np.nan
+        table["Chats"] = np.nan
     table = _score(table, expected)
     table = table.reset_index().rename(columns={"index": "Location"})
     return table.sort_values("Score", ascending=False)
