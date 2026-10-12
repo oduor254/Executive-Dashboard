@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, feedback, filters, grid, queries, theme
+from lib import auth, db, feedback, filters, grid, queries, scorecards, targets, theme
 
 st.set_page_config(page_title="Shop Attendants · Denri Executive Dashboard",
                    page_icon="🧑‍💼", layout="wide")
@@ -93,7 +93,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     # One section at a time: the feedback section reads the Google Sheet and
     # every converted customer, which is slow, so it only runs when opened.
-    sections = ["Sessions", "Customer Feedback"]
+    sections = ["Sessions", "Score Cards", "Customer Feedback"]
     if person != ALL_PEOPLE:
         sections.insert(1, "Sales Breakdown")
     section = st.segmented_control("Section", sections, default=sections[0],
@@ -135,6 +135,8 @@ def render_attendants(start_date: date, end_date: date) -> None:
             grid.filterable_table(pd.concat([per, pd.DataFrame([total])], ignore_index=True),
                                   currency_columns=("Sales Made", "Avg Sale"),
                                   pinned_columns=("Shop Attendant / BA",), height=440)
+    elif section == "Score Cards":
+        _score_cards(start_date, end_date, location, person)
     elif section == "Sales Breakdown":
         _person_sales(person, start_date, end_date, location)
     else:
@@ -288,6 +290,127 @@ def _person_sales(person: str, start_date: date, end_date: date, location: str) 
             sales[["Date", "Customer", "Phone", "Product", "Quantity", "Total", "Location",
                    "Orders"]],
             currency_columns=("Total",), pinned_columns=("Customer",), height=480)
+
+
+def _card(title: str, score: float, items: list[tuple[str, str, str | None]]) -> None:
+    """One score card: a heading with the overall score, then its measures."""
+    with st.container(border=True):
+        badge = "—" if pd.isna(score) else f"{score:.0f}/100"
+        st.markdown(f"**{title}** &nbsp; · &nbsp; Score **{badge}**")
+        for row in (items[:4], items[4:]):
+            for col, (label, value, note) in zip(st.columns(4), row):
+                col.metric(label, value, note, delta_color="off")
+
+
+def _money(v) -> str:
+    return "—" if pd.isna(v) else f"KES {v:,.0f}"
+
+
+def _pct(v) -> str:
+    return "—" if pd.isna(v) else f"{v:.1f}%"
+
+
+def _score_cards(start_date: date, end_date: date, location: str, person: str) -> None:
+    orders = db.run_query(queries.SCORECARD_ORDERS,
+                          {"start_date": start_date, "end_date": end_date})
+    if orders.empty:
+        st.info("No sales in this date range.")
+        return
+    df = scorecards.prepare(orders)
+    try:
+        responses = feedback.load()
+        feedback_note = None
+    except feedback.FeedbackUnavailable as exc:
+        responses, feedback_note = None, str(exc)
+    df["Feedback"] = scorecards.gave_feedback(df, responses)
+    rows = db.run_query(queries.SALES_TARGET_ROWS,
+                        {"start_date": start_date, "end_date": end_date})
+    basis = targets.basis_for(start_date, end_date, rows)
+
+    view = st.segmented_control("Score cards", ["🏪 Shop Score Cards", "🧑‍💼 Attendant Score Cards"],
+                                default="🏪 Shop Score Cards", key="score_view",
+                                label_visibility="collapsed") or "🏪 Shop Score Cards"
+    st.caption(
+        "**Score** ranks each card against the others on every measure and averages the ranks — "
+        f"100 is best on all of them. Shops are scored on {', '.join(scorecards.SHOP_SCORE)}; "
+        f"attendants on {', '.join(scorecards.PERSON_SCORE)}. Repeat Purchase is the share of "
+        "customers served who had bought from Denri before (any shop) or bought again in the "
+        "range; Feedback is the share who sent a feedback form on or after the day they bought. "
+        "Shop phone numbers typed in for customers who gave none are not counted as customers.")
+    if feedback_note:
+        st.warning(f"Feedback is left out: {feedback_note}", icon="🔒")
+
+    if view == "🏪 Shop Score Cards":
+        shops = scorecards.shop_cards(df, basis.targets)
+        shown = shops if location == "All Locations" else shops[shops["Location"] == location]
+        st.caption(f"Target is the {basis.label}.")
+        for _, r in shown.iterrows():
+            _card(r["Location"], r["Score"], [
+                ("Revenue", _money(r["Revenue"]),
+                 f"{_pct(r['Target %'])} of target" if pd.notna(r["Target %"]) else None),
+                ("Corporate Revenue", _money(r["Corporate Revenue"]),
+                 _pct(r["Corporate Revenue"] / r["Revenue"] * 100) + " of revenue"
+                 if r["Revenue"] else None),
+                ("Basket Value", _money(r["Basket Value"]), f"{int(r['Orders']):,} orders"),
+                ("Basket Size", f"{r['Basket Size']:.2f} bags", f"{r['Bags']:,.0f} bags"),
+                ("Revenue per Attendant", _money(r["Revenue per Attendant"]),
+                 f"{int(r['Attendants'])} attendants/BAs"),
+                ("Repeat Purchase", _pct(r["Repeat %"]),
+                 f"of {r['Customers']:,.0f} customers" if pd.notna(r["Customers"]) else None),
+                ("Feedback", _pct(r["Feedback %"]),
+                 f"{r['Feedback']:,.0f} customers" if pd.notna(r["Feedback"]) else None),
+                ("Target", _money(r["Target"]), None),
+            ])
+        with st.container(border=True):
+            st.caption("All shops side by side, best score first, with the total at the bottom.")
+            cols = ["Location", "Score", "Revenue", "Target", "Target %", "Corporate Revenue",
+                    "Orders", "Basket Value", "Bags", "Basket Size", "Attendants",
+                    "Revenue per Attendant", "Customers", "Repeat %", "Feedback", "Feedback %"]
+            grid.filterable_table(shops[cols], pinned_columns=("Location",),
+                                  currency_columns=("Revenue", "Target", "Corporate Revenue",
+                                                    "Basket Value", "Revenue per Attendant"),
+                                  height=460)
+        return
+
+    people = scorecards.attendant_cards(df)
+    if location != "All Locations":
+        people = people[people["Location"] == location]
+    st.caption(
+        "**Revenue** shares each shop's daily revenue equally between everyone who served "
+        "there that day (attendants and BAs recorded on its orders), so a shop's sales are "
+        "credited to the whole team on duty. **Own Sales**, basket value and basket size are "
+        "from the orders the person served themselves.")
+    if people.empty:
+        st.info("No attendants or BAs recorded in this range.")
+        return
+    chosen = people if person == ALL_PEOPLE else people[people["Attendant / BA"] == person]
+    for _, r in chosen.head(12).iterrows():
+        peers = people[people["Location"] == r["Location"]]
+        avg = lambda c: peers[c].mean()
+        vs = lambda c, fmt: f"shop avg {fmt(avg(c))}"
+        _card(f"{r['Attendant / BA']} — {r['Location']}", r["Score"], [
+            ("Revenue (shared)", _money(r["Revenue"]), f"{int(r['Days Worked'])} days worked"),
+            ("Revenue per Day", _money(r["Revenue per Day"]), vs("Revenue per Day", _money)),
+            ("Own Sales", _money(r["Own Sales"]), f"{int(r['Orders']):,} orders served"),
+            ("Corporate Revenue", _money(r["Corporate Revenue"]), None),
+            ("Basket Value", _money(r["Basket Value"]), vs("Basket Value", _money)),
+            ("Basket Size", f"{r['Basket Size']:.2f} bags",
+             vs("Basket Size", lambda v: f"{v:.2f}")),
+            ("Repeat Purchase", _pct(r["Repeat %"]), vs("Repeat %", _pct)),
+            ("Feedback", _pct(r["Feedback %"]),
+             f"{r['Feedback']:,.0f} customers" if pd.notna(r["Feedback"]) else None),
+        ])
+    if person == ALL_PEOPLE and len(people) > 12:
+        st.caption(f"The 12 best scores are shown as cards; all {len(people)} are in the table. "
+                   "Pick a person at the top to see their card.")
+    with st.container(border=True):
+        cols = ["Attendant / BA", "Location", "Score", "Days Worked", "Revenue", "Revenue per Day",
+                "Own Sales", "Orders", "Corporate Revenue", "Basket Value", "Bags", "Basket Size",
+                "Customers", "Repeat %", "Feedback", "Feedback %"]
+        grid.filterable_table(people[cols], pinned_columns=("Attendant / BA",),
+                              currency_columns=("Revenue", "Revenue per Day", "Own Sales",
+                                                "Corporate Revenue", "Basket Value"),
+                              height=460)
 
 
 render_attendants(start_date, end_date)

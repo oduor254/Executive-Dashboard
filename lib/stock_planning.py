@@ -48,6 +48,9 @@ IDLE = "No Sales in 90 Days"
 STATUS_ORDER = [OUT, BELOW, OK, ABOVE, SLOW, IDLE]
 
 TARGET_BASIS = "Targets"
+CUSTOM_PERIOD = "Custom range"
+PERIOD_COLUMNS = {"Last 90 days": "Sold 90d", "Last 30 days": "Sold 30d",
+                  "Month to date": "Sold MTD", CUSTOM_PERIOD: "Sold"}
 TREND_BASIS = "Sales trend"
 
 
@@ -262,8 +265,7 @@ def network_report(planned: pd.DataFrame, position: pd.DataFrame, by: str = "SKU
 
 def top_sellers(demand: pd.DataFrame, period: str, by: str) -> pd.DataFrame:
     """Share of bags sold, largest first, with the running share."""
-    col = {"Last 90 days": "Sold 90d", "Last 30 days": "Sold 30d",
-           "Month to date": "Sold MTD"}[period]
+    col = PERIOD_COLUMNS.get(period, "Sold")
     d = demand.assign(Bag=demand["SKU"].map(family))
     ranked = d.groupby(by, as_index=False)[col].sum().rename(columns={col: "Bags Sold"})
     ranked = ranked[ranked["Bags Sold"] > 0].sort_values("Bags Sold", ascending=False)

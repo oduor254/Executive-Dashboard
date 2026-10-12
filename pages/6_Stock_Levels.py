@@ -3,7 +3,7 @@ need: top sellers, the stock report and min/max levels against the targets
 (Stock Prediction & Movement)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -222,13 +222,26 @@ def render_prediction() -> None:
 
 def _top_sellers(position: pd.DataFrame, demand: pd.DataFrame, shops: list[str]) -> None:
     c1, c2, c3 = st.columns(3)
-    period = c1.selectbox("Period", ["Last 90 days", "Last 30 days", "Month to date"],
-                          key="top_period")
+    period = c1.selectbox("Period", list(sp.PERIOD_COLUMNS), key="top_period")
     level = c2.selectbox("Show by", [VIEW_BAG, VIEW_SKU], key="top_level")
     shop = c3.selectbox("Location", ["All locations"] + shops, key="top_location")
     by = "Bag" if level == VIEW_BAG else "SKU"
+    label = period.lower()
+    sold = demand
+    if period == sp.CUSTOM_PERIOD:
+        today = date.today()
+        picked = st.date_input("Custom range", value=(today - timedelta(days=13), today),
+                               max_value=today, key="top_custom")
+        if not (isinstance(picked, tuple) and len(picked) == 2):
+            st.info("Pick the last day of the range.")
+            return
+        sold = db.run_query(queries.STOCK_SOLD_RANGE,
+                            {"start_date": picked[0], "end_date": picked[1]})
+        sold = sold[sold["Location"].isin(shops)]
+        label = f"{picked[0]:%d %b} – {picked[1]:%d %b %Y}"
 
-    scope = demand if shop == "All locations" else demand[demand["Location"] == shop]
+    scope = sold if shop == "All locations" else sold[sold["Location"] == shop]
+    rate_scope = demand if shop == "All locations" else demand[demand["Location"] == shop]
     ranked = sp.top_sellers(scope, period, by)
     if ranked.empty:
         st.info("No bags sold in this period.")
@@ -240,7 +253,8 @@ def _top_sellers(position: pd.DataFrame, demand: pd.DataFrame, shops: list[str])
         held = held[held["Location"] == shop]
     on_hand = held.groupby(by)["Qty"].sum()
     in_wh = pos[pos["Bucket"] == "Warehouse"].groupby(by)["Qty"].sum()
-    rate = scope.assign(Bag=scope["SKU"].map(sp.family)).groupby(by)["Sold 90d"].sum() / sp.WINDOW_DAYS
+    rate = (rate_scope.assign(Bag=rate_scope["SKU"].map(sp.family)).groupby(by)["Sold 90d"].sum()
+            / sp.WINDOW_DAYS)
     ranked["On Hand at Shops"] = ranked[by].map(on_hand).fillna(0).clip(lower=0)
     ranked["In Warehouse"] = ranked[by].map(in_wh).fillna(0).clip(lower=0)
     ranked["Daily Rate (90d)"] = ranked[by].map(rate).fillna(0).round(1)
@@ -251,7 +265,7 @@ def _top_sellers(position: pd.DataFrame, demand: pd.DataFrame, shops: list[str])
     n80 = int((ranked["Cumulative %"] < 80).sum()) + 1
     top = lambda n: ranked["Share %"].head(n).sum()
     _kpis([
-        ("Bags Sold", f"{ranked['Bags Sold'].sum():,.0f}", period.lower()),
+        ("Bags Sold", f"{ranked['Bags Sold'].sum():,.0f}", label),
         ("Top 5 Share", f"{top(5):.1f}%", "of bags sold"),
         ("Top 10 Share", f"{top(10):.1f}%", "of bags sold"),
         ("Top 20 Share", f"{top(20):.1f}%", "of bags sold"),
@@ -271,7 +285,7 @@ def _top_sellers(position: pd.DataFrame, demand: pd.DataFrame, shops: list[str])
                         mode="lines+markers", line=dict(color=theme.CATEGORICAL[5], width=2),
                         hovertemplate="Top %{x}: <b>%{y:.1f}%</b> of bags sold<extra></extra>")
         theme.apply_layout(fig, show_legend=True)
-        fig.update_layout(title=f"Share of Bags Sold — Top 25, {period.lower()} · {shop}",
+        fig.update_layout(title=f"Share of Bags Sold — Top 25, {label} · {shop}",
                           height=440, hovermode="closest",
                           yaxis=dict(title="Share %", ticksuffix="%"),
                           yaxis2=dict(overlaying="y", side="right", range=[0, 105],
@@ -284,8 +298,7 @@ def _top_sellers(position: pd.DataFrame, demand: pd.DataFrame, shops: list[str])
         charts.share_chart(data, title="Top 10 Against the Rest", key="top_share_kind",
                            unit="bags", default="Doughnut")
     with c2, st.container(border=True):
-        cats = (scope.groupby("Category")[{"Last 90 days": "Sold 90d", "Last 30 days": "Sold 30d",
-                                           "Month to date": "Sold MTD"}[period]].sum())
+        cats = scope.groupby("Category")[sp.PERIOD_COLUMNS[period]].sum()
         data = charts.fold_other(cats.index.str.replace("Bags / ", ""), cats.values)
         charts.share_chart(data, title="Share by Category", key="top_cat_kind", unit="bags",
                            default="Bar")

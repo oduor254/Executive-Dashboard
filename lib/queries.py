@@ -4719,3 +4719,142 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
 GROUP BY 1
 ORDER BY 1
 """
+
+
+# Score cards (Shop Attendants page): one row per order in the range with
+# its revenue, bags, customer and whoever served it.
+#   Revenue  — every line except delivery fees, in KES at the order's own
+#              rate, net of what was later refunded against it (like the
+#              Sales page);
+#   Bags     — bags and gift bags, bags inside a combo counted, the combo
+#              line itself not;
+#   Corporate — the customer is recorded as Corporate (res_partner.gender);
+#   Customer — the last nine digits of the phone, else the partner record;
+#   Bought Before — the customer has an earlier order than this one, at any
+#              shop and any time, which makes this a repeat purchase.
+SCORECARD_ORDERS = r"""
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id,
+           SUM(r.qty) AS qty, SUM(r.price_subtotal_incl) AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+),
+customer_key AS (
+    SELECT rp.id AS partner_id,
+           CASE WHEN LENGTH(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g')) >= 9
+                THEN RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9)
+                ELSE 'partner:' || rp.id END AS key,
+           LOWER(TRIM(COALESCE(rp.gender, ''))) = 'corporate' AS corporate
+    FROM res_partner rp
+),
+orders AS (
+    SELECT
+        po.id, po.date_order, po.date_order::DATE AS sale_date, po.partner_id,
+        CASE
+            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+                THEN 'Website'
+            WHEN lower(pconf.name) = 'staff pos' THEN 'Staff POS'
+            WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+            ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                    COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+        END AS location,
+        CASE WHEN NULLIF(TRIM(ba.name), '') IS NOT NULL THEN TRIM(ba.name) || ' (BA)'
+             ELSE COALESCE(NULLIF(TRIM(att_p.name), ''), 'Not recorded') END AS person,
+        COALESCE(NULLIF(po.currency_rate, 0), 1) AS rate
+    FROM pos_order po
+    LEFT JOIN pos_session          ps     ON ps.id = po.session_id
+    LEFT JOIN pos_config           pconf  ON pconf.id = ps.config_id
+    LEFT JOIN stock_picking_type   spt    ON spt.id = pconf.picking_type_id
+    LEFT JOIN stock_warehouse      sw     ON sw.id = spt.warehouse_id
+    LEFT JOIN stock_location       sl     ON sl.id = spt.default_location_src_id
+    LEFT JOIN res_users            att    ON att.id = po.attendant_id
+    LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
+    LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+),
+totals AS (
+    SELECT o.id,
+           SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%'
+                    THEN pol.price_subtotal_incl + COALESCE(ref.amount, 0) ELSE 0 END) / MAX(o.rate)
+                                                                    AS revenue,
+           SUM(CASE WHEN (pc.complete_name ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
+                     AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
+                    THEN pol.qty + COALESCE(ref.qty, 0) ELSE 0 END) AS bags
+    FROM orders o
+    JOIN pos_order_line       pol ON pol.order_id = o.id
+    LEFT JOIN refunded        ref ON ref.line_id = pol.id
+    JOIN product_product      pp  ON pp.id = pol.product_id
+    JOIN product_template     pt  ON pt.id = pp.product_tmpl_id
+    LEFT JOIN product_category pc ON pc.id = pt.categ_id
+    WHERE pol.qty > 0
+    GROUP BY o.id
+),
+keyed AS (
+    SELECT o.*, ck.key, COALESCE(ck.corporate, FALSE) AS corporate
+    FROM orders o LEFT JOIN customer_key ck ON ck.partner_id = o.partner_id
+),
+earlier AS (
+    -- The customer's first order ever, under any partner record with the
+    -- same phone number.
+    SELECT ck.key, MIN(po.date_order) AS first_order
+    FROM pos_order po
+    JOIN customer_key ck ON ck.partner_id = po.partner_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND ck.key IN (SELECT key FROM keyed WHERE key IS NOT NULL)
+    GROUP BY ck.key
+)
+SELECT k.id AS "Order ID", k.sale_date AS "Date", k.location AS "Location",
+       k.person AS "Served By", k.key AS "Customer", k.partner_id AS "Partner",
+       k.corporate AS "Corporate",
+       ROUND(t.revenue::NUMERIC, 2) AS "Revenue", t.bags AS "Bags",
+       (e.first_order IS NOT NULL AND e.first_order < k.date_order) AS "Bought Before"
+FROM keyed k
+JOIN totals t ON t.id = k.id
+LEFT JOIN earlier e ON e.key = k.key
+WHERE t.revenue > 0
+"""
+
+
+# Bags sold per shop and SKU between two dates, counted as STOCK_DEMAND
+# counts them — for Top Sellers over a custom period.
+STOCK_SOLD_RANGE = r"""
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id, SUM(r.qty) AS qty
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+)
+SELECT
+    CASE
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+        ELSE INITCAP(TRIM(REGEXP_REPLACE(COALESCE(sw.name, sl.complete_name, 'N/A'),
+                                         '\s*Shop\s*', '', 'gi')))
+    END                                    AS "Location",
+    pol.product_id                         AS "Product ID",
+    pt.name                                AS "SKU",
+    pc.name                                AS "Category",
+    SUM(pol.qty + COALESCE(ref.qty, 0))    AS "Sold"
+FROM pos_order po
+JOIN pos_order_line            pol   ON pol.order_id = po.id
+LEFT JOIN refunded             ref   ON ref.line_id = pol.id
+JOIN product_product           pp    ON pp.id = pol.product_id
+JOIN product_template          pt    ON pt.id = pp.product_tmpl_id
+JOIN product_category          pc    ON pc.id = pt.categ_id
+LEFT JOIN pos_session          ps    ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt   ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND pol.qty > 0
+  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND pc.complete_name ILIKE 'Bags /%' AND pc.complete_name NOT ILIKE '%Clothing%'
+  AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
+  AND COALESCE(lower(pconf.name), '') <> 'staff pos'
+  AND COALESCE(sw.name, sl.complete_name, '') NOT ILIKE '%Accessories%'
+  AND COALESCE(sw.name, sl.complete_name, '') NOT ILIKE '%Flash Sale%'
+GROUP BY 1, 2, 3, 4
+HAVING SUM(pol.qty + COALESCE(ref.qty, 0)) > 0
+"""
