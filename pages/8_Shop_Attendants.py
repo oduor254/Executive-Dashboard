@@ -382,9 +382,10 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "Every measure is scored out of 100 and the **cumulative score** is their average. "
         f"**Revenue** is scored against the part of the target due by now ({basis.label}; "
         f"{due}) and **basket value** against {basket} for every shop and attendant — 100 "
-        "means on target. Basket size, "
-        "repeat purchase, retention and feedback have no target, so they are scored by rank: "
-        "100 is the best shop (or attendant). Customers are unique people, known by phone "
+        f"means on target. **Feedback** is scored against {scorecards.FEEDBACK_TARGET}% of the "
+        "customers served sending a form (80% or more scores 100). Basket size, repeat "
+        "purchase and retention have no target, so they are scored by rank: 100 is the best "
+        "shop (or attendant). Customers are unique people, known by phone "
         "number. **Repeat Purchase** is the share of the period's customers who bought on two "
         "or more different days in it. **Retention** is the share of the previous period's "
         f"customers ({prev_start:%d %b} – {prev_end:%d %b}, the same number of days) who bought "
@@ -417,7 +418,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                  f"{r['Retained']:,.0f} of {r['Previous Customers']:,.0f} came back"
                  if pd.notna(r["Previous Customers"]) else None),
                 ("Feedback", _pct(r["Feedback %"]),
-                 f"{r['Feedback']:,.0f} customers" if pd.notna(r["Feedback"]) else None),
+                 f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
+                 if pd.notna(r["Feedback"]) else None),
             ])
         with st.container(border=True):
             st.caption("All shops side by side, best cumulative score first, with each measure's "
@@ -468,7 +470,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
              f"{r['Retained']:,.0f} of {r['Previous Customers']:,.0f} came back"
              if pd.notna(r["Previous Customers"]) else "no customers last period"),
             ("Feedback", _pct(r["Feedback %"]),
-             f"{r['Feedback']:,.0f} customers" if pd.notna(r["Feedback"]) else None),
+             f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
+             if pd.notna(r["Feedback"]) else None),
         ])
     if person == ALL_PEOPLE and len(people) > 12:
         st.caption(f"The 12 best cumulative scores are shown as cards; all {len(people)} are in "

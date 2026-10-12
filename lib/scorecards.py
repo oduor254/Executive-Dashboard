@@ -43,8 +43,10 @@ SHOP_NUMBERS = {
 }
 PLACEHOLDER_MIN_RECORDS = 5
 
-# Basket value is held to one benchmark everywhere.
+# Basket value is held to one benchmark everywhere, and so is feedback: 80%
+# of the customers served sending a form scores 100.
 BASKET_TARGET = 3200
+FEEDBACK_TARGET = 80
 
 # Each measure is scored out of 100, and the cumulative score is their
 # average. Revenue and basket value are scored against their targets (100 =
@@ -57,7 +59,7 @@ MEASURES = [
     ("Basket Size Score", "Basket Size", "rank"),
     ("Repeat Score", "Repeat %", "rank"),
     ("Retention Score", "Retention %", "rank"),
-    ("Feedback Score", "Feedback %", "rank"),
+    ("Feedback Score", "Feedback of Target %", "target"),
 ]
 SCORE_COLUMNS = [m[0] for m in MEASURES]
 
@@ -128,6 +130,7 @@ def _score(table: pd.DataFrame, expected: float) -> pd.DataFrame:
     """
     out = table.copy()
     out["Pace %"] = (out["Target %"] / expected).round(1) if expected else np.nan
+    out["Feedback of Target %"] = (out["Feedback %"] / FEEDBACK_TARGET * 100).round(1)
     for column, measure, how in MEASURES:
         values = out[measure] if measure in out else pd.Series(np.nan, index=out.index)
         if how == "target":
