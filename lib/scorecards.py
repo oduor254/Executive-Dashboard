@@ -43,10 +43,10 @@ SHOP_NUMBERS = {
 }
 PLACEHOLDER_MIN_RECORDS = 5
 
-# Basket value is held to one benchmark everywhere, and so is feedback: 80%
+# Basket value is held to one benchmark everywhere, and so is feedback: 70%
 # of the customers served sending a form scores 100.
 BASKET_TARGET = 3200
-FEEDBACK_TARGET = 80
+FEEDBACK_TARGET = 70
 
 # Each measure is scored out of 100, and the cumulative score is their
 # average. Revenue and basket value are scored against their targets (100 =

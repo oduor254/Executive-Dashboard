@@ -383,7 +383,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         f"**Revenue** is scored against the part of the target due by now ({basis.label}; "
         f"{due}) and **basket value** against {basket} for every shop and attendant — 100 "
         f"means on target. **Feedback** is scored against {scorecards.FEEDBACK_TARGET}% of the "
-        "customers served sending a form (80% or more scores 100). Basket size, repeat "
+        f"customers served sending a form ({scorecards.FEEDBACK_TARGET}% or more scores 100). Basket size, repeat "
         "purchase and retention have no target, so they are scored by rank: 100 is the best "
         "shop (or attendant). Customers are unique people, known by phone "
         "number. **Repeat Purchase** is the share of the period's customers who bought on two "
