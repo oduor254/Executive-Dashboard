@@ -314,7 +314,8 @@ def _pct(v) -> str:
     return "—" if pd.isna(v) else f"{v:.1f}%"
 
 
-SCORE_COLORS = dict(zip(scorecards.SCORE_COLUMNS, [theme.CATEGORICAL[i] for i in (0, 1, 3, 4, 6, 5)]))
+SCORE_COLORS = dict(zip(scorecards.SCORE_COLUMNS,
+                        [theme.CATEGORICAL[i] for i in (0, 2, 1, 3, 4, 6, 5)]))
 
 
 def _cumulative_chart(table: pd.DataFrame, name: str, title: str) -> None:
@@ -381,7 +382,9 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     st.caption(
         "Every measure is scored out of 100 and the **cumulative score** is their average. "
         f"**Revenue** is scored against the part of the target due by now ({basis.label}; "
-        f"{due}) and **basket value** against {basket} for every shop and attendant — 100 "
+        f"{due}), **corporate revenue** against "
+        f"{scorecards.CORPORATE_SHARE:.0%} of the revenue target (also by what is due so far) "
+        f"and **basket value** against {basket} for every shop and attendant — 100 "
         f"means on target. **Feedback** is scored against {scorecards.FEEDBACK_TARGET}% of the "
         f"customers served sending a form ({scorecards.FEEDBACK_TARGET}% or more scores 100). Basket size, repeat "
         "purchase and retention have no target, so they are scored by rank: 100 is the best "
@@ -405,8 +408,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                  f"{_pct(r['Target %'])} of {_money(r['Target'])} ({due})"
                  if pd.notna(r["Target %"]) else "no target"),
                 ("Corporate Revenue", _money(r["Corporate Revenue"]),
-                 _pct(r["Corporate Revenue"] / r["Revenue"] * 100) + " of revenue"
-                 if r["Revenue"] else None),
+                 f"{_pct(r['Corporate %'])} of {_money(r['Corporate Target'])}"
+                 if pd.notna(r["Corporate Target"]) else "no target"),
                 ("Basket Value", _money(r["Basket Value"]),
                  f"{_pct(r['Basket Value %'])} of {basket}"),
                 ("Basket Size", f"{r['Basket Size']:.2f} bags", f"{int(r['Orders']):,} orders"),
@@ -425,12 +428,13 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
             st.caption("All shops side by side, best cumulative score first, with each measure's "
                        "score and the total at the bottom.")
             cols = (["Location", "Score"] + scorecards.SCORE_COLUMNS
-                    + ["Revenue", "Target", "Target %", "Pace %", "Corporate Revenue", "Orders",
+                    + ["Revenue", "Target", "Target %", "Pace %", "Corporate Revenue",
+                       "Corporate Target", "Corporate %", "Orders",
                        "Basket Value", "Basket Value %", "Bags", "Basket Size", "Attendants",
                        "Revenue per Attendant", "Customers", "Repeat %", "Previous Customers",
                        "Retained", "Retention %", "Feedback", "Feedback %"])
             grid.filterable_table(shops[cols], pinned_columns=("Location",),
-                                  currency_columns=("Revenue", "Target", "Corporate Revenue",
+                                  currency_columns=("Revenue", "Target", "Corporate Revenue", "Corporate Target",
                                                     "Basket Value", "Revenue per Attendant"),
                                   height=460)
         return
@@ -442,7 +446,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "**Revenue** shares each shop's daily revenue equally between everyone who served "
         "there that day (attendants and BAs recorded on its orders). **Revenue target** is the "
         "shop's target for the period divided by the attendants and BAs who served there in "
-        "it. **Own Sales**, basket value and basket size are from the orders the person served "
+        f"it, and the **corporate target** is {scorecards.CORPORATE_SHARE:.0%} of that share. "
+        "Corporate revenue is the corporate orders the person served. **Own Sales**, basket value and basket size are from the orders the person served "
         "themselves.")
     if people.empty:
         st.info("No attendants or BAs recorded in this range.")
@@ -460,7 +465,9 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
             ("Revenue per Day", _money(r["Revenue per Day"]),
              f"{int(r['Days Worked'])} days worked"),
             ("Own Sales", _money(r["Own Sales"]), f"{int(r['Orders']):,} orders served"),
-            ("Corporate Revenue", _money(r["Corporate Revenue"]), None),
+            ("Corporate Revenue", _money(r["Corporate Revenue"]),
+             f"{_pct(r['Corporate %'])} of {_money(r['Corporate Target'])}"
+             if pd.notna(r["Corporate Target"]) else "no target"),
             ("Basket Value", _money(r["Basket Value"]),
              f"{_pct(r['Basket Value %'])} of {basket}"),
             ("Basket Size", f"{r['Basket Size']:.2f} bags",
@@ -479,11 +486,12 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     with st.container(border=True):
         cols = (["Attendant / BA", "Location", "Score"] + scorecards.SCORE_COLUMNS
                 + ["Team Size", "Target", "Revenue", "Target %", "Pace %", "Days Worked", "Revenue per Day",
-                   "Own Sales", "Orders", "Corporate Revenue", "Basket Value", "Basket Value %",
+                   "Own Sales", "Orders", "Corporate Revenue", "Corporate Target", "Corporate %",
+                   "Basket Value", "Basket Value %",
                    "Bags", "Basket Size", "Customers", "Repeat %", "Previous Customers",
                    "Retained", "Retention %", "Feedback", "Feedback %"])
         grid.filterable_table(people[cols], pinned_columns=("Attendant / BA",),
-                              currency_columns=("Target", "Revenue", "Revenue per Day",
+                              currency_columns=("Target", "Revenue", "Revenue per Day", "Corporate Target",
                                                 "Own Sales", "Corporate Revenue", "Basket Value"),
                               height=460)
 

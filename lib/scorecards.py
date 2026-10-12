@@ -8,7 +8,9 @@ Built from one row per order (queries.SCORECARD_ORDERS):
                        and whoever keyed the order is not the only one who
                        made the sale. Orders nobody was recorded on are
                        shared too. Own Sales is what the person keyed.
-  Corporate Revenue  — orders for customers recorded as Corporate.
+  Corporate Revenue  — orders for customers recorded as Corporate, against a
+                       corporate target of 10% of the revenue target (for an
+                       attendant, 10% of their equal share of it).
   Basket Value       — revenue per order; Basket Size — bags per order.
   Repeat Purchase    — share of the period's unique customers who bought on
                        two or more different days within the period (two
@@ -47,6 +49,8 @@ PLACEHOLDER_MIN_RECORDS = 5
 # of the customers served sending a form scores 100.
 BASKET_TARGET = 3200
 FEEDBACK_TARGET = 70
+# Corporate sales are expected to be this share of the revenue target.
+CORPORATE_SHARE = 0.10
 
 # Each measure is scored out of 100, and the cumulative score is their
 # average. Revenue and basket value are scored against their targets (100 =
@@ -55,6 +59,7 @@ FEEDBACK_TARGET = 70
 #   (score column, measure, how it is scored)
 MEASURES = [
     ("Revenue Score", "Pace %", "target"),
+    ("Corporate Score", "Corporate Pace %", "target"),
     ("Basket Value Score", "Basket Value %", "target"),
     ("Basket Size Score", "Basket Size", "rank"),
     ("Repeat Score", "Repeat %", "rank"),
@@ -130,6 +135,10 @@ def _score(table: pd.DataFrame, expected: float) -> pd.DataFrame:
     """
     out = table.copy()
     out["Pace %"] = (out["Target %"] / expected).round(1) if expected else np.nan
+    out["Corporate Target"] = (out["Target"] * CORPORATE_SHARE).round(0)
+    out["Corporate %"] = (out["Corporate Revenue"] / out["Corporate Target"] * 100).round(1)
+    out["Corporate Pace %"] = ((out["Corporate %"] / expected).round(1) if expected
+                               else np.nan)
     out["Feedback of Target %"] = (out["Feedback %"] / FEEDBACK_TARGET * 100).round(1)
     for column, measure, how in MEASURES:
         values = out[measure] if measure in out else pd.Series(np.nan, index=out.index)
