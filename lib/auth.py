@@ -116,9 +116,28 @@ def _logo_data_uri() -> str | None:
     return f"data:image/png;base64,{encoded}"
 
 
+DEFAULT_APP_NAME = "Denri Executive Dashboard"
+
+
+def open_access(app_name: str) -> None:
+    """Let this session through require_login() without a password.
+
+    Called by entrypoints that are meant to be open (sales_operations_app.py),
+    so the shared pages/ files can keep calling require_login() unchanged.
+    Session-scoped: the executive dashboard's own sessions still hit the gate.
+    """
+    st.session_state["login_disabled"] = True
+    st.session_state["app_name"] = app_name
+
+
+def page_title(section: str) -> str:
+    """Browser-tab title for a page, named after whichever app is hosting it."""
+    return f"{section} · {st.session_state.get('app_name', DEFAULT_APP_NAME)}"
+
+
 def require_login() -> None:
     """Block the rest of the page until the correct password is entered."""
-    if st.session_state.get("authenticated"):
+    if st.session_state.get("authenticated") or st.session_state.get("login_disabled"):
         return
 
     expected = config.get("APP_PASSWORD")

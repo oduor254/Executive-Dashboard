@@ -19,7 +19,7 @@ load_dotenv()
 
 from lib import auth, charts, db, filters, grid, queries, stock_planning, theme
 
-st.set_page_config(page_title="WhatsApp & Social DMs · Denri Executive Dashboard",
+st.set_page_config(page_title=auth.page_title("WhatsApp & Social DMs"),
                    page_icon="💬", layout="wide")
 
 auth.require_login()
