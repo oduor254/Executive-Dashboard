@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -337,25 +338,43 @@ def render_corporate(start_date: date, end_date: date) -> None:
 def render_all_customers(start_date: date, end_date: date) -> None:
     """Individual and corporate customers together."""
     params = {"start_date": start_date, "end_date": end_date}
-    pos = db.run_query(queries.CUSTOMER_SALES, params)
+    # Totals are counted the Sales page's way, so the two pages agree: every
+    # till order (refunds included as the negative orders they are), every line
+    # except delivery and customization fees, and corporate as the payments
+    # received on corporate invoices.
+    orders = db.run_query(queries.CUSTOMER_ORDERS, params)
+    payments = db.run_query(queries.CORPORATE_PAYMENTS, params)
+    pos = orders  # the purchases table below only needs to know there were sales
     lines = db.run_query(queries.CORPORATE_LINES, params)
-    individual = pd.DataFrame()
-    if not pos.empty:
-        pos = pos[pos["Gender"] != "Corporate"].copy()
-        pos["Customer"] = pos["Raw Name"].map(names.clean)
-        known = pos[pos["Phone"] != "N/A"]
-        individual = (known.groupby("Phone", as_index=False)
-                      .agg(Customer=("Customer", "first"), Revenue=("Total", "sum"),
-                           Bags=("Quantity", "sum"),
-                           **{"First Order": ("Date", "min"), "Last Order": ("Date", "max")},
-                           Where=("Location", lambda v: ", ".join(sorted(set(v)))),
-                           Orders=("Date", "nunique"))
-                      .assign(Type="Individual"))
-    corporate = _corporate_customers(lines)
     cols = ["Customer", "Type", "Phone", "Orders", "Bags", "Revenue", "First Order",
             "Last Order", "Where"]
-    everyone = pd.concat([individual.reindex(columns=cols), corporate.reindex(columns=cols)],
-                         ignore_index=True)
+    frames = []
+    if not orders.empty:
+        o = orders.assign(
+            Type=np.where(orders["Corporate"], "Shop Corporate", "Individual"),
+            Name=orders["Raw Name"].map(lambda n: names.clean(n) if isinstance(n, str) else "N/A"),
+            Key=orders["Phone"].map(lambda v: (lambda d: d[-9:] if len(d) >= 9 else None)(
+                "".join(ch for ch in str(v) if ch.isdigit()))))
+        # One row per customer, known by phone; till sales with no phone
+        # recorded are one row of their own, so nothing drops out of the total.
+        o["Key"] = o["Key"].where(o["Key"].notna(),
+                                  np.where(o["Corporate"], "name:" + o["Name"], "no phone"))
+        o.loc[o["Key"] == "no phone", "Name"] = "Walk-in (no phone recorded)"
+        frames.append(o.groupby(["Key", "Type"], as_index=False)
+                      .agg(Customer=("Name", "first"), Phone=("Phone", "first"),
+                           Orders=("Order ID", "nunique"), Bags=("Bags", "sum"),
+                           Revenue=("Revenue", "sum"),
+                           **{"First Order": ("Date", "min"), "Last Order": ("Date", "max")},
+                           Where=("Location", lambda v: ", ".join(sorted(set(v)))))
+                      .reindex(columns=cols))
+    if not payments.empty:
+        frames.append(payments.groupby("Customer", as_index=False)
+                      .agg(Phone=("Phone", "first"), Orders=("Invoice", "nunique"),
+                           Revenue=("Revenue", "sum"),
+                           **{"First Order": ("Date", "min"), "Last Order": ("Date", "max")})
+                      .assign(Type="Corporate Sales", Bags=np.nan, Where="Corporate")
+                      .reindex(columns=cols))
+    everyone = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=cols)
     if everyone.empty:
         st.info("No customers in this date range.")
         return
@@ -373,9 +392,12 @@ def render_all_customers(start_date: date, end_date: date) -> None:
     for col, (label, value, note) in zip(st.columns(len(items)), items):
         with col.container(border=True):
             st.metric(label, value, note, delta_color="off")
-    st.caption("Individual customers are the shops' customers (one per phone number; orders "
-               "count the days they bought). Corporate customers are listed by name, both "
-               "kinds — see the Corporate section. Revenue in KES, VAT included.")
+    st.caption("Revenue is counted as the Sales page counts it, so the totals agree: every "
+               "till order (refunds netted), every line except delivery and customization "
+               "fees, and corporate as the payments received on corporate invoices. Shop "
+               "customers are one row per phone number; till sales with no phone recorded "
+               "are one \"Walk-in (no phone recorded)\" row. Corporate Sales customers are "
+               "the companies that paid. Revenue in KES, VAT included.")
 
     c1, c2 = st.columns(2)
     with c1, st.container(border=True):
@@ -402,8 +424,58 @@ def render_all_customers(start_date: date, end_date: date) -> None:
         if len(shown) > MAX_TABLE_ROWS:
             st.caption(f"Showing the top {MAX_TABLE_ROWS:,} of {len(shown):,} customers by revenue.")
             shown = shown.head(MAX_TABLE_ROWS)
+        st.caption("One row per customer, best first, with the total at the bottom.")
         grid.filterable_table(shown, currency_columns=("Revenue",), pinned_columns=("Customer",),
                               height=460)
+
+    # Every purchase by every customer, shop and corporate alike, in one table.
+    st.subheader("All Customer Purchases")
+    shop_rows = pd.DataFrame()
+    if not pos.empty:
+        everyone_pos = db.run_query(queries.CUSTOMER_SALES, params)
+        shop_rows = pd.DataFrame({
+            "Date": everyone_pos["Date"],
+            "Customer": everyone_pos["Raw Name"].map(names.clean),
+            "Type": everyone_pos["Gender"].map(lambda g: "Shop Corporate" if g == "Corporate"
+                                               else "Individual"),
+            "Phone": everyone_pos["Phone"],
+            "Location": everyone_pos["Location"],
+            "Product": everyone_pos["Product"], "Colour": everyone_pos["Color"],
+            "Category": everyone_pos["Category"], "Quantity": everyone_pos["Quantity"],
+            "Price": everyone_pos["Price"], "Total": everyone_pos["Total"],
+        })
+    corp_rows = lines[lines["Channel"] == "Corporate Sales"] if not lines.empty else lines
+    corp_rows = pd.DataFrame({
+        "Date": corp_rows.get("Date"), "Customer": corp_rows.get("Customer"),
+        "Type": "Corporate Sales", "Phone": corp_rows.get("Phone"),
+        "Location": corp_rows.get("Location"), "Product": corp_rows.get("Product"),
+        "Colour": None, "Category": corp_rows.get("Category"), "Quantity": corp_rows.get("Qty"),
+        "Price": (corp_rows["Revenue"] / corp_rows["Qty"].where(corp_rows["Qty"] != 0)).round(2)
+                 if not corp_rows.empty else None,
+        "Total": corp_rows.get("Revenue"),
+    }) if not corp_rows.empty else pd.DataFrame()
+    purchases = pd.concat([f for f in (shop_rows, corp_rows) if not f.empty], ignore_index=True)         if not (shop_rows.empty and corp_rows.empty) else pd.DataFrame()
+    if purchases.empty:
+        st.info("No purchases in this date range.")
+        return
+    with st.container(border=True):
+        c1, c2 = st.columns(2)
+        kind = c1.selectbox("Customer type", ["All types", *TYPE_COLORS], key="all_purchases_type")
+        where = c2.selectbox("Location", ["All locations"] + sorted(purchases["Location"].dropna().unique()),
+                             key="all_purchases_location")
+        rows = purchases if kind == "All types" else purchases[purchases["Type"] == kind]
+        rows = rows if where == "All locations" else rows[rows["Location"] == where]
+        rows = rows.sort_values("Date", ascending=False)
+        st.caption(f"{len(rows):,} purchases — shop customers (individual and corporate, from "
+                   "the tills) and the corporate team's jobs, product by product, newest first. "
+                   "This is the detail of what was bought: order-level discounts, gift bags and "
+                   "fees are not product lines here, and corporate jobs are at their listed "
+                   "price, so its total can differ slightly from the revenue above.")
+        if len(rows) > MAX_TABLE_ROWS:
+            st.caption(f"Showing the newest {MAX_TABLE_ROWS:,}.")
+            rows = rows.head(MAX_TABLE_ROWS)
+        grid.filterable_table(rows, currency_columns=("Price", "Total"),
+                              pinned_columns=("Customer",), height=480)
 
 
 SECTIONS = ["🧑 Customers", "🏢 Corporate", "👥 All Customers"]
