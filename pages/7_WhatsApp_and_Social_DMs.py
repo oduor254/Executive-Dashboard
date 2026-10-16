@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, charts, db, filters, grid, queries, theme
+from lib import auth, charts, db, filters, grid, queries, stock_planning, theme
 
 st.set_page_config(page_title="WhatsApp & Social DMs · Denri Executive Dashboard",
                    page_icon="💬", layout="wide")
@@ -634,10 +634,153 @@ def render_leads(start_date: date, end_date: date) -> None:
                "Leads module (walk-in, call and WhatsApp), by the date they were captured.")
 
 
-app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads"], "engagement_app")
+# ---------------------------------------------------------- Out of Stock ---
+
+OOS_LEADS = "Leads (walk-in)"
+OOS_WHATSAPP = "WhatsApp (online)"
+OOS_COLORS = {OOS_LEADS: theme.CATEGORICAL[5], OOS_WHATSAPP: theme.CATEGORICAL[1]}
+
+
+def _out_of_stock_cases(start_date: date, end_date: date) -> pd.DataFrame:
+    """Every out-of-stock case in the range, from both apps, one row per
+    customer and bag asked for:
+      Leads     — walk-in leads (Leads module) waiting for stock;
+      WhatsApp  — WhatsApp Monitor chats flagged out of stock, one row per
+                  product asked for, or one "Not recorded" row when the chat
+                  was flagged without naming the product.
+    """
+    params = {"start_date": start_date, "end_date": end_date}
+    frames = []
+    leads = db.run_query(queries.WALKIN_LEADS, params)
+    if not leads.empty:
+        waiting = leads[leads["Status"] == "Awaiting Stock"]
+        frames.append(pd.DataFrame({
+            "Source": OOS_LEADS, "Date": waiting["Date"], "Customer": waiting["Name"],
+            "Contact": waiting["Contact"], "Location": waiting["Branch"],
+            "Product Wanted": waiting["Bag Wanted"], "Colour": waiting["Colour"],
+            "Detail": waiting["Note"], "Served By": waiting["Attendant"]}))
+    chats = db.run_query(queries.WA_INTERACTIONS, params)
+    wanted = db.run_query(queries.WA_OUT_OF_STOCK, params)
+    if not wanted.empty:
+        frames.append(pd.DataFrame({
+            "Source": OOS_WHATSAPP, "Date": wanted["Date"], "Customer": wanted["Name"],
+            "Contact": wanted["Contact"], "Location": wanted["Branch"],
+            "Product Wanted": wanted["Product Wanted"], "Colour": None,
+            "Detail": wanted["Reason"], "Served By": None}))
+    if not chats.empty:
+        named = set(wanted["ID"]) if not wanted.empty else set()
+        bare = chats[chats["Out of Stock"] & ~chats["ID"].isin(named)]
+        frames.append(pd.DataFrame({
+            "Source": OOS_WHATSAPP, "Date": bare["Date"], "Customer": bare["Name"],
+            "Contact": bare["Contact"], "Location": bare["Branch"],
+            "Product Wanted": "Not recorded", "Colour": None, "Detail": None, "Served By": None}))
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame()
+    cases = pd.concat(frames, ignore_index=True)
+    cases["Bag"] = cases["Product Wanted"].map(
+        lambda p: p if p in ("Not recorded", None) else stock_planning.family(str(p)))
+    return cases.sort_values("Date", ascending=False)
+
+
+@st.fragment()
+def render_out_of_stock(start_date: date, end_date: date) -> None:
+    """Out-of-stock demand from walk-in customers (Leads) and online customers
+    (WhatsApp Monitor) together, with the stock there is to meet it."""
+    cases = _out_of_stock_cases(start_date, end_date)
+    if cases.empty:
+        st.info("No out-of-stock requests in this date range.")
+        return
+
+    c1, c2 = st.columns(2)
+    source = c1.selectbox("Source", ["Both", OOS_LEADS, OOS_WHATSAPP], key="oos_source")
+    where = c2.selectbox("Location", ["All locations"] + sorted(cases["Location"].dropna().unique()),
+                         key="oos_location")
+    shown = cases if source == "Both" else cases[cases["Source"] == source]
+    shown = shown if where == "All locations" else shown[shown["Location"] == where]
+    if shown.empty:
+        st.info("No out-of-stock requests for this choice.")
+        return
+
+    by_source = shown["Source"].value_counts()
+    named = shown[shown["Bag"] != "Not recorded"]
+    top = named["Bag"].value_counts()
+    _kpis([
+        ("Out-of-Stock Requests", f"{len(shown):,}", f"{shown['Contact'].nunique():,} customers"),
+        (OOS_LEADS, f"{by_source.get(OOS_LEADS, 0):,}", "awaiting stock"),
+        (OOS_WHATSAPP, f"{by_source.get(OOS_WHATSAPP, 0):,}", "chats flagged out of stock"),
+        ("Bags Asked For", f"{named['Bag'].nunique():,}",
+         f"{(shown['Bag'] == 'Not recorded').sum():,} requests name no bag"),
+        ("Most Wanted", top.index[0] if not top.empty else "—",
+         f"{top.iloc[0]:,} requests" if not top.empty else None),
+    ])
+    st.caption("Every out-of-stock case in the range: walk-in customers recorded in the Leads "
+               "module as **Awaiting Stock**, and WhatsApp Monitor chats flagged **out of "
+               "stock** (one row per bag asked for). Bags are grouped across colours. "
+               "Stock is what is on hand now — at the shops and in transit, and ready in the "
+               "warehouses.")
+
+    # What is on hand now for each bag asked for.
+    position = db.run_query(queries.STOCK_POSITION)
+    position = position.assign(Bag=position["SKU"].map(stock_planning.family))
+    at_shops = position[position["Bucket"].isin(["Shop", "Transit"])].groupby("Bag")["Qty"].sum()
+    in_wh = position[position["Bucket"] == "Warehouse"].groupby("Bag")["Qty"].sum()
+
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        bags = (named.pivot_table(index="Bag", columns="Source", values="Date", aggfunc="count",
+                                  fill_value=0))
+        bags = bags.loc[bags.sum(axis=1).sort_values().index].tail(15)
+        fig = go.Figure()
+        for name in [s for s in OOS_COLORS if s in bags.columns]:
+            fig.add_bar(y=bags.index, x=bags[name], orientation="h", name=name,
+                        marker=dict(color=OOS_COLORS[name], line=dict(color=theme.CHART_SURFACE, width=1)),
+                        hovertemplate=f"<b>%{{y}}</b><br>{name}: <b>%{{x:,.0f}}</b><extra></extra>")
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(title="Most-Requested Out-of-Stock Bags", barmode="stack",
+                          hovermode="closest", legend_traceorder="normal",
+                          height=max(380, 28 * len(bags) + 100))
+        theme.show(fig)
+    with c2, st.container(border=True):
+        theme.show(_stacked_by_branch(shown.assign(ID=range(len(shown)), Branch=shown["Location"]),
+                                      "Source", OOS_COLORS, "Out-of-Stock Requests by Location"))
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        theme.show(_daily_trend(shown, "Out-of-Stock Requests per Day", split="Source",
+                                colors=OOS_COLORS))
+    with c2, st.container(border=True):
+        _share(shown, "Source", title="Where the Requests Came From", key="oos_source_kind",
+               unit="requests", colors=OOS_COLORS)
+
+    with st.container(border=True):
+        st.caption("Each bag asked for, with the stock on hand now to meet it.")
+        table = (named.groupby("Bag")
+                 .agg(Requests=("Source", "size"),
+                      Leads=("Source", lambda v: int((v == OOS_LEADS).sum())),
+                      WhatsApp=("Source", lambda v: int((v == OOS_WHATSAPP).sum())),
+                      Customers=("Contact", "nunique"),
+                      Locations=("Location", lambda v: ", ".join(sorted(set(v.dropna())))),
+                      **{"Last Asked": ("Date", "max")}))
+        table["At Shops Now"] = at_shops.reindex(table.index).fillna(0).clip(lower=0)
+        table["In Warehouse Now"] = in_wh.reindex(table.index).fillna(0).clip(lower=0)
+        grid.filterable_table(table.reset_index().sort_values("Requests", ascending=False),
+                              pinned_columns=("Bag",), height=420)
+    with st.container(border=True):
+        _table(shown, {"Date": "DATE", "Source": "SOURCE", "Customer": "CUSTOMER",
+                       "Contact": "CONTACT", "Location": "LOCATION",
+                       "Product Wanted": "PRODUCT WANTED", "Colour": "COLOUR",
+                       "Detail": "NOTE / REASON", "Served By": "SERVED BY"},
+               pinned_columns=("CUSTOMER",))
+    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+
+
+app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads", "📭 Out of Stock"],
+                    "engagement_app")
 if app_view == "💬 WhatsApp Monitor":
     render_whatsapp(start_date, end_date)
 elif app_view == "📱 Social DMs":
     render_social(start_date, end_date)
-else:
+elif app_view == "🚶 Leads":
     render_leads(start_date, end_date)
+else:
+    render_out_of_stock(start_date, end_date)

@@ -3861,6 +3861,7 @@ wanted AS (
     JOIN denri_monitor_bag b ON b.id = i.oos_bag_id
 )
 SELECT
+    i.id                                                AS "ID",
     i.date                                              AS "Date",
     """ + _WA_NAME + """                                AS "Name",
     COALESCE(NULLIF(TRIM(i.phone), ''), i.phone_clean)  AS "Contact",
