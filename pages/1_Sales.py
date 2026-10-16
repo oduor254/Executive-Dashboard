@@ -12,7 +12,7 @@ load_dotenv()
 
 from lib import auth, charts, db, filters, grid, queries, targets, theme
 
-st.set_page_config(page_title="Sales · Denri Executive Dashboard", page_icon="💰", layout="wide")
+st.set_page_config(page_title=auth.page_title("Sales"), page_icon="💰", layout="wide")
 
 auth.require_login()
 

@@ -14,7 +14,7 @@ load_dotenv()
 from lib import auth, db, grid, queries, theme
 from lib import shop_performance as sp
 
-st.set_page_config(page_title="Shop Performance · Denri Executive Dashboard",
+st.set_page_config(page_title=auth.page_title("Shop Performance"),
                    page_icon="🏬", layout="wide")
 
 auth.require_login()
