@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
@@ -133,10 +134,29 @@ def render_sales(start_date: date, end_date: date) -> None:
     basis = targets.basis_for(
         start_date, end_date,
         db.run_query(queries.SALES_TARGET_ROWS, {"start_date": start_date, "end_date": end_date}))
+    # Corporate sales have a target of their own. They are made two ways: as
+    # orders in Odoo's Sales module (the corporate team's own orders, never
+    # through a till) and at the shops' tills for customers recorded as
+    # Corporate. Both count toward the corporate target, so the Corporate row
+    # holds both; the grand total only adds the Sales-module orders, since
+    # the till ones are already in their shop's revenue.
+    corp = db.run_query(queries.CORPORATE_LINES, {"start_date": start_date, "end_date": end_date})
+    corp_module = corp[corp["Channel"] == "Corporate Sales"]
+    corp_row = {c: 0 for c in df.columns if c != "Branch"}
+    corp_row.update({"Branch": "Corporate", "Revenue": round(corp["Revenue"].sum(), 2),
+                     "Orders": corp["Order"].nunique(), "Qty": corp["Bags"].sum()})
+    total_at = df.index[df["Branch"] == "GRAND TOTAL"]
+    for col, value in (("Revenue", corp_module["Revenue"].sum()),
+                       ("Orders", corp_module["Order"].nunique()),
+                       ("Qty", corp_module["Bags"].sum())):
+        df.loc[total_at, col] = df.loc[total_at, col] + value
+    df = pd.concat([df[df["Branch"] != "GRAND TOTAL"], pd.DataFrame([corp_row]),
+                    df[df["Branch"] == "GRAND TOTAL"]], ignore_index=True)
+
     is_total = df["Branch"] == "GRAND TOTAL"
     df.loc[~is_total, "Target"] = df.loc[~is_total, "Branch"].map(basis.targets).fillna(0)
-    # The total is the branches' targets added up, so it matches the rows above
-    # it; the corporate target is left out because corporate sales are not POS.
+    # The total is every row's target added up, corporate included, so it
+    # matches the rows above it.
     df.loc[is_total, "Target"] = df.loc[~is_total, "Target"].sum()
     df["% Achieved"] = (df["Revenue"] / df["Target"].where(df["Target"] > 0) * 100).round(2)
     branches = df.loc[~is_total].copy()
@@ -145,7 +165,8 @@ def render_sales(start_date: date, end_date: date) -> None:
     pct = totals["% Achieved"]
     pace = basis.expected * 100
 
-    k1, k2, k3, k4 = st.columns(4)
+    corporate = df.loc[df["Branch"] == "Corporate"].iloc[0]
+    k1, k2, k3, k4, k5 = st.columns(5)
     with k1.container(border=True):
         st.metric("Revenue", f"KES {totals['Revenue']:,.0f}")
     with k2.container(border=True):
@@ -157,9 +178,21 @@ def render_sales(start_date: date, end_date: date) -> None:
                   delta=f"{pct - pace:+,.1f} pts vs {pace:.0f}% expected by now",
                   help=f"Revenue against the {basis.label}: KES {totals['Target']:,.0f}. "
                        f"{pace:.0f}% of the period has passed, so that is the pace to match.")
+    with k5.container(border=True):
+        corp_pct = corporate["% Achieved"]
+        st.metric("Corporate Revenue", f"KES {corporate['Revenue']:,.0f}",
+                  delta=(f"{corp_pct:,.1f}% of target · {corp_pct - pace:+,.1f} pts vs pace"
+                         if pd.notna(corp_pct) else "no corporate target"),
+                  help=f"Corporate Sales (Sales module) KES {corp_module['Revenue'].sum():,.0f} + "
+                       f"Shop Corporate (till orders for Corporate customers) KES "
+                       f"{corp['Revenue'].sum() - corp_module['Revenue'].sum():,.0f}, against "
+                       f"the corporate target of KES {corporate['Target']:,.0f}.")
 
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · measured against the "
-               f"{basis.label} (KES {totals['Target']:,.0f})")
+               f"{basis.label} (KES {totals['Target']:,.0f}, the corporate target included) · "
+               "the Corporate row is corporate sales from the Sales module plus till sales to "
+               "Corporate customers; the totals add only the Sales-module orders, the till ones "
+               "being in their shop's revenue already")
 
     if branches.empty:
         with st.container(border=True):
@@ -167,6 +200,9 @@ def render_sales(start_date: date, end_date: date) -> None:
         return
 
     branches = branches.sort_values("Revenue", ascending=True)
+    # The shop-only charts leave the Corporate row out: its till sales are
+    # already in the shops' bars.
+    shops_only = branches[branches["Branch"] != "Corporate"]
     with st.container(border=True):
         theme.show(_attainment_chart(branches, basis.expected, basis.label))
 
@@ -174,7 +210,7 @@ def render_sales(start_date: date, end_date: date) -> None:
     with col_share:
         with st.container(border=True):
             charts.share_chart(
-                charts.fold_other(branches["Branch"], branches["Revenue"]),
+                charts.fold_other(shops_only["Branch"], shops_only["Revenue"]),
                 title="Revenue Share by Branch", key="sales_share_kind",
             )
     with col_channel:
@@ -191,7 +227,7 @@ def render_sales(start_date: date, end_date: date) -> None:
 
     with st.container(border=True):
         mix = go.Figure()
-        by_orders = branches.sort_values("Orders", ascending=False)
+        by_orders = shops_only.sort_values("Orders", ascending=False)
         for channel, color in CHANNEL_COLORS.items():
             mix.add_bar(
                 x=by_orders["Branch"], y=by_orders[f"{channel} Orders"], name=channel,

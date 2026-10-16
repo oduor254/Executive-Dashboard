@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from lib import (auth, charts, combos, db, deals, deals_sync, filters, grid, pricelists, queries,
-                 sheets_sync, taxonomy, theme)
+                 sheets_sync, targets, taxonomy, theme)
 
 st.set_page_config(page_title="Products · Denri Executive Dashboard", page_icon="👜", layout="wide")
 
@@ -65,7 +65,7 @@ OFFER_COLORS = {
 # rerun, hidden or not, so a date change on this page ran all six sections'
 # queries (~26s for a month) to show one. Only the chosen section loads now.
 SECTIONS = ["By Shop & Category", "By Location", "Sales Value", "Offer Types",
-            "Self/Running Combos", "New Products"]
+            "Self/Running Combos", "New Products", "Corporate"]
 section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0],
                                key="products_section", label_visibility="collapsed")
 section = section if section in SECTIONS else SECTIONS[0]
@@ -857,6 +857,132 @@ def render_new_products(start_date: date, end_date: date) -> None:
         st.caption("Click a column header's filter icon to search or narrow that column.")
         grid.filterable_table(df, currency_columns=("Revenue",))
 
+CORPORATE_COLORS = {"Corporate Sales": theme.CATEGORICAL[0], "Shop Corporate": theme.CATEGORICAL[2]}
+
+
+@st.fragment()
+def render_corporate(start_date: date, end_date: date) -> None:
+    """Corporate sales — revenue and products — from the Sales module and
+    from the shops' tills, against the corporate target."""
+    params = {"start_date": start_date, "end_date": end_date}
+    lines = db.run_query(queries.CORPORATE_LINES, params)
+    quotes = db.run_query(queries.CORPORATE_QUOTATIONS, params)
+    basis = targets.basis_for(start_date, end_date,
+                              db.run_query(queries.SALES_TARGET_ROWS, params))
+    target = basis.targets.get("Corporate", 0)
+
+    channel = st.selectbox("Corporate type", ["All Corporate", *CORPORATE_COLORS],
+                           key="corporate_channel")
+    shown = lines if channel == "All Corporate" else lines[lines["Channel"] == channel]
+    revenue = shown["Revenue"].sum()
+    by_type = lines.groupby("Channel")["Revenue"].sum()
+    pct = revenue / target * 100 if target else None
+    items = [
+        ("Corporate Revenue", f"KES {revenue:,.0f}",
+         f"{pct:.1f}% of KES {target:,.0f} ({basis.expected * 100:.0f}% due by now)"
+         if pct is not None else "no corporate target"),
+        ("Corporate Sales", f"KES {by_type.get('Corporate Sales', 0):,.0f}", "Sales module orders"),
+        ("Shop Corporate", f"KES {by_type.get('Shop Corporate', 0):,.0f}",
+         "till sales to Corporate customers"),
+        ("Orders", f"{shown['Order'].nunique():,}", f"{shown['Customer'].nunique():,} customers"),
+        ("Bags", f"{shown['Bags'].sum():,.0f}", f"{shown['Qty'].sum():,.0f} items in all"),
+        ("Open Quotations", f"KES {quotes['Value'].sum():,.0f}",
+         f"{len(quotes):,} not yet confirmed"),
+    ]
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+    st.caption(
+        "**Corporate Sales** are confirmed orders in Odoo's Sales module (the corporate team's "
+        "orders, never through a till). **Shop Corporate** are till sales at the shops to "
+        "customers recorded as Corporate — already in their shop's revenue on the Sales page. "
+        f"Both count toward the corporate target ({basis.label}). Revenue in KES, VAT "
+        "included, delivery fees out.")
+    if shown.empty:
+        st.info("No corporate sales in this date range.")
+    else:
+        c1, c2 = st.columns(2)
+        with c1, st.container(border=True):
+            products = (shown.groupby("Product", as_index=False)
+                        .agg(Revenue=("Revenue", "sum"), Qty=("Qty", "sum"))
+                        .nlargest(15, "Revenue").sort_values("Revenue"))
+            fig = go.Figure()
+            fig.add_bar(y=products["Product"], x=products["Revenue"], orientation="h",
+                        marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+                        customdata=products[["Qty"]],
+                        hovertemplate="<b>%{y}</b><br>KES %{x:,.0f} · %{customdata[0]:,.0f} sold"
+                                      "<extra></extra>")
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="Top Corporate Products by Revenue", hovermode="closest",
+                              height=max(360, 28 * len(products) + 80))
+            theme.show(fig)
+        with c2, st.container(border=True):
+            customers = (shown.groupby(["Customer", "Channel"], as_index=False)["Revenue"].sum()
+                         .nlargest(15, "Revenue").sort_values("Revenue"))
+            fig = go.Figure()
+            for name, color in CORPORATE_COLORS.items():
+                part = customers[customers["Channel"] == name]
+                fig.add_bar(y=part["Customer"], x=part["Revenue"], orientation="h", name=name,
+                            marker=dict(color=color, cornerradius=4),
+                            hovertemplate="<b>%{y}</b><br>KES %{x:,.0f}<extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Top Corporate Customers", barmode="stack",
+                              hovermode="closest", height=max(360, 28 * len(customers) + 100))
+            theme.show(fig)
+        c1, c2 = st.columns(2)
+        with c1, st.container(border=True):
+            where = shown.groupby("Location")["Revenue"].sum()
+            charts.share_chart(charts.fold_other(where.index, where.values),
+                               title="Corporate Revenue by Where It Was Sold",
+                               key="corporate_where_kind", default="Bar")
+        with c2, st.container(border=True):
+            days = (shown.groupby(["Date", "Channel"])["Revenue"].sum().unstack(fill_value=0)
+                    .sort_index())
+            fig = go.Figure()
+            for name in days.columns:
+                fig.add_bar(x=days.index, y=days[name], name=name,
+                            marker=dict(color=CORPORATE_COLORS.get(name, theme.OTHER)),
+                            hovertemplate=f"%{{x|%a %d %b}}<br>{name}: KES %{{y:,.0f}}<extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Corporate Revenue by Day", barmode="stack", height=360)
+            theme.show(fig)
+
+        with st.container(border=True):
+            st.caption("Products sold to corporate customers, with the total at the bottom.")
+            keys = ["Product", "Category"]
+            by_channel = (shown.pivot_table(index=keys, columns="Channel", values="Qty",
+                                            aggfunc="sum", fill_value=0)
+                          .reindex(columns=list(CORPORATE_COLORS), fill_value=0)
+                          .add_suffix(" Qty"))
+            table = (shown.groupby(keys)
+                     .agg(Qty=("Qty", "sum"), Revenue=("Revenue", "sum"),
+                          Orders=("Order", "nunique"))
+                     .join(by_channel).reset_index()
+                     .sort_values("Revenue", ascending=False))
+            table["Revenue"] = table["Revenue"].round(2)
+            grid.filterable_table(table, currency_columns=("Revenue",),
+                                  pinned_columns=("Product",), height=420)
+        with st.container(border=True):
+            st.caption("Every corporate order line.")
+            detail = shown.assign(Revenue=shown["Revenue"].round(2)).sort_values(
+                ["Date", "Order"], ascending=False)
+            grid.filterable_table(detail[["Date", "Channel", "Order", "Customer", "Location",
+                                          "Sold By", "Product", "Category", "Qty", "Revenue"]],
+                                  currency_columns=("Revenue",), pinned_columns=("Order",),
+                                  height=420)
+
+    st.subheader("Open Corporate Quotations")
+    if quotes.empty:
+        st.info("No open quotations in this date range.")
+    else:
+        st.caption("Quotations in the Sales module not yet confirmed (draft or sent) — the "
+                   "corporate pipeline. A quotation that ends up rung at a shop till shows "
+                   "above as Shop Corporate.")
+        with st.container(border=True):
+            grid.filterable_table(quotes, currency_columns=("Value",),
+                                  pinned_columns=("Quotation",), height=360)
+
+
 RENDERERS = {
     "By Shop & Category": render_by_shop_category,
     "By Location": render_by_location,
@@ -864,5 +990,6 @@ RENDERERS = {
     "Offer Types": render_by_offer,
     "Self/Running Combos": render_combos,
     "New Products": render_new_products,
+    "Corporate": render_corporate,
 }
 RENDERERS[section](start_date, end_date)

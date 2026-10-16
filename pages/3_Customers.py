@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, filters, gender, grid, names, phones, queries, theme
+from lib import auth, charts, db, filters, gender, grid, names, phones, queries, theme
 
 st.set_page_config(page_title="Customers · Denri Executive Dashboard", page_icon="🧑‍🤝‍🧑", layout="wide")
 
@@ -263,4 +264,154 @@ def _phones_to_fix(start_date: date, end_date: date) -> None:
         grid.filterable_table(rows, pinned_columns=("Name",), height=360)
 
 
-render_customers(start_date, end_date)
+TYPE_COLORS = {"Individual": theme.CATEGORICAL[1], "Shop Corporate": theme.CATEGORICAL[2],
+               "Corporate Sales": theme.CATEGORICAL[0]}
+
+
+def _corporate_customers(lines: pd.DataFrame) -> pd.DataFrame:
+    """One row per corporate customer and type."""
+    if lines.empty:
+        return pd.DataFrame(columns=["Customer", "Type", "Phone", "Orders", "Bags", "Revenue",
+                                     "First Order", "Last Order", "Where", "Served By"])
+    return (lines.groupby(["Customer", "Channel"], as_index=False)
+            .agg(Phone=("Phone", "first"), Orders=("Order", "nunique"), Bags=("Bags", "sum"),
+                 Revenue=("Revenue", "sum"), **{"First Order": ("Date", "min"),
+                                                "Last Order": ("Date", "max")},
+                 Where=("Location", lambda v: ", ".join(sorted(set(v)))),
+                 **{"Served By": ("Sold By", lambda v: ", ".join(sorted(set(v))))})
+            .rename(columns={"Channel": "Type"})
+            .assign(Revenue=lambda f: f["Revenue"].round(2))
+            .sort_values("Revenue", ascending=False))
+
+
+@st.fragment()
+def render_corporate(start_date: date, end_date: date) -> None:
+    """Corporate customers, both kinds: Corporate Sales (the Sales module) and
+    Shop Corporate (customers recorded as Corporate, buying at the tills)."""
+    lines = db.run_query(queries.CORPORATE_LINES, {"start_date": start_date, "end_date": end_date})
+    kind = st.selectbox("Corporate type", ["All Corporate", "Corporate Sales", "Shop Corporate"],
+                        key="customers_corporate_type")
+    st.caption("**Corporate Sales** are customers on confirmed orders in Odoo's Sales module — "
+               "the corporate team's orders. **Shop Corporate** are customers recorded as "
+               "Corporate who bought at a shop till. Revenue in KES, VAT included.")
+    customers = _corporate_customers(lines)
+    shown = customers if kind == "All Corporate" else customers[customers["Type"] == kind]
+    by_type = customers.groupby("Type").agg(Revenue=("Revenue", "sum"), Customers=("Customer", "size"))
+    items = [("Corporate Revenue", f"KES {shown['Revenue'].sum():,.0f}",
+              f"{len(shown):,} customers · {shown['Orders'].sum():,} orders")]
+    for name in ("Corporate Sales", "Shop Corporate"):
+        row = by_type.loc[name] if name in by_type.index else None
+        items.append((name, f"KES {row['Revenue']:,.0f}" if row is not None else "KES 0",
+                      f"{int(row['Customers']):,} customers" if row is not None else "no customers"))
+    items.append(("Average per Customer",
+                  f"KES {shown['Revenue'].sum() / len(shown):,.0f}" if len(shown) else "—", None))
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+    if shown.empty:
+        st.info("No corporate customers in this date range.")
+        return
+    with st.container(border=True):
+        top = shown.head(20).sort_values("Revenue")
+        fig = go.Figure()
+        for name, color in TYPE_COLORS.items():
+            part = top[top["Type"] == name]
+            if part.empty:
+                continue
+            fig.add_bar(y=part["Customer"], x=part["Revenue"], orientation="h", name=name,
+                        marker=dict(color=color, cornerradius=4),
+                        customdata=part[["Orders", "Where"]],
+                        hovertemplate="<b>%{y}</b><br>KES %{x:,.0f} · %{customdata[0]} orders"
+                                      "<br>%{customdata[1]}<extra></extra>")
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(title="Top Corporate Customers", barmode="stack", hovermode="closest",
+                          height=max(380, 28 * len(top) + 100))
+        theme.show(fig)
+    with st.container(border=True):
+        st.caption("Every corporate customer in the range, by type, with the total at the bottom.")
+        grid.filterable_table(shown, currency_columns=("Revenue",), pinned_columns=("Customer",),
+                              height=440)
+
+
+@st.fragment()
+def render_all_customers(start_date: date, end_date: date) -> None:
+    """Individual and corporate customers together."""
+    params = {"start_date": start_date, "end_date": end_date}
+    pos = db.run_query(queries.CUSTOMER_SALES, params)
+    lines = db.run_query(queries.CORPORATE_LINES, params)
+    individual = pd.DataFrame()
+    if not pos.empty:
+        pos = pos[pos["Gender"] != "Corporate"].copy()
+        pos["Customer"] = pos["Raw Name"].map(names.clean)
+        known = pos[pos["Phone"] != "N/A"]
+        individual = (known.groupby("Phone", as_index=False)
+                      .agg(Customer=("Customer", "first"), Revenue=("Total", "sum"),
+                           Bags=("Quantity", "sum"),
+                           **{"First Order": ("Date", "min"), "Last Order": ("Date", "max")},
+                           Where=("Location", lambda v: ", ".join(sorted(set(v)))),
+                           Orders=("Date", "nunique"))
+                      .assign(Type="Individual"))
+    corporate = _corporate_customers(lines)
+    cols = ["Customer", "Type", "Phone", "Orders", "Bags", "Revenue", "First Order",
+            "Last Order", "Where"]
+    everyone = pd.concat([individual.reindex(columns=cols), corporate.reindex(columns=cols)],
+                         ignore_index=True)
+    if everyone.empty:
+        st.info("No customers in this date range.")
+        return
+    everyone["Revenue"] = everyone["Revenue"].round(2)
+    everyone = everyone.sort_values("Revenue", ascending=False)
+
+    by_type = everyone.groupby("Type").agg(Revenue=("Revenue", "sum"), Customers=("Customer", "size"))
+    total = everyone["Revenue"].sum()
+    items = [("Revenue", f"KES {total:,.0f}", f"{len(everyone):,} customers")]
+    for name in TYPE_COLORS:
+        if name in by_type.index:
+            r = by_type.loc[name]
+            items.append((name, f"KES {r['Revenue']:,.0f}",
+                          f"{int(r['Customers']):,} customers · {r['Revenue'] / total * 100:.1f}%"))
+    for col, (label, value, note) in zip(st.columns(len(items)), items):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+    st.caption("Individual customers are the shops' customers (one per phone number; orders "
+               "count the days they bought). Corporate customers are listed by name, both "
+               "kinds — see the Corporate section. Revenue in KES, VAT included.")
+
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        data = charts.fold_other(by_type.index, by_type["Revenue"])
+        charts.share_chart(data, title="Revenue by Customer Type", key="all_customers_kind",
+                           colors=charts.colors_for(data["Label"], fixed=TYPE_COLORS))
+    with c2, st.container(border=True):
+        top = everyone.head(15).sort_values("Revenue")
+        fig = go.Figure()
+        for name, color in TYPE_COLORS.items():
+            part = top[top["Type"] == name]
+            if part.empty:
+                continue
+            fig.add_bar(y=part["Customer"], x=part["Revenue"], orientation="h", name=name,
+                        marker=dict(color=color, cornerradius=4),
+                        hovertemplate="<b>%{y}</b><br>KES %{x:,.0f}<extra></extra>")
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(title="Top Customers, All Types", barmode="stack", hovermode="closest",
+                          height=max(380, 28 * len(top) + 100))
+        theme.show(fig)
+    with st.container(border=True):
+        kind = st.selectbox("Customer type", ["All types", *TYPE_COLORS], key="all_customers_type")
+        shown = everyone if kind == "All types" else everyone[everyone["Type"] == kind]
+        if len(shown) > MAX_TABLE_ROWS:
+            st.caption(f"Showing the top {MAX_TABLE_ROWS:,} of {len(shown):,} customers by revenue.")
+            shown = shown.head(MAX_TABLE_ROWS)
+        grid.filterable_table(shown, currency_columns=("Revenue",), pinned_columns=("Customer",),
+                              height=460)
+
+
+SECTIONS = ["🧑 Customers", "🏢 Corporate", "👥 All Customers"]
+section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0], key="customers_section",
+                               label_visibility="collapsed") or SECTIONS[0]
+if section == "🏢 Corporate":
+    render_corporate(start_date, end_date)
+elif section == "👥 All Customers":
+    render_all_customers(start_date, end_date)
+else:
+    render_customers(start_date, end_date)

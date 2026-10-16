@@ -4357,7 +4357,9 @@ WITH mapping(location, target_branch) AS (
            ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
            ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
            ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
-           ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
+           ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU'),
+           -- The corporate team's own target (target_scope 'corporate').
+           ('Corporate', 'CORPORATE')
 )
 SELECT m.location AS "Location", t.period AS "Kind", t.start_date AS "Starts",
        t.end_date AS "Ends", SUM(t.target_amount) AS "Target"
@@ -4846,4 +4848,114 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
   AND COALESCE(sw.name, sl.complete_name, '') NOT ILIKE '%Flash Sale%'
 GROUP BY 1, 2, 3, 4
 HAVING SUM(pol.qty + COALESCE(ref.qty, 0)) > 0
+"""
+
+
+# Corporate sales, line by line, from both places they are made:
+#   Corporate Sales — confirmed orders in Odoo's Sales module (sale_order in
+#                     state sale/done): the corporate team's orders, which
+#                     never pass through a shop till;
+#   Shop Corporate  — till orders at the shops for customers recorded as
+#                     Corporate (res_partner.gender), refunds netted.
+# Revenue is in KES, VAT included like the Sales page, delivery fees out.
+# Bags counts bags (bags inside a combo, not the combo line).
+CORPORATE_LINES = r"""
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id,
+           SUM(r.qty) AS qty, SUM(r.price_subtotal_incl) AS amount
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+)
+SELECT
+    'Corporate Sales'                                               AS "Channel",
+    so.date_order::DATE                                             AS "Date",
+    so.name                                                         AS "Order",
+    COALESCE(NULLIF(TRIM(cust.name), ''), 'Not recorded')           AS "Customer",
+    COALESCE(cust.phone, cust.mobile, '')                           AS "Phone",
+    'Corporate'                                                     AS "Location",
+    COALESCE(sp.name, 'Not recorded')                               AS "Sold By",
+    pt.name                                                         AS "Product",
+    COALESCE(pc.name, '')                                           AS "Category",
+    sol.product_uom_qty                                             AS "Qty",
+    CASE WHEN pc.complete_name ILIKE 'Bags%' AND NOT COALESCE(pt.is_combo, FALSE)
+         THEN sol.product_uom_qty ELSE 0 END                        AS "Bags",
+    CASE WHEN pt.name ILIKE '%Delivery Fee%' THEN 0
+         ELSE sol.price_total / COALESCE(NULLIF(so.currency_rate, 0), 1) END AS "Revenue"
+FROM sale_order so
+JOIN sale_order_line        sol  ON sol.order_id = so.id
+LEFT JOIN res_partner       cust ON cust.id = so.partner_id
+LEFT JOIN res_users         u    ON u.id = so.user_id
+LEFT JOIN res_partner       sp   ON sp.id = u.partner_id
+LEFT JOIN product_product   pp   ON pp.id = sol.product_id
+LEFT JOIN product_template  pt   ON pt.id = pp.product_tmpl_id
+LEFT JOIN product_category  pc   ON pc.id = pt.categ_id
+WHERE so.state IN ('sale', 'done')
+  AND sol.display_type IS NULL
+  AND so.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+
+UNION ALL
+
+SELECT
+    'Shop Corporate',
+    po.date_order::DATE,
+    po.name,
+    COALESCE(NULLIF(TRIM(cust.name), ''), 'Not recorded'),
+    COALESCE(cust.phone, cust.mobile, ''),
+    CASE
+        WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+            THEN 'Website'
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+        ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+    END,
+    CASE WHEN NULLIF(TRIM(ba.name), '') IS NOT NULL THEN TRIM(ba.name) || ' (BA)'
+         ELSE COALESCE(NULLIF(TRIM(att_p.name), ''), 'Not recorded') END,
+    pt.name,
+    COALESCE(pc.name, ''),
+    pol.qty + COALESCE(ref.qty, 0),
+    CASE WHEN (pc.complete_name ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
+              AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
+         THEN pol.qty + COALESCE(ref.qty, 0) ELSE 0 END,
+    CASE WHEN pt.name ILIKE '%Delivery Fee%' THEN 0
+         ELSE (pol.price_subtotal_incl + COALESCE(ref.amount, 0))
+              / COALESCE(NULLIF(po.currency_rate, 0), 1) END
+FROM pos_order po
+JOIN res_partner               cust   ON cust.id = po.partner_id
+JOIN pos_order_line            pol    ON pol.order_id = po.id
+LEFT JOIN refunded             ref    ON ref.line_id = pol.id
+LEFT JOIN product_product      pp     ON pp.id = pol.product_id
+LEFT JOIN product_template     pt     ON pt.id = pp.product_tmpl_id
+LEFT JOIN product_category     pc     ON pc.id = pt.categ_id
+LEFT JOIN pos_session          ps     ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf  ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt    ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw     ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl     ON sl.id = spt.default_location_src_id
+LEFT JOIN res_users            att    ON att.id = po.attendant_id
+LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
+LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND LOWER(TRIM(COALESCE(cust.gender, ''))) = 'corporate'
+  AND pol.qty > 0
+  AND NOT (pol.qty + COALESCE(ref.qty, 0) = 0
+           AND pol.price_subtotal_incl + COALESCE(ref.amount, 0) = 0)
+  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""
+
+# Corporate quotations not yet confirmed (draft or sent), for the pipeline.
+CORPORATE_QUOTATIONS = """
+SELECT so.date_order::DATE AS "Date", so.name AS "Quotation",
+       COALESCE(NULLIF(TRIM(cust.name), ''), 'Not recorded') AS "Customer",
+       COALESCE(sp.name, 'Not recorded') AS "Sold By",
+       CASE so.state WHEN 'draft' THEN 'Draft' WHEN 'sent' THEN 'Sent' ELSE so.state END AS "Status",
+       so.validity_date AS "Valid Until",
+       ROUND((so.amount_total / COALESCE(NULLIF(so.currency_rate, 0), 1))::NUMERIC, 2) AS "Value"
+FROM sale_order so
+LEFT JOIN res_partner cust ON cust.id = so.partner_id
+LEFT JOIN res_users   u    ON u.id = so.user_id
+LEFT JOIN res_partner sp   ON sp.id = u.partner_id
+WHERE so.state IN ('draft', 'sent')
+  AND so.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+ORDER BY so.date_order DESC
 """
