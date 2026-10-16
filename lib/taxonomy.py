@@ -55,7 +55,7 @@ _COLOR_SUFFIXES = sorted([
     # Colours on bags since added to Odoo; without them "Lamora Sky Blue"
     # was read as a bag called "Lamora Sky" with its own subtotal.
     "Sky Blue", "Dark Green", "Jungle Green", "Baby Pink", "Chocolate Brown",
-    "Amber", "Caramel", "Silver", "Cream", "Creame", "Melon", "Peach",
+    "Amber", "Caramel", "Silver", "Cream", "Creame", "Melon", "Peach", "Tan",
     "Croc.Mustard", "Croc.Brown", "Croc.Orange", "Croc.Pink", "Y.Dotted",
 ], key=len, reverse=True)
 

@@ -5018,3 +5018,16 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
   AND pc.complete_name ILIKE 'Bags%'
   AND NOT COALESCE(pol.is_combo_line, FALSE)
 """
+
+
+# When each bag product was added to Odoo — for Runway Bags, the bag families
+# launched after Lafemme (Product Sales → New Products).
+BAG_TEMPLATE_DATES = """
+SELECT pt.name AS "Product", pt.create_date AS "Created", pc.name AS "Category"
+FROM product_template pt
+JOIN product_category pc ON pc.id = pt.categ_id
+WHERE pc.complete_name ILIKE 'Bags /%'
+  AND pc.complete_name NOT ILIKE '%Clothing%'
+  AND NOT COALESCE(pt.is_combo, FALSE)
+  AND pt.name NOT LIKE '%+%'
+"""

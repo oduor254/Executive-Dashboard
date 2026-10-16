@@ -805,23 +805,83 @@ def _tracked_new_products() -> list[str]:
 
 @st.fragment()
 def render_new_products(start_date: date, end_date: date) -> None:
+    view = st.segmented_control("New products", ["Tracked Collections", "Runway Bags"],
+                                default="Tracked Collections", key="new_products_view",
+                                label_visibility="collapsed") or "Tracked Collections"
+    if view == "Runway Bags":
+        _runway_bags(start_date, end_date)
+        return
+
     families = _tracked_new_products()
     if not families:
         st.info(f"No new collections listed — add them to lib/data/{NEW_PRODUCTS_FILE}.")
         return
-
     df = db.run_query(
         queries.NEW_PRODUCTS,
         {"start_date": start_date, "end_date": end_date, "families": families},
     )
+    _new_products_view(df, "New Collections", (
+        f"the collections listed in lib/data/{NEW_PRODUCTS_FILE} — edit that file to add or "
+        "retire one. Each covers every colour and variant of the bag (Loop BP includes Loop BP "
+        "CN and reject stock)."))
 
+
+# Runway Bags start with the first new style after Lafemme.
+RUNWAY_AFTER = "Lafemme"
+
+
+def _runway_families() -> pd.DataFrame:
+    """Bag families whose first product was added to Odoo after Lafemme's,
+    each with the day it was added and its colours so far."""
+    bags = db.run_query(queries.BAG_TEMPLATE_DATES)
+    if bags.empty:
+        return pd.DataFrame(columns=["Product", "Added", "Colours", "Category"])
+    bags = bags.assign(Family=bags["Product"].map(taxonomy.group_of),
+                       Created=pd.to_datetime(bags["Created"]))
+    first = (bags.groupby("Family")
+             .agg(Added=("Created", "min"), Colours=("Product", "nunique"),
+                  Category=("Category", "first")))
+    anchor = first[first.index.str.lower().str.startswith(RUNWAY_AFTER.lower())]["Added"].min()
+    if pd.isna(anchor):
+        return pd.DataFrame(columns=["Product", "Added", "Colours", "Category"])
+    older = [f.lower() for f in first[first["Added"] <= anchor].index]
+    # A custom or special version of an older bag ("Fabela Custom") is that
+    # bag, not a new style.
+    is_variant = [any(f.lower().startswith(o + " ") for o in older) for f in first.index]
+    runway = first[(first["Added"] > anchor) & ~pd.Series(is_variant, index=first.index)
+                   & ~first.index.str.lower().str.startswith(RUNWAY_AFTER.lower())]
+    runway = runway.assign(Added=runway["Added"].dt.date,
+                           Category=runway["Category"].str.replace("Bags / ", "", regex=False))
+    return runway.reset_index().rename(columns={"Family": "Product"}).sort_values("Added")
+
+
+def _runway_bags(start_date: date, end_date: date) -> None:
+    runway = _runway_families()
+    if runway.empty:
+        st.info(f"No bag styles have been added to Odoo since {RUNWAY_AFTER}.")
+        return
+    df = db.run_query(queries.NEW_PRODUCTS, {"start_date": start_date, "end_date": end_date,
+                                             "families": runway["Product"].tolist()})
+    df = runway.merge(df, on="Product", how="left")
+    df = df[["Product", "Category", "Added", "Colours", "First Sold", "Quantity Sold",
+             "Revenue", "Units Since Launch"]].fillna({"Quantity Sold": 0, "Revenue": 0,
+                                                       "Units Since Launch": 0})
+    df = df.sort_values(["Revenue", "Added"], ascending=[False, False])
+    _new_products_view(df, "Runway Bags", (
+        f"every bag style added to Odoo after {RUNWAY_AFTER} (first added "
+        f"{runway['Added'].min():%d %b %Y} onward), found automatically — a new style shows "
+        "here as soon as it is created. A style covers all its colours; new colours of older "
+        "bags (Remi Brown, Gym Bag Pink) are not new styles and are left out."))
+
+
+def _new_products_view(df: pd.DataFrame, label: str, about: str) -> None:
     total_revenue = df["Revenue"].sum()
     total_qty = df["Quantity Sold"].sum()
 
     k1, k2, k3 = st.columns(3)
     with k1.container(border=True):
         selling = int((df["Quantity Sold"] > 0).sum())
-        st.metric("New Collections", f"{len(df):,}", f"{selling} selling in this range",
+        st.metric(label, f"{len(df):,}", f"{selling} selling in this range",
                   delta_color="off")
     with k2.container(border=True):
         st.metric("Revenue", f"KES {total_revenue:,.0f}")
@@ -829,9 +889,7 @@ def render_new_products(start_date: date, end_date: date) -> None:
         st.metric("Units Sold", f"{total_qty:,.0f}")
 
     st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · the collections listed in "
-        f"lib/data/{NEW_PRODUCTS_FILE} — edit that file to add or retire one. Each covers "
-        "every colour and variant of the bag (Loop BP includes Loop BP CN and reject stock). "
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · {about} "
         "Quantity Sold and Revenue follow the date range above; Units Since Launch does not. "
         "Bags are counted the way Bags Sold counts them, and revenue nets refunds."
     )
@@ -849,13 +907,14 @@ def render_new_products(start_date: date, end_date: date) -> None:
                                "%{customdata[0]:,.0f} bags<extra></extra>"),
             )
             theme.apply_layout(fig, show_legend=False)
-            fig.update_layout(title="New Collections by Revenue",
+            fig.update_layout(title=f"{label} by Revenue",
                               height=max(360, 32 * len(top) + 80), hovermode="closest")
             theme.show(fig, width="stretch")
 
     with st.container(border=True):
         st.caption("Click a column header's filter icon to search or narrow that column.")
-        grid.filterable_table(df, currency_columns=("Revenue",))
+        grid.filterable_table(df, currency_columns=("Revenue",), pinned_columns=("Product",))
+
 
 CORPORATE_COLORS = {"Corporate Sales": theme.CATEGORICAL[0], "Shop Corporate": theme.CATEGORICAL[2]}
 
