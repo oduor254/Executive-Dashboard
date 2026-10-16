@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -683,6 +684,55 @@ def _out_of_stock_cases(start_date: date, end_date: date) -> pd.DataFrame:
     return cases.sort_values("Date", ascending=False)
 
 
+def _phone_key(value) -> str | None:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[-9:] if len(digits) >= 9 else None
+
+
+def _fulfilment(cases: pd.DataFrame) -> pd.DataFrame:
+    """Did each out-of-stock customer later buy the bag they asked for?
+
+    Matched on the last nine digits of their phone: a bag of the same family
+    (any colour) bought at any shop or online on or after the day they asked.
+    "Several bags" requests ("Kai/Loop") are met by any bag they name.
+    Requests with no phone cannot be followed and are marked so.
+    """
+    out = cases.copy()
+    out["Phone Key"] = out["Contact"].map(_phone_key)
+    out["Fulfilled"], out["Bought On"], out["Bought At"], out["Bought Other"] = False, None, None, False
+    keys = sorted(k for k in out["Phone Key"].dropna().unique())
+    if not keys:
+        out["Trackable"] = False
+        return out
+    bought = db.run_query(queries.PURCHASES_BY_PHONE,
+                          {"phone_keys": keys, "from_date": out["Date"].min()})
+    out["Trackable"] = out["Phone Key"].notna()
+    if bought.empty:
+        return out
+    bought["Family"] = bought["Product"].map(lambda p: stock_planning.family(str(p)).lower())
+    bought["Bought On"] = pd.to_datetime(bought["Bought On"])
+    by_key = {k: g.sort_values("Bought On") for k, g in bought.groupby("Phone Key")}
+    for i, row in out[out["Trackable"]].iterrows():
+        later = by_key.get(row["Phone Key"])
+        if later is None:
+            continue
+        later = later[later["Bought On"] >= pd.Timestamp(row["Date"])]
+        if later.empty:
+            continue
+        want = str(row["Bag"] or "").lower()
+        text = str(row["Product Wanted"] or "").lower()
+        hit = later[[f == want or (len(f) > 2 and f in text) or (want and want in f)
+                     for f in later["Family"]]]
+        if not hit.empty and want not in ("", "not recorded"):
+            out.at[i, "Fulfilled"] = True
+            out.at[i, "Bought On"] = hit["Bought On"].iloc[0].date()
+            out.at[i, "Bought At"] = hit["Bought At"].iloc[0]
+        else:
+            out.at[i, "Bought Other"] = True
+    out["Days to Fulfil"] = (pd.to_datetime(out["Bought On"]) - pd.to_datetime(out["Date"])).dt.days
+    return out
+
+
 @st.fragment()
 def render_out_of_stock(start_date: date, end_date: date) -> None:
     """Out-of-stock demand from walk-in customers (Leads) and online customers
@@ -691,6 +741,7 @@ def render_out_of_stock(start_date: date, end_date: date) -> None:
     if cases.empty:
         st.info("No out-of-stock requests in this date range.")
         return
+    cases = _fulfilment(cases)
 
     c1, c2 = st.columns(2)
     source = c1.selectbox("Source", ["Both", OOS_LEADS, OOS_WHATSAPP], key="oos_source")
@@ -714,7 +765,23 @@ def render_out_of_stock(start_date: date, end_date: date) -> None:
         ("Most Wanted", top.index[0] if not top.empty else "—",
          f"{top.iloc[0]:,} requests" if not top.empty else None),
     ])
-    st.caption("Every out-of-stock case in the range: walk-in customers recorded in the Leads "
+    tracked = shown[shown["Trackable"]]
+    done = int(tracked["Fulfilled"].sum())
+    other = int(tracked["Bought Other"].sum())
+    _kpis([
+        ("Fulfilled", f"{done:,}", "bought the bag they asked for"),
+        ("Fulfilment Rate", _pct(done, len(tracked)), f"of {len(tracked):,} with a phone number"),
+        ("Bought Something Else", f"{other:,}", _pct(other, len(tracked))),
+        ("Still Waiting", f"{len(tracked) - done - other:,}", "no bag bought since"),
+        ("Days to Fulfil", f"{tracked['Days to Fulfil'].median():.0f}"
+         if done else "—", "median, request to purchase"),
+    ])
+    st.caption("**Fulfilled** means the customer (matched on the last nine digits of their "
+               "phone) bought the bag they asked for — any colour, at any shop or online — on "
+               "or after the day they asked; **Bought Something Else** means they bought a "
+               "different bag instead. Requests with no phone number can't be followed and are "
+               "left out of the rate. "
+               "Every out-of-stock case in the range: walk-in customers recorded in the Leads "
                "module as **Awaiting Stock**, and WhatsApp Monitor chats flagged **out of "
                "stock** (one row per bag asked for). Bags are grouped across colours. "
                "Stock is what is on hand now — at the shops and in transit, and ready in the "
@@ -760,16 +827,25 @@ def render_out_of_stock(start_date: date, end_date: date) -> None:
                       WhatsApp=("Source", lambda v: int((v == OOS_WHATSAPP).sum())),
                       Customers=("Contact", "nunique"),
                       Locations=("Location", lambda v: ", ".join(sorted(set(v.dropna())))),
-                      **{"Last Asked": ("Date", "max")}))
+                      **{"Last Asked": ("Date", "max")},
+                      Trackable=("Trackable", "sum"), Fulfilled=("Fulfilled", "sum")))
+        table["Fulfilment %"] = (table["Fulfilled"] / table["Trackable"].where(table["Trackable"] > 0)
+                                 * 100).round(1)
+        table = table.drop(columns=["Trackable"])
         table["At Shops Now"] = at_shops.reindex(table.index).fillna(0).clip(lower=0)
         table["In Warehouse Now"] = in_wh.reindex(table.index).fillna(0).clip(lower=0)
         grid.filterable_table(table.reset_index().sort_values("Requests", ascending=False),
                               pinned_columns=("Bag",), height=420)
     with st.container(border=True):
-        _table(shown, {"Date": "DATE", "Source": "SOURCE", "Customer": "CUSTOMER",
-                       "Contact": "CONTACT", "Location": "LOCATION",
-                       "Product Wanted": "PRODUCT WANTED", "Colour": "COLOUR",
-                       "Detail": "NOTE / REASON", "Served By": "SERVED BY"},
+        outcome = np.select([~shown["Trackable"], shown["Fulfilled"], shown["Bought Other"]],
+                            ["No phone", "Fulfilled", "Bought something else"], "Still waiting")
+        _table(shown.assign(Outcome=outcome),
+               {"Date": "DATE", "Source": "SOURCE", "Customer": "CUSTOMER",
+                "Contact": "CONTACT", "Location": "LOCATION",
+                "Product Wanted": "PRODUCT WANTED", "Colour": "COLOUR",
+                "Outcome": "OUTCOME", "Bought On": "BOUGHT ON", "Bought At": "BOUGHT AT",
+                "Days to Fulfil": "DAYS TO FULFIL",
+                "Detail": "NOTE / REASON", "Served By": "SERVED BY"},
                pinned_columns=("CUSTOMER",))
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 

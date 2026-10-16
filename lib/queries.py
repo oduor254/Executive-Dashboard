@@ -4979,3 +4979,42 @@ WHERE q.status = 'draft'
   AND q.date_quote BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 ORDER BY q.date_quote DESC
 """
+
+
+# Bags bought by a set of customers (last nine digits of the phone) from a
+# date on, at any shop or online — to see whether out-of-stock customers came
+# back and bought the bag they asked for.
+PURCHASES_BY_PHONE = r"""
+WITH buyers AS (
+    SELECT rp.id,
+           RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9) AS phone_key
+    FROM res_partner rp
+    WHERE RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9)
+          = ANY(CAST(:phone_keys AS TEXT[]))
+)
+SELECT b.phone_key AS "Phone Key", po.date_order::DATE AS "Bought On", po.name AS "Receipt",
+       pt.name AS "Product",
+       CASE
+           WHEN lower(pconf.name) IN ('website sales', 'website') OR po.session_id IS NULL THEN 'Website'
+           WHEN lower(pconf.name) = 'jumia' THEN 'Jumia'
+           WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+           ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                   COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+       END AS "Bought At"
+FROM buyers b
+JOIN pos_order po              ON po.partner_id = b.id
+JOIN pos_order_line pol        ON pol.order_id = po.id
+JOIN product_product pp        ON pp.id = pol.product_id
+JOIN product_template pt       ON pt.id = pp.product_tmpl_id
+JOIN product_category pc       ON pc.id = pt.categ_id
+LEFT JOIN pos_session ps       ON ps.id = po.session_id
+LEFT JOIN pos_config pconf     ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type spt ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse sw   ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location sl    ON sl.id = spt.default_location_src_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND pol.qty > 0
+  AND po.date_order::DATE >= CAST(:from_date AS DATE)
+  AND pc.complete_name ILIKE 'Bags%'
+  AND NOT COALESCE(pol.is_combo_line, FALSE)
+"""
