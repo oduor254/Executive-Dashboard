@@ -134,22 +134,23 @@ def render_sales(start_date: date, end_date: date) -> None:
     basis = targets.basis_for(
         start_date, end_date,
         db.run_query(queries.SALES_TARGET_ROWS, {"start_date": start_date, "end_date": end_date}))
-    # Corporate sales have a target of their own. They are made two ways: as
-    # orders in Odoo's Sales module (the corporate team's own orders, never
-    # through a till) and at the shops' tills for customers recorded as
-    # Corporate. Both count toward the corporate target, so the Corporate row
-    # holds both; the grand total only adds the Sales-module orders, since
-    # the till ones are already in their shop's revenue.
-    corp = db.run_query(queries.CORPORATE_LINES, {"start_date": start_date, "end_date": end_date})
-    corp_module = corp[corp["Channel"] == "Corporate Sales"]
+    # Corporate sales have a target of their own and are counted as Odoo's
+    # Sales & POS Dashboard counts them: revenue is the payments received on
+    # corporate invoices in the period, orders the number of those payments,
+    # quantity everything on the corporate jobs dated in it. Till sales to
+    # customers recorded as Corporate ("Shop Corporate") are the shops' own,
+    # in their revenue and targets. The grand total adds the corporate row,
+    # as Odoo's does.
+    params = {"start_date": start_date, "end_date": end_date}
+    corp_totals = db.run_query(queries.CORPORATE_TOTALS, params).iloc[0]
+    shop_corp = db.run_query(queries.CORPORATE_LINES, params)
+    shop_corp = shop_corp.loc[shop_corp["Channel"] == "Shop Corporate", "Revenue"].sum()
     corp_row = {c: 0 for c in df.columns if c != "Branch"}
-    corp_row.update({"Branch": "Corporate", "Revenue": round(corp["Revenue"].sum(), 2),
-                     "Orders": corp["Order"].nunique(), "Qty": corp["Bags"].sum()})
+    corp_row.update({"Branch": "Corporate", "Revenue": round(float(corp_totals["Revenue"]), 2),
+                     "Orders": int(corp_totals["Payments"]), "Qty": float(corp_totals["Qty"])})
     total_at = df.index[df["Branch"] == "GRAND TOTAL"]
-    for col, value in (("Revenue", corp_module["Revenue"].sum()),
-                       ("Orders", corp_module["Order"].nunique()),
-                       ("Qty", corp_module["Bags"].sum())):
-        df.loc[total_at, col] = df.loc[total_at, col] + value
+    for col in ("Revenue", "Orders", "Qty"):
+        df.loc[total_at, col] = df.loc[total_at, col] + corp_row[col]
     df = pd.concat([df[df["Branch"] != "GRAND TOTAL"], pd.DataFrame([corp_row]),
                     df[df["Branch"] == "GRAND TOTAL"]], ignore_index=True)
 
@@ -183,16 +184,15 @@ def render_sales(start_date: date, end_date: date) -> None:
         st.metric("Corporate Revenue", f"KES {corporate['Revenue']:,.0f}",
                   delta=(f"{corp_pct:,.1f}% of target · {corp_pct - pace:+,.1f} pts vs pace"
                          if pd.notna(corp_pct) else "no corporate target"),
-                  help=f"Corporate Sales (Sales module) KES {corp_module['Revenue'].sum():,.0f} + "
-                       f"Shop Corporate (till orders for Corporate customers) KES "
-                       f"{corp['Revenue'].sum() - corp_module['Revenue'].sum():,.0f}, against "
-                       f"the corporate target of KES {corporate['Target']:,.0f}.")
+                  help=f"Payments received on corporate invoices in the period, as Odoo's Sales "
+                       f"& POS Dashboard counts them, against the corporate target of KES "
+                       f"{corporate['Target']:,.0f}. Till sales to Corporate customers (KES "
+                       f"{shop_corp:,.0f}) are in their shops' revenue and targets instead.")
 
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · measured against the "
                f"{basis.label} (KES {totals['Target']:,.0f}, the corporate target included) · "
-               "the Corporate row is corporate sales from the Sales module plus till sales to "
-               "Corporate customers; the totals add only the Sales-module orders, the till ones "
-               "being in their shop's revenue already")
+               "the Corporate row is payments received on corporate invoices, as Odoo's Sales & "
+               "POS Dashboard shows it; till sales to Corporate customers are in their shop's row")
 
     if branches.empty:
         with st.container(border=True):

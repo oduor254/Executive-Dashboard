@@ -874,16 +874,20 @@ def render_corporate(start_date: date, end_date: date) -> None:
     channel = st.selectbox("Corporate type", ["All Corporate", *CORPORATE_COLORS],
                            key="corporate_channel")
     shown = lines if channel == "All Corporate" else lines[lines["Channel"] == channel]
-    revenue = shown["Revenue"].sum()
     by_type = lines.groupby("Channel")["Revenue"].sum()
-    pct = revenue / target * 100 if target else None
+    # The corporate target is the corporate team's, measured as Odoo's Sales &
+    # POS Dashboard measures it: payments received on corporate invoices in the
+    # period. Shop Corporate is the shops' own, in their targets.
+    totals = db.run_query(queries.CORPORATE_TOTALS, params).iloc[0]
+    module = float(totals["Revenue"])
+    pct = module / target * 100 if target else None
     items = [
-        ("Corporate Revenue", f"KES {revenue:,.0f}",
-         f"{pct:.1f}% of KES {target:,.0f} ({basis.expected * 100:.0f}% due by now)"
-         if pct is not None else "no corporate target"),
-        ("Corporate Sales", f"KES {by_type.get('Corporate Sales', 0):,.0f}", "Sales module orders"),
+        ("Corporate Sales", f"KES {module:,.0f}",
+         f"{pct:.1f}% of the KES {target:,.0f} corporate target "
+         f"({basis.expected * 100:.0f}% due by now)" if pct is not None else "no corporate target"),
         ("Shop Corporate", f"KES {by_type.get('Shop Corporate', 0):,.0f}",
-         "till sales to Corporate customers"),
+         "till sales to Corporate customers — in the shops' targets"),
+        ("Revenue Shown", f"KES {shown['Revenue'].sum():,.0f}", channel),
         ("Orders", f"{shown['Order'].nunique():,}", f"{shown['Customer'].nunique():,} customers"),
         ("Bags", f"{shown['Bags'].sum():,.0f}", f"{shown['Qty'].sum():,.0f} items in all"),
         ("Open Quotations", f"KES {quotes['Value'].sum():,.0f}",
@@ -893,11 +897,15 @@ def render_corporate(start_date: date, end_date: date) -> None:
         with col.container(border=True):
             st.metric(label, value, note, delta_color="off")
     st.caption(
-        "**Corporate Sales** are confirmed orders in Odoo's Sales module (the corporate team's "
-        "orders, never through a till). **Shop Corporate** are till sales at the shops to "
-        "customers recorded as Corporate — already in their shop's revenue on the Sales page. "
-        f"Both count toward the corporate target ({basis.label}). Revenue in KES, VAT "
-        "included, delivery fees out.")
+        f"**Corporate Sales** are the corporate team's jobs: the figure above is the payments "
+        f"received in the period, as Odoo's Sales & POS Dashboard shows it "
+        f"({int(totals['Payments'])} payments; {totals['Qty']:,.0f} items on "
+        f"{int(totals['Jobs'])} jobs ordered in it), and the products and values below are "
+        "those jobs' lines. **Shop Corporate** are till sales at the shops to customers "
+        "recorded as Corporate — already in their shop's revenue on the Sales page. "
+        f"Only Corporate Sales count toward the corporate target ({basis.label}); Shop "
+        "Corporate counts toward the shops' own targets. Revenue in KES, VAT included, "
+        "delivery fees out.")
     if shown.empty:
         st.info("No corporate sales in this date range.")
     else:
@@ -975,9 +983,7 @@ def render_corporate(start_date: date, end_date: date) -> None:
     if quotes.empty:
         st.info("No open quotations in this date range.")
     else:
-        st.caption("Quotations in the Sales module not yet confirmed (draft or sent) — the "
-                   "corporate pipeline. A quotation that ends up rung at a shop till shows "
-                   "above as Shop Corporate.")
+        st.caption("Corporate quotations still in draft — the corporate pipeline.")
         with st.container(border=True):
             grid.filterable_table(quotes, currency_columns=("Value",),
                                   pinned_columns=("Quotation",), height=360)

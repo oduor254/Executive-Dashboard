@@ -20,7 +20,9 @@ branch_totals AS (
             -- branch_mapping below, which would silently drop them from the
             -- grand total. Bucket by config name first, same as
             -- PRODUCT_SALES_BY_SHOP/BAGS_SOLD_BY_CATEGORY already do.
-            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+            WHEN lower(pconf.name) = 'jumia'
+                THEN 'Jumia'
+            WHEN lower(pconf.name) IN ('website sales', 'website') OR po.session_id IS NULL
                 THEN 'Website'
             WHEN lower(pconf.name) = 'staff pos'
                 THEN 'Staff POS'
@@ -39,8 +41,10 @@ branch_totals AS (
         -- That is what Odoo's own dashboard reports — for 24 Sep 2026 both
         -- read KES 1,369,141.64, the difference being exactly the day's
         -- KES 9,450 of delivery fees.
+        -- Customization fees are left out too, as Odoo's dashboard does
+        -- (Mombasa, 1-16 Oct 2026: KES 1,400 of them, exactly the difference).
         SUM(CASE
-            WHEN pt.name NOT ILIKE '%Delivery Fee%'
+            WHEN pt.name NOT ILIKE '%Delivery Fee%' AND pt.name NOT ILIKE '%Customization Fee%'
             THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
             ELSE 0
         END)                                                        AS revenue,
@@ -98,7 +102,9 @@ branch_totals AS (
 
     GROUP BY
         CASE
-            WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+            WHEN lower(pconf.name) = 'jumia'
+                THEN 'Jumia'
+            WHEN lower(pconf.name) IN ('website sales', 'website') OR po.session_id IS NULL
                 THEN 'Website'
             WHEN lower(pconf.name) = 'staff pos'
                 THEN 'Staff POS'
@@ -146,6 +152,7 @@ branch_mapping AS (
     UNION ALL SELECT 'Meru', 'MERU'
     -- No target, but Odoo counts its takings, so it is listed and totalled.
     UNION ALL SELECT 'Staff POS', NULL
+    UNION ALL SELECT 'Jumia', NULL
 ),
 
 results AS (
@@ -4852,13 +4859,13 @@ HAVING SUM(pol.qty + COALESCE(ref.qty, 0)) > 0
 
 
 # Corporate sales, line by line, from both places they are made:
-#   Corporate Sales — confirmed orders in Odoo's Sales module (sale_order in
-#                     state sale/done): the corporate team's orders, which
-#                     never pass through a shop till;
+#   Corporate Sales — the corporate team's jobs (work orders, CO-…) in the
+#                     corporate app, dated by order, with their products;
 #   Shop Corporate  — till orders at the shops for customers recorded as
 #                     Corporate (res_partner.gender), refunds netted.
-# Revenue is in KES, VAT included like the Sales page, delivery fees out.
-# Bags counts bags (bags inside a combo, not the combo line).
+# Revenue is in KES, VAT included like the Sales page, delivery fees out; a
+# job's line is valued at its quantity times its unit price. Bags leaves out
+# a job's charges (logo origination, customization).
 CORPORATE_LINES = r"""
 WITH refunded AS (
     SELECT r.refunded_orderline_id AS line_id,
@@ -4869,30 +4876,25 @@ WITH refunded AS (
 )
 SELECT
     'Corporate Sales'                                               AS "Channel",
-    so.date_order::DATE                                             AS "Date",
-    so.name                                                         AS "Order",
-    COALESCE(NULLIF(TRIM(cust.name), ''), 'Not recorded')           AS "Customer",
-    COALESCE(cust.phone, cust.mobile, '')                           AS "Phone",
+    w.date_order                                                    AS "Date",
+    w.name                                                          AS "Order",
+    COALESCE(NULLIF(TRIM(w.company), ''), 'Not recorded')           AS "Customer",
+    ''                                                              AS "Phone",
     'Corporate'                                                     AS "Location",
     COALESCE(sp.name, 'Not recorded')                               AS "Sold By",
-    pt.name                                                         AS "Product",
-    COALESCE(pc.name, '')                                           AS "Category",
-    sol.product_uom_qty                                             AS "Qty",
-    CASE WHEN pc.complete_name ILIKE 'Bags%' AND NOT COALESCE(pt.is_combo, FALSE)
-         THEN sol.product_uom_qty ELSE 0 END                        AS "Bags",
-    CASE WHEN pt.name ILIKE '%Delivery Fee%' THEN 0
-         ELSE sol.price_total / COALESCE(NULLIF(so.currency_rate, 0), 1) END AS "Revenue"
-FROM sale_order so
-JOIN sale_order_line        sol  ON sol.order_id = so.id
-LEFT JOIN res_partner       cust ON cust.id = so.partner_id
-LEFT JOIN res_users         u    ON u.id = so.user_id
-LEFT JOIN res_partner       sp   ON sp.id = u.partner_id
-LEFT JOIN product_product   pp   ON pp.id = sol.product_id
-LEFT JOIN product_template  pt   ON pt.id = pp.product_tmpl_id
-LEFT JOIN product_category  pc   ON pc.id = pt.categ_id
-WHERE so.state IN ('sale', 'done')
-  AND sol.display_type IS NULL
-  AND so.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+    COALESCE(NULLIF(TRIM(l.product), ''), 'Not recorded')           AS "Product",
+    'Corporate Job'                                                 AS "Category",
+    l.qty                                                           AS "Qty",
+    CASE WHEN l.product ILIKE '%fee%' OR l.product ILIKE '%logo%'
+              OR l.product ILIKE '%origination%' OR l.product ILIKE '%branding%'
+         THEN 0 ELSE l.qty END                                      AS "Bags",
+    l.qty * l.price_unit                                            AS "Revenue"
+FROM denri_corporate_workorder w
+JOIN denri_corporate_workorder_line l ON l.workorder_id = w.id
+LEFT JOIN res_users   u  ON u.id = w.user_id
+LEFT JOIN res_partner sp ON sp.id = u.partner_id
+WHERE COALESCE(w.stage, '') NOT IN ('cancel', 'cancelled')
+  AND w.date_order BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 
 UNION ALL
 
@@ -4943,19 +4945,36 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
   AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 """
 
-# Corporate quotations not yet confirmed (draft or sent), for the pipeline.
+# The corporate figures as Odoo's Sales & POS Dashboard shows them: revenue is
+# the payments received in the period on corporate invoices, orders is the
+# number of those payments, and quantity is everything on the corporate
+# jobs (work orders) dated in the period.
+CORPORATE_TOTALS = """
+SELECT
+    (SELECT COALESCE(SUM(p.amount), 0) FROM denri_corporate_payment p
+      WHERE p.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)) AS "Revenue",
+    (SELECT COUNT(*) FROM denri_corporate_payment p
+      WHERE p.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)) AS "Payments",
+    (SELECT COALESCE(SUM(w.qty_total), 0) FROM denri_corporate_workorder w
+      WHERE COALESCE(w.stage, '') NOT IN ('cancel', 'cancelled')
+        AND w.date_order BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)) AS "Qty",
+    (SELECT COUNT(*) FROM denri_corporate_workorder w
+      WHERE COALESCE(w.stage, '') NOT IN ('cancel', 'cancelled')
+        AND w.date_order BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)) AS "Jobs"
+"""
+
+# Corporate quotations still in draft, for the pipeline.
 CORPORATE_QUOTATIONS = """
-SELECT so.date_order::DATE AS "Date", so.name AS "Quotation",
-       COALESCE(NULLIF(TRIM(cust.name), ''), 'Not recorded') AS "Customer",
+SELECT q.date_quote AS "Date", q.name AS "Quotation",
+       COALESCE(NULLIF(TRIM(q.company), ''), 'Not recorded') AS "Customer",
        COALESCE(sp.name, 'Not recorded') AS "Sold By",
-       CASE so.state WHEN 'draft' THEN 'Draft' WHEN 'sent' THEN 'Sent' ELSE so.state END AS "Status",
-       so.validity_date AS "Valid Until",
-       ROUND((so.amount_total / COALESCE(NULLIF(so.currency_rate, 0), 1))::NUMERIC, 2) AS "Value"
-FROM sale_order so
-LEFT JOIN res_partner cust ON cust.id = so.partner_id
-LEFT JOIN res_users   u    ON u.id = so.user_id
-LEFT JOIN res_partner sp   ON sp.id = u.partner_id
-WHERE so.state IN ('draft', 'sent')
-  AND so.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
-ORDER BY so.date_order DESC
+       INITCAP(q.status) AS "Status",
+       q.date_quote + COALESCE(q.validity_days, 0) AS "Valid Until",
+       ROUND(q.amount_total::NUMERIC, 2) AS "Value"
+FROM denri_corporate_quote q
+LEFT JOIN res_users   u  ON u.id = q.user_id
+LEFT JOIN res_partner sp ON sp.id = u.partner_id
+WHERE q.status = 'draft'
+  AND q.date_quote BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+ORDER BY q.date_quote DESC
 """
