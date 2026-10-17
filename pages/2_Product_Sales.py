@@ -658,6 +658,38 @@ def render_by_offer(start_date: date, end_date: date) -> None:
         fig.update_layout(title="Revenue by Offer Type", height=360)
         theme.show(fig, width="stretch")
 
+    # Every offer type side by side for each location, over the period picked.
+    st.subheader("Offer Types Summary by Location")
+    show = st.radio("Show", ["Quantity and Total", "Quantity", "Total"], horizontal=True,
+                    key="offer_summary_show")
+    present = [o for o in order if o in set(df["Offer Type"])]
+    qty = df.pivot_table(index="Location", columns="Offer Type", values="Quantity",
+                         aggfunc="sum", fill_value=0).reindex(columns=present, fill_value=0)
+    tot = df.pivot_table(index="Location", columns="Offer Type", values="Total",
+                         aggfunc="sum", fill_value=0).reindex(columns=present, fill_value=0)
+    parts = []
+    for offer in present:
+        if show != "Total":
+            parts.append(qty[offer].rename(f"{offer} Qty"))
+        if show != "Quantity":
+            parts.append(tot[offer].round(2).rename(f"{offer} Total"))
+    summary = pd.concat(parts, axis=1)
+    if show != "Total":
+        summary["All Offers Qty"] = qty.sum(axis=1)
+    if show != "Quantity":
+        summary["All Offers Total"] = tot.sum(axis=1).round(2)
+    summary = summary.reset_index().sort_values(
+        "All Offers Total" if show != "Quantity" else "All Offers Qty", ascending=False)
+    with st.container(border=True):
+        st.caption(f"Each location's bags sold (Qty) and sales value in KES (Total) for every "
+                   f"offer type, {start_date:%d %b} – {end_date:%d %b %Y}, with the total at "
+                   "the bottom. Qty counts bags the way the rest of this tab does (a combo's "
+                   "bags under Combo); Total is what was charged, refunds netted.")
+        grid.filterable_table(summary, pinned_columns=("Location",),
+                              currency_columns=tuple(c for c in summary.columns
+                                                     if c.endswith(" Total")),
+                              height=520)
+
     # Order-level promotions ride as their own line ("300.0 KES discount on
     # total amount") rather than as a product price, so they are invisible to
     # everything above — which left a promotion running since April 2026 out of
