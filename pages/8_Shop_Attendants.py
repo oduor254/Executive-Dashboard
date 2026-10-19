@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, feedback, filters, grid, queries, scorecards, targets, theme, training
+from lib import (attendant_report, auth, db, feedback, filters, grid, queries, scorecards,
+                 targets, theme, training)
 
 st.set_page_config(page_title=auth.page_title("Shop Attendants"),
                    page_icon="🧑‍💼", layout="wide")
@@ -84,6 +85,17 @@ def render_attendants(start_date: date, end_date: date) -> None:
         with col.container(border=True):
             st.metric(label, value, note, delta_color="off")
 
+    # Achievement against individual targets, worked out over every shop (a
+    # shop's team is everyone who served there) and then narrowed to the
+    # location and person picked.
+    basis = targets.basis_for(start_date, end_date, db.run_query(
+        queries.SALES_TARGET_ROWS, {"start_date": start_date, "end_date": end_date}))
+    ach = attendant_report.achievement(df, df["Served By"], basis.targets, basis.expected)
+    if not ach.empty:
+        here = set(shown["Served By"])
+        ach = ach[ach["Shop Attendant / BA"].isin(here)]
+    _export(start_date, end_date, location, shown, ach)
+
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · one row per session for each "
         "shop attendant or brand ambassador who served in it — an order carries one or the "
@@ -102,7 +114,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     if section == "Sessions":
         if person == ALL_PEOPLE:
-            _by_person_chart(shown)
+            _achievement_chart(ach, basis.expected, basis.label)
         with st.container(border=True):
             st.caption(f"{len(shown):,} rows · click a column header's filter icon to search or "
                        "narrow it. The last row is the total for the range.")
@@ -116,24 +128,13 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
         st.subheader("By Shop Attendant / BA")
         with st.container(border=True):
-            st.caption("Each attendant's and BA's sales for the whole range, highest first, "
-                       "with the total at the bottom.")
-            per = (shown.groupby("Served By", as_index=False)
-                   .agg(Locations=("Location", lambda v: ", ".join(sorted(set(v)))),
-                        Sessions=("Session", "nunique"), Orders=("Orders", "sum"),
-                        **{"Sales Made": ("Sales Made", "sum")})
-                   .rename(columns={"Served By": "Shop Attendant / BA"})
-                   .sort_values("Sales Made", ascending=False))
+            st.caption("Each attendant's and BA's sales for the whole range against their "
+                       "individual target, ranked by achievement, with the total at the bottom.")
+            per = ach.copy()
             per["Share %"] = (per["Sales Made"] / per["Sales Made"].sum() * 100).round(1)
             per["Avg Sale"] = (per["Sales Made"] / per["Orders"].where(per["Orders"] > 0)).round(0)
-            per["Sales Made"] = per["Sales Made"].round(2)
-            total = {"Shop Attendant / BA": "TOTAL",
-                     "Locations": f"{shown['Location'].nunique()} locations",
-                     "Sessions": shown["Session"].nunique(), "Orders": int(per["Orders"].sum()),
-                     "Sales Made": round(per["Sales Made"].sum(), 2), "Share %": 100.0,
-                     "Avg Sale": round(per["Sales Made"].sum() / max(per["Orders"].sum(), 1), 0)}
-            grid.filterable_table(pd.concat([per, pd.DataFrame([total])], ignore_index=True),
-                                  currency_columns=("Sales Made", "Avg Sale"),
+            grid.filterable_table(per, currency_columns=("Sales Made", "Individual Target",
+                                                         "Avg Sale"),
                                   pinned_columns=("Shop Attendant / BA",), height=440)
     elif section == "Sales Training":
         _training(start_date, end_date, location)
@@ -145,30 +146,163 @@ def render_attendants(start_date: date, end_date: date) -> None:
         _feedback_table(start_date, end_date, location, person)
 
 
-def _by_person_chart(shown: pd.DataFrame) -> None:
-    by_person = (shown[shown["Served By"] != NOT_RECORDED]
-                 .groupby("Served By", as_index=False)
-                 .agg(Sales=("Sales Made", "sum"), Orders=("Orders", "sum"),
-                      Sessions=("Session", "nunique"))
-                 .sort_values("Sales", ascending=True))
-    if by_person.empty:
+PACE_COLORS = [(1.00, theme.STATUS["good"]), (0.90, theme.STATUS["warning"]),
+               (0.75, theme.STATUS["serious"]), (0.00, theme.STATUS["critical"])]
+
+
+def _pace_color(achieved: float, expected: float) -> str:
+    if pd.isna(achieved) or not expected:
+        return theme.OTHER
+    ratio = achieved / (expected * 100)
+    return next(color for floor, color in PACE_COLORS if ratio >= floor)
+
+
+def _achievement_chart(ach: pd.DataFrame, expected: float, label: str) -> None:
+    """Attendants and BAs ranked by achievement against their individual target."""
+    ranked = ach.dropna(subset=["Achievement %"]).sort_values("Achievement %").tail(30)
+    if ranked.empty:
         return
-    top = by_person.tail(20)
     with st.container(border=True):
         fig = go.Figure()
         fig.add_bar(
-            y=top["Served By"], x=top["Sales"], orientation="h",
-            marker=dict(color=theme.sequential_colors(len(top)), cornerradius=4),
-            customdata=top[["Orders", "Sessions"]],
-            hovertemplate=("<b>%{y}</b><br>KES %{x:,.0f}<br>%{customdata[0]:,} orders"
-                           " · %{customdata[1]:,} sessions<extra></extra>"),
+            y=ranked["Shop Attendant / BA"], x=ranked["Achievement %"], orientation="h",
+            marker=dict(color=[_pace_color(a, expected) for a in ranked["Achievement %"]],
+                        cornerradius=4),
+            text=[f"{a:.0f}%" for a in ranked["Achievement %"]], textposition="outside",
+            cliponaxis=False, textfont=dict(color=theme.TEXT_SECONDARY, size=11),
+            customdata=ranked[["Sales Made", "Individual Target", "Locations", "Rank"]],
+            hovertemplate=("<b>%{y}</b> — rank %{customdata[3]}<br>%{x:.1f}% of target<br>"
+                           "Sales KES %{customdata[0]:,.0f} of KES %{customdata[1]:,.0f}"
+                           "<br>%{customdata[2]}<extra></extra>"),
         )
+        fig.add_vline(x=expected * 100, line=dict(color=theme.TEXT_SECONDARY, dash="dash"),
+                      annotation_text=f"{expected * 100:.0f}% due by now",
+                      annotation_font_color=theme.TEXT_SECONDARY)
         theme.apply_layout(fig, show_legend=False)
-        fig.update_layout(title="Sales Made by Shop Attendant / BA", hovermode="closest",
-                          height=max(360, 28 * len(top) + 80))
-        fig.update_xaxes(showgrid=True, gridcolor=theme.GRIDLINE)
+        fig.update_layout(title="Achievement Against Individual Target — Shop Attendants / BAs",
+                          hovermode="closest", height=max(360, 28 * len(ranked) + 90))
+        fig.update_xaxes(ticksuffix="%", showgrid=True, gridcolor=theme.GRIDLINE)
         fig.update_yaxes(showgrid=False)
         theme.show(fig)
+        st.caption(f"Ranked by each person's own sales against their individual target: their "
+                   f"shop's target ({label}) shared equally between the attendants and BAs who "
+                   "served there in the range. Green is on or ahead of the pace due by now "
+                   "(dashed line); yellow, orange and red are slightly, moderately and well behind.")
+
+
+def _report_tables(start_date: date, end_date: date, location: str, shown: pd.DataFrame,
+                   ach: pd.DataFrame) -> tuple[list, dict, dict]:
+    """The report's summary lines, tables and table notes."""
+    in_loc = (lambda f: f) if location == "All Locations" else \
+        (lambda f: f[f["Location"] == location] if "Location" in f else f)
+    summary = [
+        ("Period", f"{start_date:%d %b %Y} – {end_date:%d %b %Y}"),
+        ("Location", location),
+        ("Sales Made", f"KES {shown['Sales Made'].sum():,.0f}"),
+        ("POS Sessions", f"{shown['Session'].nunique():,}"),
+        ("Attendants & BAs", f"{len(set(shown['Served By']) - {NOT_RECORDED}):,}"),
+        ("Nobody Recorded", f"KES {shown.loc[shown['Served By'] == NOT_RECORDED, 'Sales Made'].sum():,.0f}"),
+    ]
+    tables, notes = {}, {}
+    tables["Achievement vs Target"] = ach
+    notes["Achievement vs Target"] = ("Own sales against the individual target: the shop's target "
+                                      "for the period shared equally between its attendants and BAs.")
+
+    inputs = _scorecard_inputs(start_date, end_date)
+    if inputs is not None:
+        basis = inputs["basis"]
+        shops = scorecards.shop_cards(inputs["df"], inputs["previous"], basis.targets,
+                                      basis.expected, inputs["shop_training"],
+                                      _response_times(start_date, end_date))
+        people = scorecards.attendant_cards(inputs["df"], inputs["previous"], basis.targets,
+                                            basis.expected, inputs["person_training"])
+        shop_cols = (["Location", "Score"] + scorecards.SCORE_COLUMNS
+                     + ["Revenue", "Target", "Target %", "Corporate Revenue", "Orders",
+                        "Basket Value", "Basket Size", "Attendants", "Revenue per Attendant",
+                        "Customers", "Repeat %", "Retention %", "Feedback %", "Training %",
+                        "Response Time (min)"])
+        person_cols = (["Attendant / BA", "Location", "Score"] + scorecards.SCORE_COLUMNS
+                       + ["Target", "Revenue", "Target %", "Days Worked", "Revenue per Day",
+                          "Own Sales", "Orders", "Corporate Revenue", "Basket Value",
+                          "Basket Size", "Customers", "Repeat %", "Retention %", "Feedback %",
+                          "Training %"])
+        tables["Shop Score Cards"] = in_loc(shops)[[c for c in shop_cols if c in shops]]
+        tables["Attendant Score Cards"] = in_loc(people)[[c for c in person_cols if c in people]]
+        notes["Shop Score Cards"] = (f"Scores out of 100; the cumulative score is their average. "
+                                     f"Target: {basis.label}.")
+        summary.append(("Revenue target basis", basis.label))
+
+    try:
+        data = training.load()
+        days = [d for d in data["days"] if start_date <= d <= end_date and d < date.today()]
+        if days:
+            due = in_loc(training.due(data, days))
+
+            def train(by):
+                g = due.groupby(by)
+                out = pd.DataFrame({"Answers Due": g.size(), "Answered": g["Answered"].sum()})
+                out["Response Rate %"] = (out["Answered"] / out["Answers Due"] * 100).round(1)
+                answered = due[due["Answered"]].groupby(by)
+                out["Same Day %"] = (answered["On Time"].mean() * 100).round(1)
+                out["Completion %"] = answered["Completion %"].mean().round(1)
+                out["Average Score %"] = answered["Score %"].mean().round(1)
+                return out.reset_index().sort_values("Response Rate %", ascending=False)
+
+            tables["Sales Training by Shop"] = train(["Location"])
+            tables["Sales Training by Person"] = train(["Name", "Location"])
+            notes["Sales Training by Shop"] = f"{len(days)} daily questionnaire(s) in the period."
+    except training.TrainingUnavailable:
+        pass
+
+    tables["Sessions"] = shown[COLUMNS]
+    return summary, tables, notes
+
+
+def _for_word(tables: dict) -> dict:
+    """The Word report's tables: narrow enough for a page. Score cards keep
+    each measure's score; the full figures are in the Excel report."""
+    out = {}
+    for name, frame in tables.items():
+        if name == "Sessions" or frame is None or frame.empty:
+            continue
+        if name.endswith("Score Cards"):
+            keys = [c for c in ("Attendant / BA", "Location") if c in frame]
+            cols = keys + ["Score"] + [c for c in scorecards.SCORE_COLUMNS if c in frame]
+            frame = frame[cols].rename(columns=lambda c: c.replace(" Score", "") if c != "Score"
+                                       else "Cumulative Score")
+        elif name == "Achievement vs Target":
+            frame = frame[["Rank", "Shop Attendant / BA", "Locations", "Sales Made",
+                           "Individual Target", "Achievement %", "Pace %"]]
+        out[name] = frame
+    return out
+
+
+def _export(start_date: date, end_date: date, location: str, shown: pd.DataFrame,
+            ach: pd.DataFrame) -> None:
+    """Prepare the page's figures as a report, then offer it as Excel and Word."""
+    key = f"attendant_report::{start_date}::{end_date}::{location}"
+    c1, c2, c3, _ = st.columns([1.2, 1, 1, 3])
+    if c1.button("📄 Prepare report", key="prepare_attendant_report",
+                 help="Builds the report for the period and location chosen above: "
+                      "achievement, score cards, sales training and sessions."):
+        with st.spinner("Preparing the report…"):
+            summary, tables, notes = _report_tables(start_date, end_date, location, shown, ach)
+            title = "Shop Attendants Report"
+            period = f"{start_date:%d %b %Y} – {end_date:%d %b %Y} · {location}"
+            st.session_state[key] = {
+                "xlsx": attendant_report.to_xlsx(f"{title} — {period}", summary, tables),
+                "docx": attendant_report.to_docx(title, period, summary, _for_word(tables),
+                                                 notes),
+            }
+    report = st.session_state.get(key)
+    if report:
+        stem = f"shop_attendants_{start_date:%Y%m%d}_{end_date:%Y%m%d}"
+        c2.download_button("⬇️ Excel (.xlsx)", report["xlsx"], file_name=f"{stem}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key="download_attendant_xlsx")
+        c3.download_button("⬇️ Word (.docx)", report["docx"], file_name=f"{stem}.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                           key="download_attendant_docx")
 
 
 def _feedback_table(start_date: date, end_date: date, location: str, person: str) -> None:
@@ -594,12 +728,13 @@ def _training_scores(df: pd.DataFrame, start_date: date, end_date: date):
     return shop, person, note
 
 
-def _score_cards(start_date: date, end_date: date, location: str, person: str) -> None:
+def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
+    """Everything the score cards are built from, for the section and the
+    report export alike. None when there were no sales."""
     orders = db.run_query(queries.SCORECARD_ORDERS,
                           {"start_date": start_date, "end_date": end_date})
     if orders.empty:
-        st.info("No sales in this date range.")
-        return
+        return None
     # The same number of days just before, for retention: 8-14 Oct is set
     # against 1-7 Oct, October 1-11 against 20-30 September.
     days = (end_date - start_date).days + 1
@@ -619,8 +754,23 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     rows = db.run_query(queries.SALES_TARGET_ROWS,
                         {"start_date": start_date, "end_date": end_date})
     basis = targets.basis_for(start_date, end_date, rows)
-    basket = f"KES {scorecards.BASKET_TARGET:,}"
     shop_training, person_training, training_note = _training_scores(df, start_date, end_date)
+    return {"df": df, "previous": previous, "basis": basis, "prev_start": prev_start,
+            "prev_end": prev_end, "feedback_note": feedback_note,
+            "shop_training": shop_training, "person_training": person_training,
+            "training_note": training_note}
+
+
+def _score_cards(start_date: date, end_date: date, location: str, person: str) -> None:
+    inputs = _scorecard_inputs(start_date, end_date)
+    if inputs is None:
+        st.info("No sales in this date range.")
+        return
+    df, previous, basis = inputs["df"], inputs["previous"], inputs["basis"]
+    prev_start, prev_end = inputs["prev_start"], inputs["prev_end"]
+    feedback_note, training_note = inputs["feedback_note"], inputs["training_note"]
+    shop_training, person_training = inputs["shop_training"], inputs["person_training"]
+    basket = f"KES {scorecards.BASKET_TARGET:,}"
     due = f"{basis.expected * 100:.0f}% due by now"
 
     view = st.segmented_control("Score cards", ["🏪 Shop Score Cards", "🧑‍💼 Attendant Score Cards"],
