@@ -5112,7 +5112,10 @@ ff AS (
     WHERE f.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 ),
 orders AS (
-    SELECT ps.config_id, po.date_order::DATE AS date, po.id, po.customer_type,
+    -- Dated in Kenya time, as the POS dashboard dates them.
+    SELECT ps.config_id,
+           (po.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE AS date,
+           po.id, po.customer_type,
            SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%' AND pt.name NOT ILIKE '%Customization Fee%'
                     THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
                     ELSE 0 END) AS revenue
@@ -5123,13 +5126,18 @@ orders AS (
     JOIN product_product  pp  ON pp.id = pol.product_id
     JOIN product_template pt  ON pt.id = pp.product_tmpl_id
     WHERE po.state IN ('done', 'paid', 'invoiced')
-      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND (po.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE
+          BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
     GROUP BY 1, 2, 3, 4
 ),
 sales AS (
     SELECT config_id, date,
            COUNT(*) FILTER (WHERE revenue > 0)                                     AS orders,
            COUNT(*) FILTER (WHERE revenue > 0 AND customer_type = 'walkin')        AS walkin_orders,
+           COUNT(*) FILTER (WHERE revenue > 0 AND customer_type = 'online')        AS online_orders,
+           COUNT(*) FILTER (WHERE revenue > 0
+                              AND COALESCE(customer_type, '') NOT IN ('walkin', 'online')) AS other_orders,
+           COUNT(*) FILTER (WHERE revenue < 0)                                     AS refunds,
            SUM(revenue)                                                            AS revenue,
            SUM(revenue) FILTER (WHERE customer_type = 'walkin')                    AS walkin_revenue
     FROM orders GROUP BY 1, 2
@@ -5145,6 +5153,9 @@ SELECT
                    WHEN 'import' THEN 'Imported' END                AS "Entered",
     COALESCE(s.orders, 0)                                           AS "Orders",
     COALESCE(s.walkin_orders, 0)                                    AS "Walk-in Orders",
+    COALESCE(s.online_orders, 0)                                    AS "Online Orders",
+    COALESCE(s.other_orders, 0)                                     AS "Other Orders",
+    COALESCE(s.refunds, 0)                                          AS "Refunds",
     ROUND(COALESCE(s.revenue, 0)::NUMERIC, 2)                       AS "Revenue",
     ROUND(COALESCE(s.walkin_revenue, 0)::NUMERIC, 2)                AS "Walk-in Revenue"
 FROM ff

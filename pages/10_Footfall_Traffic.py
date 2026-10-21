@@ -97,93 +97,121 @@ def render_footfall(start_date: date, end_date: date) -> None:
     df.loc[no_walkins, "Visitors"] = 0
     df.loc[no_walkins & df["Entered"].isna(), "Entered"] = "No walk-in sales"
 
+    for col in ("Online Orders", "Other Orders", "Refunds"):
+        df[col] = df[col].fillna(0)
+    df["Didn't Buy"] = (df["Visitors"] - df["Walk-in Orders"]).clip(lower=0)
+
     shops = sorted(df["Location"].unique())
     location = st.selectbox("Location", ["All Locations"] + shops, key="footfall_location")
     shown = df if location == "All Locations" else df[df["Location"] == location]
 
-    # Conversion only over days that have a count: a day with sales but no
-    # count would otherwise add buyers with no visitors behind them.
+    # The walk-in funnel uses counted days only: a day with walk-in sales but
+    # no count would add buyers with nobody counted behind them.
     counted = shown[shown["Visitors"].notna()]
-    visitors = counted["Visitors"].sum()
-    walkin = counted["Walk-in Orders"].sum()
-    shop_days = len(shown)
+    walkins = counted["Visitors"].sum()
+    bought = counted["Walk-in Orders"].sum()
+    didnt = counted["Didn't Buy"].sum()
     missing = shown[shown["Visitors"].isna()]
-    days = counted["Date"].nunique()
+    under = counted[counted["Walk-in Orders"] > counted["Visitors"]]
+
+    st.markdown("**Walk-ins** — the people who came into the shops")
     _kpis([
-        ("Visitors", f"{visitors:,.0f}", f"{len(counted):,} shop-days counted"),
-        ("Average per Shop-Day", f"{visitors / len(counted):,.1f}" if len(counted) else "—",
-         f"over {days:,} days"),
-        ("Walk-in Conversion", _pct(walkin, visitors),
-         f"{walkin:,.0f} purchased walk-ins of {visitors:,.0f}"),
-        ("Revenue per Visitor", f"KES {counted['Walk-in Revenue'].sum() / visitors:,.0f}"
-         if visitors else "—", "walk-in revenue ÷ visitors"),
-        ("Days Not Counted", f"{len(missing):,}", f"of {shop_days:,} shop-days — walk-ins bought, no count"),
+        ("Walk-ins Counted", f"{walkins:,.0f}", f"{len(counted):,} shop-days counted"),
+        ("Purchased Walk-ins", f"{bought:,.0f}", "walk-in orders on the POS"),
+        ("Didn't Buy", f"{didnt:,.0f}", "counted, no purchase"),
+        ("Walk-in Conversion", _pct(bought, walkins), "purchased ÷ counted"),
+        ("Revenue per Walk-in", f"KES {counted['Walk-in Revenue'].sum() / walkins:,.0f}"
+         if walkins else "—", "walk-in revenue ÷ counted"),
+    ])
+    st.markdown("**Not walk-ins** — orders that are not part of the conversion")
+    _kpis([
+        ("Online Orders", f"{shown['Online Orders'].sum():,.0f}", "ordered online"),
+        ("Activation & Employee", f"{shown['Other Orders'].sum():,.0f}", "other order types"),
+        ("Refunds", f"{shown['Refunds'].sum():,.0f}", "refund orders, not purchases"),
+        ("Days Not Counted", f"{len(missing):,}", "walk-ins bought, no count entered"),
+        ("Undercounted Days", f"{len(under):,}", "more purchases than walk-ins counted"),
     ])
     st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · **Visitors** are the total "
-        "walk-ins each shop enters in the Footfall module at the end of the day. **Walk-in "
-        "conversion** is purchased walk-ins (walk-in orders at the till) ÷ those walk-ins, on "
-        "days that have a count only; online orders and leads are not walk-ins here (leads "
-        "are in the Leads module). A footfall of **0** stands only when no walk-in bought "
-        "that day; **Days Not Counted** are shop-days where walk-ins bought but no count was "
-        "entered anywhere (or a 0 was). Where the Footfall module has no count for a shop-day, "
-        f"the count is taken from the Reporting sheet ({filled_from_sheet:,} shop-days in this "
-        "range, marked \"Reporting sheet\" in the table below). Revenue is counted as on the "
-        "Sales page."
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · **Walk-ins counted** is the "
+        "total each shop enters in the Footfall module at the end of the day. **Purchased "
+        "walk-ins** are the orders rung on the POS with customer type *Walk-in* — refunds, "
+        "online, activation and employee orders are not. **Walk-in conversion** = purchased "
+        "walk-ins ÷ walk-ins counted, on counted days only. Online orders are shown apart: "
+        "they are not people through the door, so counting them as buyers (as the Footfall "
+        "module's own Buyers column does) overstates conversion. Leads are in the Leads "
+        "module and not counted here. A count of **0** stands only when no walk-in bought; "
+        f"a missing count is taken from the Reporting sheet ({filled_from_sheet:,} shop-days "
+        "here). Orders are dated in Kenya time, as on the POS dashboard."
         + (" Today is left out: its footfall is entered at close of day." if open_today else ""))
 
     if counted.empty:
         st.info("No footfall was counted in this range for this choice.")
     else:
         by_shop = (counted.groupby("Location")
-                   .agg(Visitors=("Visitors", "sum"), Walkin=("Walk-in Orders", "sum"),
-                        Days=("Date", "nunique"))
-                   .assign(Conversion=lambda f: (f["Walkin"] / f["Visitors"] * 100).round(1)))
+                   .agg(Walkins=("Visitors", "sum"), Bought=("Walk-in Orders", "sum"),
+                        Didnt=("Didn't Buy", "sum"), Days=("Date", "nunique"))
+                   .assign(Conversion=lambda f: (f["Bought"] / f["Walkins"].where(f["Walkins"] > 0)
+                                                 * 100).round(1)))
         c1, c2 = st.columns(2)
         with c1, st.container(border=True):
-            ranked = by_shop.sort_values("Visitors")
+            ranked = by_shop.sort_values("Walkins")
             fig = go.Figure()
-            fig.add_bar(y=ranked.index, x=ranked["Visitors"], orientation="h",
-                        marker=dict(color=theme.sequential_colors(len(ranked)), cornerradius=4),
-                        text=[f"{v:,.0f}" for v in ranked["Visitors"]], textposition="outside",
-                        cliponaxis=False, textfont=dict(color=theme.TEXT_SECONDARY, size=11),
-                        customdata=ranked[["Days"]],
-                        hovertemplate="<b>%{y}</b><br>%{x:,.0f} visitors over %{customdata[0]} "
-                                      "counted days<extra></extra>")
-            theme.apply_layout(fig, show_legend=False)
-            fig.update_layout(title="Visitors by Shop", hovermode="closest",
-                              height=max(380, 28 * len(ranked) + 90))
+            fig.add_bar(y=ranked.index, x=ranked["Bought"], orientation="h", name="Bought",
+                        marker=dict(color=theme.CATEGORICAL[1],
+                                    line=dict(color=theme.CHART_SURFACE, width=1)),
+                        hovertemplate="<b>%{y}</b><br>Bought: %{x:,.0f}<extra></extra>")
+            fig.add_bar(y=ranked.index, x=ranked["Didnt"], orientation="h", name="Didn't buy",
+                        marker=dict(color=theme.OTHER, line=dict(color=theme.CHART_SURFACE, width=1)),
+                        hovertemplate="<b>%{y}</b><br>Didn't buy: %{x:,.0f}<extra></extra>")
+            for shop, total in ranked["Walkins"].items():
+                fig.add_annotation(x=total, y=shop, text=f"<b>{total:,.0f}</b>", showarrow=False,
+                                   xanchor="left", xshift=6,
+                                   font=dict(color=theme.TEXT_PRIMARY, size=11))
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Walk-ins by Shop — Bought and Didn't Buy", barmode="stack",
+                              hovermode="closest", legend_traceorder="normal",
+                              height=max(380, 28 * len(ranked) + 100))
             theme.show(fig)
         with c2, st.container(border=True):
-            ranked = by_shop.sort_values("Conversion")
+            ranked = by_shop.dropna(subset=["Conversion"]).sort_values("Conversion")
+            colors = [theme.STATUS["critical"] if v > 100 else theme.CATEGORICAL[1]
+                      for v in ranked["Conversion"]]
             fig = go.Figure()
             fig.add_bar(y=ranked.index, x=ranked["Conversion"], orientation="h",
-                        marker=dict(color=theme.CATEGORICAL[1], cornerradius=4),
+                        marker=dict(color=colors, cornerradius=4),
                         text=[f"{v:.0f}%" for v in ranked["Conversion"]], textposition="outside",
                         cliponaxis=False, textfont=dict(color=theme.TEXT_SECONDARY, size=11),
-                        customdata=ranked[["Walkin", "Visitors"]],
-                        hovertemplate="<b>%{y}</b><br>%{x:.1f}% · %{customdata[0]:,.0f} walk-in "
-                                      "orders from %{customdata[1]:,.0f} visitors<extra></extra>")
+                        customdata=ranked[["Bought", "Walkins"]],
+                        hovertemplate="<b>%{y}</b><br>%{x:.1f}% · %{customdata[0]:,.0f} purchased "
+                                      "of %{customdata[1]:,.0f} walk-ins<extra></extra>")
             theme.apply_layout(fig, show_legend=False)
             fig.update_layout(title="Walk-in Conversion by Shop", hovermode="closest",
                               height=max(380, 28 * len(ranked) + 90))
             fig.update_xaxes(ticksuffix="%")
             theme.show(fig)
+            st.caption("Red: more purchased walk-ins than walk-ins counted — the count is low.")
 
         daily = (counted.groupby("Date")
-                 .agg(Visitors=("Visitors", "sum"), Walkin=("Walk-in Orders", "sum"))
+                 .agg(Walkins=("Visitors", "sum"), Bought=("Walk-in Orders", "sum"),
+                      Didnt=("Didn't Buy", "sum"))
                  .sort_index())
         with st.container(border=True):
             fig = go.Figure()
-            fig.add_bar(x=daily.index, y=daily["Visitors"], name="Visitors",
-                        marker=dict(color=theme.CATEGORICAL[0], cornerradius=3),
-                        hovertemplate="%{x|%a %d %b}: <b>%{y:,.0f}</b> visitors<extra></extra>")
-            fig.add_scatter(x=daily.index, y=(daily["Walkin"] / daily["Visitors"] * 100).round(1),
+            fig.add_bar(x=daily.index, y=daily["Bought"], name="Bought",
+                        marker=dict(color=theme.CATEGORICAL[1]),
+                        hovertemplate="%{x|%a %d %b}: <b>%{y:,.0f}</b> bought<extra></extra>")
+            fig.add_bar(x=daily.index, y=daily["Didnt"], name="Didn't buy",
+                        marker=dict(color=theme.OTHER),
+                        hovertemplate="%{x|%a %d %b}: <b>%{y:,.0f}</b> didn't buy<extra></extra>")
+            fig.add_scatter(x=daily.index,
+                            y=(daily["Bought"] / daily["Walkins"].where(daily["Walkins"] > 0)
+                               * 100).round(1),
                             name="Walk-in conversion", yaxis="y2", mode="lines+markers",
                             line=dict(color=theme.CATEGORICAL[5], width=2),
                             hovertemplate="%{x|%a %d %b}: <b>%{y:.1f}%</b> converted<extra></extra>")
             theme.apply_layout(fig, show_legend=True)
-            fig.update_layout(title=f"Visitors and Conversion by Day — {location}", height=380,
+            fig.update_layout(title=f"Walk-ins and Conversion by Day — {location}", height=380,
+                              barmode="stack",
                               yaxis2=dict(overlaying="y", side="right", ticksuffix="%",
                                           showgrid=False, rangemode="tozero"))
             fig.update_xaxes(tickformat="%d %b")
@@ -198,61 +226,68 @@ def render_footfall(start_date: date, end_date: date) -> None:
                         marker=dict(color=theme.CATEGORICAL[2], cornerradius=4),
                         text=[f"{v:,.0f}" if pd.notna(v) else "" for v in week.values],
                         textposition="outside", cliponaxis=False,
-                        hovertemplate="%{x}: <b>%{y:,.1f}</b> visitors a shop on average"
+                        hovertemplate="%{x}: <b>%{y:,.1f}</b> walk-ins a shop on average"
                                       "<extra></extra>")
             theme.apply_layout(fig, show_legend=False)
-            fig.update_layout(title="Average Visitors per Shop by Day of Week", height=360)
+            fig.update_layout(title="Average Walk-ins per Shop by Day of Week", height=360)
             theme.show(fig)
         with c2, st.container(border=True):
             share = counted.groupby("Location")["Visitors"].sum()
             charts.share_chart(charts.fold_other(share.index, share.values),
-                               title="Share of Visitors", key="footfall_share_kind",
-                               unit="visitors", default="Doughnut")
+                               title="Share of Walk-ins", key="footfall_share_kind",
+                               unit="walk-ins", default="Doughnut")
 
     with st.container(border=True):
-        st.caption("Each shop over the range, highest footfall first, with the total at the "
-                   "bottom. Conversion and revenue per visitor use counted days only.")
+        st.caption("Each shop over the range, most walk-ins first, with the total at the bottom. "
+                   "The walk-in columns use counted days only; online, other orders and refunds "
+                   "cover every day in the range and are not part of the conversion.")
         g = shown.groupby("Location")
         c = counted.groupby("Location")
         table = pd.DataFrame({
-            "Visitors": c["Visitors"].sum(),
             "Days Counted": c["Date"].nunique(),
-            "Days With Sales": g.apply(lambda f: int((f["Orders"] > 0).sum()), include_groups=False),
-            "Walk-in Orders (Counted Days)": c["Walk-in Orders"].sum(),
-            "All Orders": g["Orders"].sum(),
+            "Walk-ins Counted": c["Visitors"].sum(),
+            "Purchased Walk-ins": c["Walk-in Orders"].sum(),
+            "Didn't Buy": c["Didn't Buy"].sum(),
+            "Walk-in Revenue": c["Walk-in Revenue"].sum(),
+            "Online Orders": g["Online Orders"].sum(),
+            "Other Orders": g["Other Orders"].sum(),
+            "Refunds": g["Refunds"].sum(),
             "Revenue": g["Revenue"].sum(),
-            "Walk-in Revenue (Counted Days)": c["Walk-in Revenue"].sum(),
-        }).fillna({"Visitors": 0, "Days Counted": 0, "Walk-in Orders (Counted Days)": 0,
-                   "Walk-in Revenue (Counted Days)": 0})
-        table["Avg Visitors per Day"] = (table["Visitors"] / table["Days Counted"]
-                                         .where(table["Days Counted"] > 0)).round(1)
-        table["Walk-in Conversion %"] = (table["Walk-in Orders (Counted Days)"]
-                                         / table["Visitors"].where(table["Visitors"] > 0)
-                                         * 100).round(1)
-        table["Revenue per Visitor"] = (table["Walk-in Revenue (Counted Days)"]
-                                        / table["Visitors"].where(table["Visitors"] > 0)).round(0)
-        table["Days Not Counted"] = (table["Days With Sales"] - table["Days Counted"]).clip(lower=0)
+            "Days Not Counted": g["Visitors"].apply(lambda v: int(v.isna().sum())),
+            "Undercounted Days": c.apply(lambda f: int((f["Walk-in Orders"] > f["Visitors"]).sum()),
+                                         include_groups=False),
+        }).fillna({"Days Counted": 0, "Walk-ins Counted": 0, "Purchased Walk-ins": 0,
+                   "Didn't Buy": 0, "Walk-in Revenue": 0, "Undercounted Days": 0})
+        table.insert(4, "Walk-in Conversion %",
+                     (table["Purchased Walk-ins"] / table["Walk-ins Counted"]
+                      .where(table["Walk-ins Counted"] > 0) * 100).round(1))
+        table.insert(6, "Revenue per Walk-in",
+                     (table["Walk-in Revenue"] / table["Walk-ins Counted"]
+                      .where(table["Walk-ins Counted"] > 0)).round(0))
         table = table.reset_index().rename(columns={"index": "Location"})
-        grid.filterable_table(table.sort_values("Visitors", ascending=False),
-                              currency_columns=("Revenue", "Walk-in Revenue (Counted Days)",
-                                                "Revenue per Visitor"),
+        grid.filterable_table(table.sort_values("Walk-ins Counted", ascending=False),
+                              currency_columns=("Walk-in Revenue", "Revenue per Walk-in",
+                                                "Revenue"),
                               pinned_columns=("Location",), height=460)
 
     with st.container(border=True):
-        st.caption("Every shop-day: the count entered and the sales that day. **Check** flags "
-                   "days with more walk-in orders than visitors counted (an undercount) and "
-                   "days with sales but no count.")
+        st.caption("Every shop-day. **Check** flags days with more purchased walk-ins than "
+                   "walk-ins counted (the count is low) and days with walk-in purchases but no "
+                   "count.")
         detail = shown.copy()
         detail["Conversion %"] = (detail["Walk-in Orders"] / detail["Visitors"]
                                   .where(detail["Visitors"] > 0) * 100).round(1)
         detail["Check"] = np.select(
-            [detail["Visitors"].isna(),
-             detail["Walk-in Orders"] > detail["Visitors"]],
-            ["Not counted", "More buyers than visitors"], "")
+            [detail["Visitors"].isna(), detail["Walk-in Orders"] > detail["Visitors"]],
+            ["Not counted", "Count low — more purchases than walk-ins"], "OK")
         detail["Date"] = detail["Date"].dt.date
+        detail = detail.rename(columns={"Visitors": "Walk-ins Counted",
+                                        "Walk-in Orders": "Purchased Walk-ins",
+                                        "Orders": "All Orders"})
         grid.filterable_table(
-            detail[["Date", "Location", "Visitors", "Counted By", "Entered", "Walk-in Orders",
-                    "Orders", "Conversion %", "Revenue", "Check"]],
+            detail[["Date", "Location", "Walk-ins Counted", "Purchased Walk-ins", "Didn't Buy",
+                    "Conversion %", "Online Orders", "Other Orders", "Refunds", "All Orders",
+                    "Revenue", "Counted By", "Entered", "Check"]],
             currency_columns=("Revenue",), pinned_columns=("Location",), height=460)
 
 
