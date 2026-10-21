@@ -1787,6 +1787,12 @@ WHERE sl.usage = 'internal'
   AND COALESCE(pt."name", '') NOT ILIKE '%+%'          -- exclude combo/bundle products
   AND COALESCE(pt."name", '') NOT ILIKE '% or %'       -- exclude "X or Y" pick-one bundles
   AND COALESCE(pt."name", '') NOT ILIKE '%Buy%Get%'    -- exclude "Buy X Get Y Free" bundles
+  -- Not stock to report: cleaning supplies, vouchers, samples and hoods.
+  AND COALESCE(pt."name", '') NOT ILIKE '%Antibacterial Wipe%'
+  AND COALESCE(pt."name", '') NOT ILIKE '%Foam%'
+  AND COALESCE(pt."name", '') NOT ILIKE '%Gift Voucher%'
+  AND COALESCE(pt."name", '') NOT ILIKE '%Sample%'      -- every sample: "Sample Heavy Black (Easy)", …
+  AND COALESCE(pt."name", '') NOT ILIKE 'Hood%'         -- Hood in every colour
 GROUP BY sl.complete_name, COALESCE(pt."name", pp.id::text)
 ORDER BY "Location", "Product";
 """
@@ -5083,4 +5089,63 @@ SELECT p.date AS "Date", COALESCE(NULLIF(TRIM(i.company), ''), 'Not recorded') A
 FROM denri_corporate_payment p
 JOIN denri_corporate_invoice i ON i.id = p.invoice_id
 WHERE p.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""
+
+
+# Footfall (the Footfall module, denri.footfall.count): the visitors counted
+# at each shop each day, beside that shop's sales the same day, for the
+# Footfall Traffic page. Shops are the tills that have ever had a count;
+# a shop-day with sales but no count is kept (Visitors empty) so missing
+# counts show. Conversion uses walk-in orders: online orders do not come
+# through the door. Revenue is counted as on the Sales page.
+FOOTFALL_DAILY = r"""
+WITH shops AS (
+    SELECT DISTINCT config_id FROM denri_footfall_count
+),
+ff AS (
+    SELECT f.config_id, f.date, f.manual_count AS visitors,
+           NULLIF(TRIM(f.counted_by), '') AS counted_by, f.source
+    FROM denri_footfall_count f
+    WHERE f.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+),
+orders AS (
+    SELECT ps.config_id, po.date_order::DATE AS date, po.id, po.customer_type,
+           SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%' AND pt.name NOT ILIKE '%Customization Fee%'
+                    THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+                    ELSE 0 END) AS revenue
+    FROM pos_order po
+    JOIN pos_session      ps  ON ps.id = po.session_id
+    JOIN shops            s   ON s.config_id = ps.config_id
+    JOIN pos_order_line   pol ON pol.order_id = po.id
+    JOIN product_product  pp  ON pp.id = pol.product_id
+    JOIN product_template pt  ON pt.id = pp.product_tmpl_id
+    WHERE po.state IN ('done', 'paid', 'invoiced')
+      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+    GROUP BY 1, 2, 3, 4
+),
+sales AS (
+    SELECT config_id, date,
+           COUNT(*) FILTER (WHERE revenue > 0)                                     AS orders,
+           COUNT(*) FILTER (WHERE revenue > 0 AND customer_type = 'walkin')        AS walkin_orders,
+           SUM(revenue)                                                            AS revenue,
+           SUM(revenue) FILTER (WHERE customer_type = 'walkin')                    AS walkin_revenue
+    FROM orders GROUP BY 1, 2
+)
+SELECT
+    COALESCE(ff.date, s.date)                                       AS "Date",
+    CASE pc.name WHEN 'KTDA Shop' THEN 'Ktda' WHEN 'DAR-ES-ALAM' THEN 'Sinza'
+                 ELSE INITCAP(TRIM(REGEXP_REPLACE(pc.name, '\s*Shop\s*', '', 'gi'))) END
+                                                                    AS "Location",
+    ff.visitors                                                     AS "Visitors",
+    ff.counted_by                                                   AS "Counted By",
+    CASE ff.source WHEN 'till' THEN 'At the till' WHEN 'workspace' THEN 'Workspace'
+                   WHEN 'import' THEN 'Imported' END                AS "Entered",
+    COALESCE(s.orders, 0)                                           AS "Orders",
+    COALESCE(s.walkin_orders, 0)                                    AS "Walk-in Orders",
+    ROUND(COALESCE(s.revenue, 0)::NUMERIC, 2)                       AS "Revenue",
+    ROUND(COALESCE(s.walkin_revenue, 0)::NUMERIC, 2)                AS "Walk-in Revenue"
+FROM ff
+FULL OUTER JOIN sales s ON s.config_id = ff.config_id AND s.date = ff.date
+JOIN pos_config pc ON pc.id = COALESCE(ff.config_id, s.config_id)
+ORDER BY 1 DESC, 2
 """
