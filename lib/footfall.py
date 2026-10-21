@@ -54,7 +54,9 @@ def load() -> pd.DataFrame:
         for start, label in blocks:
             cell = lambda k: row[start + k] if start + k < len(row) else ""
             total = _number(cell(2))
-            if total is None or pd.isna(total) or total <= 0:
+            # A 0 is kept: a day with no walk-ins is a real count. Whether
+            # it can stand is judged on the page (only with no walk-in sales).
+            if total is None or pd.isna(total) or total < 0:
                 continue
             rows.append({"Location": NAMES.get(shop, shop),
                          "Date": pd.to_datetime(label, dayfirst=True),

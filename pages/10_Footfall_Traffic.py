@@ -71,6 +71,12 @@ def render_footfall(start_date: date, end_date: date) -> None:
         for col in ("Orders", "Walk-in Orders", "Revenue", "Walk-in Revenue"):
             df[col] = df[col].fillna(0)
         df = df.drop(columns="Sheet")
+        # The sheet carries a 0 for every shop and day, open or not: a sheet
+        # 0 on a day the shop sold nothing at all says nothing, so it is
+        # dropped rather than counted as a day with no walk-ins.
+        closed = (df["Entered"] == "Reporting sheet") & (df["Visitors"] == 0) & (df["Orders"] == 0)
+        filled_from_sheet -= int(closed.sum())
+        df = df[~closed]
     # Shops enter the day's walk-ins at close of day, so today has no count
     # yet: it is left out rather than read as a day nobody counted.
     today = pd.Timestamp(date.today())
@@ -80,6 +86,16 @@ def render_footfall(start_date: date, end_date: date) -> None:
         st.info("Today's footfall is entered by the shops at close of day — pick a range that "
                 "includes earlier days.")
         return
+
+    # A footfall of 0 is a real count only when no walk-in bought: a shop
+    # with no walk-ins sold to none. A 0 with walk-in sales is a count that
+    # was never filled in, and a day with no count and no walk-in sales had
+    # no walk-ins to count.
+    zero_with_buyers = (df["Visitors"] == 0) & (df["Walk-in Orders"] > 0)
+    df.loc[zero_with_buyers, ["Visitors", "Entered"]] = [np.nan, "0 entered, walk-ins bought"]
+    no_walkins = df["Visitors"].isna() & (df["Walk-in Orders"] == 0)
+    df.loc[no_walkins, "Visitors"] = 0
+    df.loc[no_walkins & df["Entered"].isna(), "Entered"] = "No walk-in sales"
 
     shops = sorted(df["Location"].unique())
     location = st.selectbox("Location", ["All Locations"] + shops, key="footfall_location")
@@ -91,7 +107,7 @@ def render_footfall(start_date: date, end_date: date) -> None:
     visitors = counted["Visitors"].sum()
     walkin = counted["Walk-in Orders"].sum()
     shop_days = len(shown)
-    missing = shown[shown["Visitors"].isna() & (shown["Orders"] > 0)]
+    missing = shown[shown["Visitors"].isna()]
     days = counted["Date"].nunique()
     _kpis([
         ("Visitors", f"{visitors:,.0f}", f"{len(counted):,} shop-days counted"),
@@ -101,15 +117,16 @@ def render_footfall(start_date: date, end_date: date) -> None:
          f"{walkin:,.0f} purchased walk-ins of {visitors:,.0f}"),
         ("Revenue per Visitor", f"KES {counted['Walk-in Revenue'].sum() / visitors:,.0f}"
          if visitors else "—", "walk-in revenue ÷ visitors"),
-        ("Days Not Counted", f"{len(missing):,}", f"of {shop_days:,} shop-days with sales"),
+        ("Days Not Counted", f"{len(missing):,}", f"of {shop_days:,} shop-days — walk-ins bought, no count"),
     ])
     st.caption(
         f"Last updated {datetime.now().strftime('%H:%M:%S')} · **Visitors** are the total "
         "walk-ins each shop enters in the Footfall module at the end of the day. **Walk-in "
         "conversion** is purchased walk-ins (walk-in orders at the till) ÷ those walk-ins, on "
         "days that have a count only; online orders and leads are not walk-ins here (leads "
-        "are in the Leads module). **Days Not Counted** are shop-days with sales but no "
-        "footfall entered anywhere. Where the Footfall module has no count for a shop-day, "
+        "are in the Leads module). A footfall of **0** stands only when no walk-in bought "
+        "that day; **Days Not Counted** are shop-days where walk-ins bought but no count was "
+        "entered anywhere (or a 0 was). Where the Footfall module has no count for a shop-day, "
         f"the count is taken from the Reporting sheet ({filled_from_sheet:,} shop-days in this "
         "range, marked \"Reporting sheet\" in the table below). Revenue is counted as on the "
         "Sales page."
@@ -229,7 +246,7 @@ def render_footfall(start_date: date, end_date: date) -> None:
         detail["Conversion %"] = (detail["Walk-in Orders"] / detail["Visitors"]
                                   .where(detail["Visitors"] > 0) * 100).round(1)
         detail["Check"] = np.select(
-            [detail["Visitors"].isna() & (detail["Orders"] > 0),
+            [detail["Visitors"].isna(),
              detail["Walk-in Orders"] > detail["Visitors"]],
             ["Not counted", "More buyers than visitors"], "")
         detail["Date"] = detail["Date"].dt.date
