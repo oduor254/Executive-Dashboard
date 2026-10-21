@@ -74,7 +74,7 @@ STAGE_COLORS = {
     "Lost": theme.CATEGORICAL[7],       # red
 }
 OPEN_STAGES = ("Working", "Waiting on Stock/Offer", "New", "No Status")
-LEADS_COLUMNS = {"Date": "DATE", "Reference": "REF", "Name": "NAME", "Contact": "CONTACT",
+LEADS_COLUMNS = {"Date": "VISIT DAY", "Captured On": "CAPTURED ON", "Reference": "REF", "Name": "NAME", "Contact": "CONTACT",
                  "Branch": "LOCATION", "Attendant": "ATTENDANT", "Bag Wanted": "BAG WANTED",
                  "Colour": "COLOUR", "Status": "STATUS", "Follow-up Date": "FOLLOW-UP",
                  "Note": "NOTE"}
@@ -631,8 +631,9 @@ def render_leads(start_date: date, end_date: date) -> None:
                 _table(due.sort_values("Days Overdue", ascending=False),
                        {**LEADS_COLUMNS, "Days Overdue": "DAYS OVERDUE"},
                        pinned_columns=("NAME",))
-    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · leads captured in the "
-               "Leads module (walk-in, call and WhatsApp), by the date they were captured.")
+    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')} · leads in the Leads "
+               "module (walk-in, call and WhatsApp), dated by the visit day: shops enter a day's "
+               "leads the next morning, so a lead captured today is yesterday's.")
 
 
 # ---------------------------------------------------------- Out of Stock ---

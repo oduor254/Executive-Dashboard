@@ -54,6 +54,15 @@ def render_footfall(start_date: date, end_date: date) -> None:
         st.info("No footfall counted or sales made in this date range.")
         return
     df["Date"] = pd.to_datetime(df["Date"])
+    # Shops enter the day's walk-ins at close of day, so today has no count
+    # yet: it is left out rather than read as a day nobody counted.
+    today = pd.Timestamp(date.today())
+    open_today = bool((df["Date"] == today).any())
+    df = df[df["Date"] < today]
+    if df.empty:
+        st.info("Today's footfall is entered by the shops at close of day — pick a range that "
+                "includes earlier days.")
+        return
 
     shops = sorted(df["Location"].unique())
     location = st.selectbox("Location", ["All Locations"] + shops, key="footfall_location")
@@ -71,17 +80,20 @@ def render_footfall(start_date: date, end_date: date) -> None:
         ("Visitors", f"{visitors:,.0f}", f"{len(counted):,} shop-days counted"),
         ("Average per Shop-Day", f"{visitors / len(counted):,.1f}" if len(counted) else "—",
          f"over {days:,} days"),
-        ("Walk-in Conversion", _pct(walkin, visitors), f"{walkin:,.0f} walk-in orders on counted days"),
+        ("Walk-in Conversion", _pct(walkin, visitors),
+         f"{walkin:,.0f} purchased walk-ins of {visitors:,.0f}"),
         ("Revenue per Visitor", f"KES {counted['Walk-in Revenue'].sum() / visitors:,.0f}"
          if visitors else "—", "walk-in revenue ÷ visitors"),
         ("Days Not Counted", f"{len(missing):,}", f"of {shop_days:,} shop-days with sales"),
     ])
     st.caption(
-        f"Last updated {datetime.now().strftime('%H:%M:%S')} · **Visitors** are the people counted "
-        "into each shop in the Footfall module (at the till, in the workspace, or imported). "
-        "**Walk-in conversion** is walk-in orders ÷ visitors, on days that have a count only — "
-        "online orders do not come through the door. **Days Not Counted** are shop-days with "
-        "sales but no footfall entered. Revenue is counted as on the Sales page.")
+        f"Last updated {datetime.now().strftime('%H:%M:%S')} · **Visitors** are the total "
+        "walk-ins each shop enters in the Footfall module at the end of the day. **Walk-in "
+        "conversion** is purchased walk-ins (walk-in orders at the till) ÷ those walk-ins, on "
+        "days that have a count only; online orders and leads are not walk-ins here (leads "
+        "are in the Leads module). **Days Not Counted** are shop-days with sales but no "
+        "footfall entered. Revenue is counted as on the Sales page."
+        + (" Today is left out: its footfall is entered at close of day." if open_today else ""))
 
     if counted.empty:
         st.info("No footfall was counted in this range for this choice.")

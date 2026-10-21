@@ -4490,7 +4490,10 @@ WALKIN_LEADS = """
 SELECT
     l.id                                                            AS "ID",
     l.reference                                                     AS "Reference",
-    l.capture_date                                                  AS "Date",
+    -- Shops enter a day's leads the next morning, so the lead belongs to the
+    -- day before it was captured: that is its Date, the visit day.
+    l.capture_date - 1                                              AS "Date",
+    l.capture_date                                                  AS "Captured On",
     CASE
         WHEN b.code = 'websitesales' THEN 'Website'
         WHEN b.code = 'daresalam'    THEN 'Sinza'
@@ -4556,7 +4559,7 @@ LEFT JOIN product_template   pt    ON pt.id = pp.product_tmpl_id
 LEFT JOIN res_users          att   ON att.id = l.attendant_id
 LEFT JOIN res_partner        att_p ON att_p.id = att.partner_id
 WHERE l.active
-  AND l.capture_date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND l.capture_date - 1 BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
   AND l.capture_date <= CURRENT_DATE
 ORDER BY l.capture_date DESC, l.id DESC
 """
