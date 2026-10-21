@@ -49,57 +49,13 @@ def _pct(part: float, whole: float) -> str:
 
 @st.fragment()
 def render_footfall(start_date: date, end_date: date) -> None:
-    df = db.run_query(queries.FOOTFALL_DAILY, {"start_date": start_date, "end_date": end_date})
+    # Counts, sheet gap-filling and the zero/today rules live in lib.footfall,
+    # shared with the Reports page.
+    df, filled_from_sheet, open_today = footfall.daily(start_date, end_date)
     if df.empty:
-        st.info("No footfall counted or sales made in this date range.")
+        st.info("No footfall counted or sales made in this date range — today's footfall is "
+                "entered by the shops at close of day.")
         return
-    df["Date"] = pd.to_datetime(df["Date"])
-    # Gaps in the Footfall module are filled from the Reporting sheet, where
-    # every shop's daily count is kept; the module's own count is kept where
-    # it has one.
-    sheet = footfall.load()
-    filled_from_sheet = 0
-    if not sheet.empty:
-        sheet = sheet[(sheet["Date"] >= pd.Timestamp(start_date))
-                      & (sheet["Date"] <= pd.Timestamp(end_date))]
-        df = df.merge(sheet[["Location", "Date", "Visitors"]].rename(columns={"Visitors": "Sheet"}),
-                      on=["Location", "Date"], how="outer")
-        gap = df["Visitors"].isna() & df["Sheet"].notna()
-        filled_from_sheet = int(gap.sum())
-        df.loc[gap, "Visitors"] = df.loc[gap, "Sheet"]
-        df.loc[gap, "Entered"] = "Reporting sheet"
-        for col in ("Orders", "Walk-in Orders", "Revenue", "Walk-in Revenue"):
-            df[col] = df[col].fillna(0)
-        df = df.drop(columns="Sheet")
-        # The sheet carries a 0 for every shop and day, open or not: a sheet
-        # 0 on a day the shop sold nothing at all says nothing, so it is
-        # dropped rather than counted as a day with no walk-ins.
-        closed = (df["Entered"] == "Reporting sheet") & (df["Visitors"] == 0) & (df["Orders"] == 0)
-        filled_from_sheet -= int(closed.sum())
-        df = df[~closed]
-    # Shops enter the day's walk-ins at close of day, so today has no count
-    # yet: it is left out rather than read as a day nobody counted.
-    today = pd.Timestamp(date.today())
-    open_today = bool((df["Date"] == today).any())
-    df = df[df["Date"] < today]
-    if df.empty:
-        st.info("Today's footfall is entered by the shops at close of day — pick a range that "
-                "includes earlier days.")
-        return
-
-    # A footfall of 0 is a real count only when no walk-in bought: a shop
-    # with no walk-ins sold to none. A 0 with walk-in sales is a count that
-    # was never filled in, and a day with no count and no walk-in sales had
-    # no walk-ins to count.
-    zero_with_buyers = (df["Visitors"] == 0) & (df["Walk-in Orders"] > 0)
-    df.loc[zero_with_buyers, ["Visitors", "Entered"]] = [np.nan, "0 entered, walk-ins bought"]
-    no_walkins = df["Visitors"].isna() & (df["Walk-in Orders"] == 0)
-    df.loc[no_walkins, "Visitors"] = 0
-    df.loc[no_walkins & df["Entered"].isna(), "Entered"] = "No walk-in sales"
-
-    for col in ("Online Orders", "Other Orders", "Refunds"):
-        df[col] = df[col].fillna(0)
-    df["Didn't Buy"] = (df["Visitors"] - df["Walk-in Orders"]).clip(lower=0)
 
     shops = sorted(df["Location"].unique())
     location = st.selectbox("Location", ["All Locations"] + shops, key="footfall_location")

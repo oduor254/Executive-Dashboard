@@ -26,17 +26,29 @@ WORKSHEET = "Customer Feedback"
 # containing any of the words, so a form question reworded around it still
 # matches. The main tab's words are the ones the Request Hub is configured
 # with in Odoo (denri_pos_request_hub.sheets_col_*).
+# Experience is the overall rating (1-5), Assistance the rating of the
+# staff's help (1-5, reported as Professionalism), Source how the customer
+# came (Walk-In / Online). A tab without a column leaves it blank.
 _TABS = {
     WORKSHEET: {"Submitted": ["timestamp"], "Name": ["first name"],
-                "Phone": ["phone number"], "Branch": ["which of our branches"]},
+                "Phone": ["phone number"], "Branch": ["which of our branches"],
+                "Experience": ["overall, how would you rate"],
+                "Assistance": ["assistance you received from our staff"],
+                "Source": ["source"]},
     "Uganda":  {"Submitted": ["timestamp"], "Name": ["first name"],
-                "Phone": ["phone"], "Branch": ["branch"]},
+                "Phone": ["phone"], "Branch": ["branch"],
+                "Experience": ["satisfied were you with your overall experience"],
+                "Assistance": ["assistance you received"], "Source": ["source"]},
     "Kampala": {"Submitted": ["timestamp"], "Name": ["first name"],
-                "Phone": ["phone"], "Branch": ["branch"]},
+                "Phone": ["phone"], "Branch": ["branch"],
+                "Experience": ["satisfied were you with your overall experience"],
+                "Assistance": ["assistance you received"], "Source": ["source"]},
     "Sinza":   {"Submitted": ["timestamp"], "Name": ["jina la kwanza"],
-                "Phone": ["nambari ya simu"], "Branch": ["tawi"]},
+                "Phone": ["nambari ya simu"], "Branch": ["tawi"],
+                "Experience": ["kuridhika na uzoefu"], "Assistance": ["msaada uliopokea"],
+                "Source": ["aina ya mteja"]},
 }
-_FIELDS = ["Submitted", "Name", "Phone", "Branch"]
+_FIELDS = ["Submitted", "Name", "Phone", "Branch", "Experience", "Assistance", "Source"]
 _RETRIES = 4
 
 

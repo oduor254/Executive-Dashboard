@@ -62,3 +62,54 @@ def load() -> pd.DataFrame:
                          "Date": pd.to_datetime(label, dayfirst=True),
                          "Visitors": float(total), "Purchased": _number(cell(0))})
     return pd.DataFrame(rows)
+
+
+def daily(start_date, end_date) -> tuple[pd.DataFrame, int, bool]:
+    """Every shop-day in the range: walk-ins counted beside the day's orders,
+    ready for the Footfall Traffic page and the Reports page alike.
+
+    Returns (frame, shop-days filled from the sheet, whether today was in the
+    range and left out). Rules:
+      * the Footfall module's count first; a missing one from the sheet;
+      * a sheet 0 on a day the shop sold nothing is dropped (not open);
+      * today is left out — shops enter the day's walk-ins at close of day;
+      * a 0 stands only when no walk-in bought; a 0 with walk-in sales is
+        treated as not counted, and a day with neither a count nor a
+        walk-in sale had no walk-ins (0).
+    """
+    import numpy as np
+    from datetime import date
+    from lib import db, queries
+
+    df = db.run_query(queries.FOOTFALL_DAILY, {"start_date": start_date, "end_date": end_date})
+    if df.empty:
+        return df, 0, False
+    df["Date"] = pd.to_datetime(df["Date"])
+    sheet = load()
+    filled = 0
+    if not sheet.empty:
+        sheet = sheet[(sheet["Date"] >= pd.Timestamp(start_date))
+                      & (sheet["Date"] <= pd.Timestamp(end_date))]
+        df = df.merge(sheet[["Location", "Date", "Visitors"]].rename(columns={"Visitors": "Sheet"}),
+                      on=["Location", "Date"], how="outer")
+        gap = df["Visitors"].isna() & df["Sheet"].notna()
+        filled = int(gap.sum())
+        df.loc[gap, "Visitors"] = df.loc[gap, "Sheet"]
+        df.loc[gap, "Entered"] = "Reporting sheet"
+        df = df.drop(columns="Sheet")
+    for col in ("Orders", "Walk-in Orders", "Online Orders", "Other Orders", "Refunds",
+                "Revenue", "Walk-in Revenue"):
+        df[col] = df[col].fillna(0)
+    closed = (df["Entered"] == "Reporting sheet") & (df["Visitors"] == 0) & (df["Orders"] == 0)
+    filled -= int(closed.sum())
+    df = df[~closed]
+    today = pd.Timestamp(date.today())
+    open_today = bool((df["Date"] == today).any())
+    df = df[df["Date"] < today].copy()
+    zero_with_buyers = (df["Visitors"] == 0) & (df["Walk-in Orders"] > 0)
+    df.loc[zero_with_buyers, ["Visitors", "Entered"]] = [np.nan, "0 entered, walk-ins bought"]
+    no_walkins = df["Visitors"].isna() & (df["Walk-in Orders"] == 0)
+    df.loc[no_walkins, "Visitors"] = 0
+    df.loc[no_walkins & df["Entered"].isna(), "Entered"] = "No walk-in sales"
+    df["Didn't Buy"] = (df["Visitors"] - df["Walk-in Orders"]).clip(lower=0)
+    return df, filled, open_today

@@ -5163,3 +5163,50 @@ FULL OUTER JOIN sales s ON s.config_id = ff.config_id AND s.date = ff.date
 JOIN pos_config pc ON pc.id = COALESCE(ff.config_id, s.config_id)
 ORDER BY 1 DESC, 2
 """
+
+
+# The Reports page (daily / weekly / monthly): every till order in the range
+# with its customer, gender, channel, revenue and bags — revenue counted as
+# the Sales page counts it (every line except delivery and customization
+# fees, KES at the order's rate, refunds as negative orders), so the report
+# agrees with the Sales page and Odoo's POS dashboard.
+REPORT_ORDERS = r"""
+SELECT
+    po.id                                                           AS "Order ID",
+    po.date_order::DATE                                             AS "Date",
+    CASE
+        WHEN lower(pconf.name) = 'jumia' THEN 'Jumia'
+        WHEN lower(pconf.name) IN ('website sales', 'website') OR po.session_id IS NULL THEN 'Website'
+        WHEN lower(pconf.name) = 'staff pos' THEN 'Staff POS'
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+        ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                COALESCE(sw.name, sl.complete_name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+    END                                                             AS "Location",
+    po.partner_id                                                   AS "Partner",
+    rp.name                                                         AS "Raw Name",
+    COALESCE(rp.phone, rp.mobile, '')                               AS "Phone",
+    COALESCE(INITCAP(NULLIF(TRIM(rp.gender), '')), 'Not recorded')  AS "Gender",
+    CASE po.customer_type WHEN 'walkin' THEN 'Walk-in' WHEN 'online' THEN 'Online'
+         WHEN 'activation' THEN 'Activation' WHEN 'employee' THEN 'Employee'
+         ELSE 'Not recorded' END                                    AS "Channel",
+    SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%' AND pt.name NOT ILIKE '%Customization Fee%'
+             THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+             ELSE 0 END)                                            AS "Revenue",
+    SUM(CASE WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
+              AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
+             THEN pol.qty ELSE 0 END)                               AS "Bags"
+FROM pos_order po
+JOIN pos_order_line            pol   ON pol.order_id = po.id
+JOIN product_product           pp    ON pp.id = pol.product_id
+JOIN product_template          pt    ON pt.id = pp.product_tmpl_id
+LEFT JOIN product_category     pc    ON pc.id = pt.categ_id
+LEFT JOIN res_partner          rp    ON rp.id = po.partner_id
+LEFT JOIN pos_session          ps    ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt   ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
+"""
