@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, charts, db, filters, grid, queries, theme
+from lib import auth, charts, db, filters, footfall, grid, queries, theme
 
 st.set_page_config(page_title="Footfall Traffic · Denri Executive Dashboard",
                    page_icon="🚶", layout="wide")
@@ -54,6 +54,23 @@ def render_footfall(start_date: date, end_date: date) -> None:
         st.info("No footfall counted or sales made in this date range.")
         return
     df["Date"] = pd.to_datetime(df["Date"])
+    # Gaps in the Footfall module are filled from the Reporting sheet, where
+    # every shop's daily count is kept; the module's own count is kept where
+    # it has one.
+    sheet = footfall.load()
+    filled_from_sheet = 0
+    if not sheet.empty:
+        sheet = sheet[(sheet["Date"] >= pd.Timestamp(start_date))
+                      & (sheet["Date"] <= pd.Timestamp(end_date))]
+        df = df.merge(sheet[["Location", "Date", "Visitors"]].rename(columns={"Visitors": "Sheet"}),
+                      on=["Location", "Date"], how="outer")
+        gap = df["Visitors"].isna() & df["Sheet"].notna()
+        filled_from_sheet = int(gap.sum())
+        df.loc[gap, "Visitors"] = df.loc[gap, "Sheet"]
+        df.loc[gap, "Entered"] = "Reporting sheet"
+        for col in ("Orders", "Walk-in Orders", "Revenue", "Walk-in Revenue"):
+            df[col] = df[col].fillna(0)
+        df = df.drop(columns="Sheet")
     # Shops enter the day's walk-ins at close of day, so today has no count
     # yet: it is left out rather than read as a day nobody counted.
     today = pd.Timestamp(date.today())
@@ -92,7 +109,10 @@ def render_footfall(start_date: date, end_date: date) -> None:
         "conversion** is purchased walk-ins (walk-in orders at the till) ÷ those walk-ins, on "
         "days that have a count only; online orders and leads are not walk-ins here (leads "
         "are in the Leads module). **Days Not Counted** are shop-days with sales but no "
-        "footfall entered. Revenue is counted as on the Sales page."
+        "footfall entered anywhere. Where the Footfall module has no count for a shop-day, "
+        f"the count is taken from the Reporting sheet ({filled_from_sheet:,} shop-days in this "
+        "range, marked \"Reporting sheet\" in the table below). Revenue is counted as on the "
+        "Sales page."
         + (" Today is left out: its footfall is entered at close of day." if open_today else ""))
 
     if counted.empty:
