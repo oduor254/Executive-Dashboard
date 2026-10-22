@@ -18,18 +18,20 @@ import pandas as pd
 NOT_RECORDED = "Not recorded"
 
 
-def achievement(sessions: pd.DataFrame, served_by: pd.Series, shop_targets: dict,
-                expected: float) -> pd.DataFrame:
-    """One row per attendant/BA: sales, individual target, achievement %."""
-    df = sessions.assign(**{"Served By": served_by})
-    df = df[df["Served By"] != NOT_RECORDED]
+def achievement(sessions: pd.DataFrame, served_by: pd.Series,
+                day_targets: pd.DataFrame) -> pd.DataFrame:
+    """One row per attendant/BA: sales, individual target, achievement %.
+
+    The individual target is, for every day the person was on the floor,
+    their shop's daily target split equally between everyone who served
+    there that day — the score cards' rule (lib.scorecards.person_days)."""
+    from lib import scorecards
+    everyone = sessions.assign(**{"Served By": served_by})
+    df = everyone[everyone["Served By"] != NOT_RECORDED]
     if df.empty:
         return pd.DataFrame()
-    team = df.groupby("Location")["Served By"].nunique()
-    share = {loc: shop_targets.get(loc, np.nan) / n for loc, n in team.items() if n}
-    worked = df[["Served By", "Location"]].drop_duplicates()
-    worked["Target"] = worked["Location"].map(share)
-    target = worked.groupby("Served By")["Target"].sum(min_count=1)
+    worked = scorecards.person_days(everyone, day_targets)
+    target = worked.groupby("Served By")["Person Target"].sum(min_count=1)
     g = df.groupby("Served By")
     out = pd.DataFrame({
         "Locations": g["Location"].agg(lambda v: ", ".join(sorted(set(v)))),
@@ -40,7 +42,6 @@ def achievement(sessions: pd.DataFrame, served_by: pd.Series, shop_targets: dict
     })
     out["Achievement %"] = (out["Sales Made"] / out["Individual Target"]
                             .where(out["Individual Target"] > 0) * 100).round(1)
-    out["Pace %"] = (out["Achievement %"] / expected).round(1) if expected else np.nan
     out = out.reset_index().rename(columns={"Served By": "Shop Attendant / BA"})
     out.insert(0, "Rank", out["Achievement %"].rank(ascending=False, method="min")
                .astype("Int64"))

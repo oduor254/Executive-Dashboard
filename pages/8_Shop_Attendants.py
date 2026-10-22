@@ -88,9 +88,8 @@ def render_attendants(start_date: date, end_date: date) -> None:
     # Achievement against individual targets, worked out over every shop (a
     # shop's team is everyone who served there) and then narrowed to the
     # location and person picked.
-    basis = targets.basis_for(start_date, end_date, db.run_query(
-        queries.SALES_TARGET_ROWS, {"start_date": start_date, "end_date": end_date}))
-    ach = attendant_report.achievement(df, df["Served By"], basis.targets, basis.expected)
+    day_targets = _day_targets(start_date, end_date)
+    ach = attendant_report.achievement(df, df["Served By"], day_targets)
     if not ach.empty:
         here = set(shown["Served By"])
         ach = ach[ach["Shop Attendant / BA"].isin(here)]
@@ -114,7 +113,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     if section == "Sessions":
         if person == ALL_PEOPLE:
-            _achievement_chart(ach, basis.expected, basis.label)
+            _achievement_chart(ach)
         with st.container(border=True):
             st.caption(f"{len(shown):,} rows · click a column header's filter icon to search or "
                        "narrow it. The last row is the total for the range.")
@@ -157,7 +156,7 @@ def _pace_color(achieved: float, expected: float) -> str:
     return next(color for floor, color in PACE_COLORS if ratio >= floor)
 
 
-def _achievement_chart(ach: pd.DataFrame, expected: float, label: str) -> None:
+def _achievement_chart(ach: pd.DataFrame, expected: float = 1.0) -> None:
     """Attendants and BAs ranked by achievement against their individual target."""
     ranked = ach.dropna(subset=["Achievement %"]).sort_values("Achievement %").tail(30)
     if ranked.empty:
@@ -176,7 +175,7 @@ def _achievement_chart(ach: pd.DataFrame, expected: float, label: str) -> None:
                            "<br>%{customdata[2]}<extra></extra>"),
         )
         fig.add_vline(x=expected * 100, line=dict(color=theme.TEXT_SECONDARY, dash="dash"),
-                      annotation_text=f"{expected * 100:.0f}% due by now",
+                      annotation_text="100% of target",
                       annotation_font_color=theme.TEXT_SECONDARY)
         theme.apply_layout(fig, show_legend=False)
         fig.update_layout(title="Achievement Against Individual Target — Shop Attendants / BAs",
@@ -184,10 +183,11 @@ def _achievement_chart(ach: pd.DataFrame, expected: float, label: str) -> None:
         fig.update_xaxes(ticksuffix="%", showgrid=True, gridcolor=theme.GRIDLINE)
         fig.update_yaxes(showgrid=False)
         theme.show(fig)
-        st.caption(f"Ranked by each person's own sales against their individual target: their "
-                   f"shop's target ({label}) shared equally between the attendants and BAs who "
-                   "served there in the range. Green is on or ahead of the pace due by now "
-                   "(dashed line); yellow, orange and red are slightly, moderately and well behind.")
+        st.caption("Ranked by each person's own sales against their individual target: for "
+                   "every day they were on the floor, their shop's daily target split equally "
+                   "between everyone who served there that day, added up. Green is on or above "
+                   "target (dashed line); yellow, orange and red are slightly, moderately and "
+                   "well below.")
 
 
 def _report_tables(start_date: date, end_date: date, location: str, shown: pd.DataFrame,
@@ -205,17 +205,16 @@ def _report_tables(start_date: date, end_date: date, location: str, shown: pd.Da
     ]
     tables, notes = {}, {}
     tables["Achievement vs Target"] = ach
-    notes["Achievement vs Target"] = ("Own sales against the individual target: the shop's target "
-                                      "for the period shared equally between its attendants and BAs.")
+    notes["Achievement vs Target"] = ("Own sales against the individual target: for every day on the "
+                                      "floor, the shop's daily target split equally between everyone "
+                                      "who served there that day.")
 
     inputs = _scorecard_inputs(start_date, end_date)
     if inputs is not None:
-        basis = inputs["basis"]
-        shops = scorecards.shop_cards(inputs["df"], inputs["previous"], basis.targets,
-                                      basis.expected, inputs["shop_training"],
-                                      _response_times(start_date, end_date))
-        people = scorecards.attendant_cards(inputs["df"], inputs["previous"], basis.targets,
-                                            basis.expected, inputs["person_training"])
+        shops = scorecards.shop_cards(inputs["df"], inputs["previous"], inputs["day_targets"],
+                                      inputs["shop_training"], _response_times(start_date, end_date))
+        people = scorecards.attendant_cards(inputs["df"], inputs["previous"], inputs["day_targets"],
+                                            inputs["person_training"])
         shop_cols = (["Location", "Score"] + scorecards.SCORE_COLUMNS
                      + ["Revenue", "Target", "Target %", "Corporate Revenue", "Orders",
                         "Basket Value", "Basket Size", "Attendants", "Revenue per Attendant",
@@ -223,14 +222,14 @@ def _report_tables(start_date: date, end_date: date, location: str, shown: pd.Da
                         "Response Time (min)"])
         person_cols = (["Attendant / BA", "Location", "Score"] + scorecards.SCORE_COLUMNS
                        + ["Target", "Revenue", "Target %", "Days Worked", "Revenue per Day",
-                          "Own Sales", "Orders", "Corporate Revenue", "Basket Value",
+                          "Shop Share", "Orders", "Corporate Revenue", "Basket Value",
                           "Basket Size", "Customers", "Repeat %", "Retention %", "Feedback %",
                           "Training %"])
         tables["Shop Score Cards"] = in_loc(shops)[[c for c in shop_cols if c in shops]]
         tables["Attendant Score Cards"] = in_loc(people)[[c for c in person_cols if c in people]]
-        notes["Shop Score Cards"] = (f"Scores out of 100; the cumulative score is their average. "
-                                     f"Target: {basis.label}.")
-        summary.append(("Revenue target basis", basis.label))
+        notes["Shop Score Cards"] = ("Scores out of 100; the cumulative score is their average. "
+                                     "Revenue target: the shop's daily target for every day it traded.")
+        summary.append(("Revenue target basis", "daily targets, day by day"))
 
     try:
         data = training.load()
@@ -272,7 +271,7 @@ def _for_word(tables: dict) -> dict:
                                        else "Cumulative Score")
         elif name == "Achievement vs Target":
             frame = frame[["Rank", "Shop Attendant / BA", "Locations", "Sales Made",
-                           "Individual Target", "Achievement %", "Pace %"]]
+                           "Individual Target", "Achievement %"]]
         out[name] = frame
     return out
 
@@ -728,6 +727,12 @@ def _training_scores(df: pd.DataFrame, start_date: date, end_date: date):
     return shop, person, note
 
 
+def _day_targets(start_date: date, end_date: date) -> pd.DataFrame:
+    """Each shop's daily target for every day of the range."""
+    rows = db.run_query(queries.SALES_TARGET_ROWS, {"start_date": start_date, "end_date": end_date})
+    return targets.daily_targets(start_date, end_date, rows)
+
+
 def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
     """Everything the score cards are built from, for the section and the
     report export alike. None when there were no sales."""
@@ -751,11 +756,9 @@ def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
     except feedback.FeedbackUnavailable as exc:
         responses, feedback_note = None, str(exc)
     df["Feedback"] = scorecards.gave_feedback(df, responses)
-    rows = db.run_query(queries.SALES_TARGET_ROWS,
-                        {"start_date": start_date, "end_date": end_date})
-    basis = targets.basis_for(start_date, end_date, rows)
+    day_targets = _day_targets(start_date, end_date)
     shop_training, person_training, training_note = _training_scores(df, start_date, end_date)
-    return {"df": df, "previous": previous, "basis": basis, "prev_start": prev_start,
+    return {"df": df, "previous": previous, "day_targets": day_targets, "prev_start": prev_start,
             "prev_end": prev_end, "feedback_note": feedback_note,
             "shop_training": shop_training, "person_training": person_training,
             "training_note": training_note}
@@ -766,22 +769,24 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     if inputs is None:
         st.info("No sales in this date range.")
         return
-    df, previous, basis = inputs["df"], inputs["previous"], inputs["basis"]
+    df, previous, day_targets = inputs["df"], inputs["previous"], inputs["day_targets"]
     prev_start, prev_end = inputs["prev_start"], inputs["prev_end"]
     feedback_note, training_note = inputs["feedback_note"], inputs["training_note"]
     shop_training, person_training = inputs["shop_training"], inputs["person_training"]
     basket = f"KES {scorecards.BASKET_TARGET:,}"
-    due = f"{basis.expected * 100:.0f}% due by now"
+    on_today = end_date >= date.today()
 
     view = st.segmented_control("Score cards", ["🏪 Shop Score Cards", "🧑‍💼 Attendant Score Cards"],
                                 default="🏪 Shop Score Cards", key="score_view",
                                 label_visibility="collapsed") or "🏪 Shop Score Cards"
     st.caption(
         "Every measure is scored out of 100 and the **cumulative score** is their average. "
-        f"**Revenue** is scored against the part of the target due by now ({basis.label}; "
-        f"{due}), **corporate revenue** against "
-        f"{scorecards.CORPORATE_SHARE:.0%} of the revenue target (also by what is due so far) "
-        f"and **basket value** against {basket} for every shop and attendant — 100 "
+        "**Revenue** is measured day by day: a shop's target is its daily target for every "
+        "day it traded, added up, and an attendant's is the shop's daily target split equally "
+        "between everyone on the floor that day (100,000 with two on the floor: 50,000 each), "
+        "added up over the days they worked — their score is the sales they generated against "
+        f"it. **Corporate revenue** is scored against {scorecards.CORPORATE_SHARE:.0%} of the "
+        f"revenue target and **basket value** against {basket} for every shop and attendant — 100 "
         f"means on target. **Feedback** is scored against {scorecards.FEEDBACK_TARGET}% of the "
         f"customers served sending a form ({scorecards.FEEDBACK_TARGET}% or more scores 100). Basket size, repeat "
         "purchase and retention have no target, so they are scored by rank: 100 is the best "
@@ -795,23 +800,25 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "a target of 100%. **WhatsApp Response** (shops only) is the average first reply "
         "to WhatsApp chats logged in the WhatsApp Monitor, against "
         f"{scorecards.RESPONSE_TARGET_MIN} minutes: {scorecards.RESPONSE_TARGET_MIN} or "
-        "quicker scores 100, twice as slow scores 50. Shop phone numbers typed in for "
-        "customers who "
-        "gave none are not counted as customers.")
+        "quicker scores 100, twice as slow scores 50. Shop and attendant phone numbers typed "
+        "in for customers who gave none are not counted as customers."
+        + (" Today is still trading, so its target counts in full against a part-day's sales."
+           if on_today else ""))
     if feedback_note:
         st.warning(f"Feedback is left out: {feedback_note}", icon="🔒")
     if training_note:
         st.caption(training_note)
 
     if view == "🏪 Shop Score Cards":
-        shops = scorecards.shop_cards(df, previous, basis.targets, basis.expected,
-                                      shop_training, _response_times(start_date, end_date))
+        shops = scorecards.shop_cards(df, previous, day_targets, shop_training,
+                                      _response_times(start_date, end_date))
         shown = shops if location == "All Locations" else shops[shops["Location"] == location]
         _cumulative_chart(shown, "Location", "Cumulative Score Card — Shops")
         for _, r in shown.iterrows():
             _card(r["Location"], r, [
                 ("Revenue", _money(r["Revenue"]),
-                 f"{_pct(r['Target %'])} of {_money(r['Target'])} ({due})"
+                 f"{_pct(r['Target %'])} of {_money(r['Target'])} "
+                 f"({int(r['Days Traded'])} days' targets)"
                  if pd.notna(r["Target %"]) else "no target"),
                 ("Corporate Revenue", _money(r["Corporate Revenue"]),
                  f"{_pct(r['Corporate %'])} of {_money(r['Corporate Target'])}"
@@ -839,7 +846,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
             st.caption("All shops side by side, best cumulative score first, with each measure's "
                        "score and the total at the bottom.")
             cols = (["Location", "Score"] + scorecards.SCORE_COLUMNS
-                    + ["Revenue", "Target", "Target %", "Pace %", "Corporate Revenue",
+                    + ["Revenue", "Target", "Target %", "Days Traded", "Corporate Revenue",
                        "Corporate Target", "Corporate %", "Orders",
                        "Basket Value", "Basket Value %", "Bags", "Basket Size", "Attendants",
                        "Revenue per Attendant", "Customers", "Repeat %", "Previous Customers",
@@ -851,17 +858,16 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                                   height=460)
         return
 
-    people = scorecards.attendant_cards(df, previous, basis.targets, basis.expected,
-                                         person_training)
+    people = scorecards.attendant_cards(df, previous, day_targets, person_training)
     if location != "All Locations":
         people = people[people["Location"] == location]
     st.caption(
-        "**Revenue** shares each shop's daily revenue equally between everyone who served "
-        "there that day (attendants and BAs recorded on its orders). **Revenue target** is the "
-        "shop's target for the period divided by the attendants and BAs who served there in "
-        f"it, and the **corporate target** is {scorecards.CORPORATE_SHARE:.0%} of that share. "
-        "Corporate revenue is the corporate orders the person served. **Own Sales**, basket value and basket size are from the orders the person served "
-        "themselves.")
+        "**Revenue** is the sales the person generated — the orders they served. Their "
+        "**revenue target** is, for every day they were on the floor, the shop's daily target "
+        "split equally between the attendants and BAs who served there that day, added up; "
+        f"the **corporate target** is {scorecards.CORPORATE_SHARE:.0%} of it. **Shop Share** is "
+        "the shop's revenue split the same way, for reference. Corporate revenue, basket value "
+        "and basket size are from the orders the person served.")
     if people.empty:
         st.info("No attendants or BAs recorded in this range.")
         return
@@ -872,12 +878,13 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         peers = people[people["Location"] == r["Location"]]
         vs = lambda c, fmt: f"shop avg {fmt(peers[c].mean())}"
         _card(r["Name"], r, [
-            ("Revenue (shared)", _money(r["Revenue"]),
-             f"{_pct(r['Target %'])} of {_money(r['Target'])} ({due})"
+            ("Revenue", _money(r["Revenue"]),
+             f"{_pct(r['Target %'])} of {_money(r['Target'])} "
+             f"({int(r['Days Worked'])} days on the floor)"
              if pd.notna(r["Target %"]) else "no target"),
             ("Revenue per Day", _money(r["Revenue per Day"]),
-             f"{int(r['Days Worked'])} days worked"),
-            ("Own Sales", _money(r["Own Sales"]), f"{int(r['Orders']):,} orders served"),
+             f"{int(r['Orders']):,} orders served"),
+            ("Shop Share", _money(r["Shop Share"]), "shop's sales split equally that day"),
             ("Corporate Revenue", _money(r["Corporate Revenue"]),
              f"{_pct(r['Corporate %'])} of {_money(r['Corporate Target'])}"
              if pd.notna(r["Corporate Target"]) else "no target"),
@@ -900,14 +907,14 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                    "the table. Pick a person at the top to see their card.")
     with st.container(border=True):
         cols = (["Attendant / BA", "Location", "Score"] + scorecards.SCORE_COLUMNS
-                + ["Team Size", "Target", "Revenue", "Target %", "Pace %", "Days Worked", "Revenue per Day",
-                   "Own Sales", "Orders", "Corporate Revenue", "Corporate Target", "Corporate %",
+                + ["Target", "Revenue", "Target %", "Days Worked", "Revenue per Day",
+                   "Shop Share", "Orders", "Corporate Revenue", "Corporate Target", "Corporate %",
                    "Basket Value", "Basket Value %",
                    "Bags", "Basket Size", "Customers", "Repeat %", "Previous Customers",
                    "Retained", "Retention %", "Feedback", "Feedback %", "Training %"])
         grid.filterable_table(people[cols], pinned_columns=("Attendant / BA",),
                               currency_columns=("Target", "Revenue", "Revenue per Day", "Corporate Target",
-                                                "Own Sales", "Corporate Revenue", "Basket Value"),
+                                                "Shop Share", "Corporate Revenue", "Basket Value"),
                               height=460)
 
 

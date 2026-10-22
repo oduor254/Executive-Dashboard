@@ -42,6 +42,22 @@ def _amount(rows: pd.DataFrame, kind: str, on: date) -> dict:
     return hit.groupby("Location")["Target"].sum().to_dict()
 
 
+def daily_targets(start: date, end: date, rows: pd.DataFrame) -> pd.DataFrame:
+    """Every shop's daily target for each day of the range: Location, Date,
+    Day Target — the score cards measure each day's sales against its own
+    day's target, then add the days up."""
+    rows = rows.copy()
+    rows["Starts"] = pd.to_datetime(rows["Starts"]).dt.date
+    rows["Ends"] = pd.to_datetime(rows["Ends"]).dt.date
+    out = []
+    d = start
+    while d <= end:
+        for loc, amount in _amount(rows, "day", d).items():
+            out.append((loc, d, float(amount)))
+        d += timedelta(days=1)
+    return pd.DataFrame(out, columns=["Location", "Date", "Day Target"])
+
+
 def basis_for(start: date, end: date, rows: pd.DataFrame, today: date | None = None) -> Basis:
     today = today or date.today()
     rows = rows.copy()
