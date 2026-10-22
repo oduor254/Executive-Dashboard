@@ -30,7 +30,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from lib import names, phones, scorecards
+from lib import names, phones, scorecards, staff_numbers
 
 DAILY, WEEKLY, MONTHLY = "Daily", "Weekly", "Monthly"
 CHANNELS = ["Walk-in", "Online", "Activation"]
@@ -153,7 +153,11 @@ def prepare(orders: pd.DataFrame, not_customers: set[str]) -> pd.DataFrame:
     df["Bags"] = pd.to_numeric(df["Bags"], errors="coerce").fillna(0)
     digits = df["Phone"].fillna("").astype(str).str.replace(r"\D", "", regex=True)
     df["Key"] = np.where(digits.str.len() >= 9, digits.str[-9:], None)
-    df.loc[df["Key"].isin(not_customers), "Key"] = None
+    # Not customers: store numbers, shared placeholders, and an attendant's
+    # own number on any till but the Staff POS (where staff buy for themselves).
+    attendant = (df["Key"].isin(staff_numbers.attendant_keys())
+                 & (df["Location"] != staff_numbers.STAFF_POS))
+    df.loc[df["Key"].isin(not_customers) | attendant, "Key"] = None
     df["Sale"] = df["Revenue"] > 0
     df["Gender"] = df["Gender"].replace({"Mwanamke": "Female", "Mwanaume": "Male"})
     return df
@@ -165,7 +169,7 @@ def placeholders(*frames: pd.DataFrame) -> set[str]:
         digits = f["Phone"].fillna("").astype(str).str.replace(r"\D", "", regex=True)
         rows.append(pd.DataFrame({"Customer": np.where(digits.str.len() >= 9, digits.str[-9:], None),
                                   "Partner": f["Partner"]}))
-    return scorecards.placeholders(*[r.dropna(subset=["Customer"]) for r in rows])
+    return scorecards.placeholders(*[r.dropna(subset=["Customer"]) for r in rows], attendants=False)
 
 
 def _mode(sales: pd.DataFrame, col: str) -> pd.Series:
@@ -436,18 +440,35 @@ def traffic(foot: pd.DataFrame, cur_df: pd.DataFrame) -> tuple[pd.DataFrame, str
     return t, note
 
 
+SHARED = "Shared"
+
+
 def data_quality(cur_df: pd.DataFrame, prev_df: pd.DataFrame, not_customers: set[str]):
+    """Phone-number quality, and the sales that carry a number that isn't the
+    customer's: a store's own number, an attendant's own number (except at the
+    Staff POS), or a number shared by many customer records. Store and
+    attendant numbers come from Odoo — see lib.staff_numbers."""
+    staff = staff_numbers.load().set_index("Key")
+    stores, attendants = staff_numbers.store_keys(), staff_numbers.attendant_keys()
+
     def stats(df):
         rec = df[df["Partner"].notna() & df["Sale"]]
         issue = rec["Phone"].map(lambda p: phones.problem(p)[0] if str(p).strip() else "N/A")
         digits = rec["Phone"].fillna("").astype(str).str.replace(r"\D", "", regex=True).str[-9:]
-        store = digits.isin(scorecards.SHOP_NUMBERS) | digits.isin(not_customers)
+        kind = pd.Series(None, index=rec.index, dtype=object)
+        kind[digits.isin(not_customers)] = SHARED
+        kind[digits.isin(attendants) & (rec["Location"] != staff_numbers.STAFF_POS)] = staff_numbers.ATTENDANT
+        kind[digits.isin(stores)] = staff_numbers.STORE
+        flagged = rec.assign(Digits=digits, Kind=kind)[kind.notna()]
+        store_like = flagged["Kind"].isin([staff_numbers.STORE, SHARED])
         return {"records": len(rec), "na": int((issue == "N/A").sum()),
                 "short": int(issue.fillna("").str.startswith(("Too short", "Missing")).sum()),
                 "prefix": int(issue.fillna("").str.startswith(("Doesn't", "Starts with 00")).sum()),
                 "long": int(issue.fillna("").str.startswith(("Too long", "International")).sum()),
-                "valid": int(issue.isna().sum()), "store_unique": int(digits[store].nunique()),
-                "store_rows": rec.assign(Digits=digits)[store]}
+                "valid": int(issue.isna().sum()),
+                "store_unique": int(flagged.loc[store_like, "Digits"].nunique()),
+                "attendant_unique": int(flagged.loc[~store_like, "Digits"].nunique()),
+                "flagged": flagged}
     c, p = stats(cur_df), stats(prev_df)
     invalid = lambda s: s["short"] + s["prefix"] + s["long"]
     pc = lambda n, s: f"{n / s['records'] * 100:.1f}%" if s["records"] else "—"
@@ -466,18 +487,48 @@ def data_quality(cur_df: pd.DataFrame, prev_df: pd.DataFrame, not_customers: set
          change(c["long"], p["long"])),
         ("Store Number Used (unique)", f"{c['store_unique']:,}", pc(c["store_unique"], c),
          f"{p['store_unique']:,}", pc(p["store_unique"], p), change(c["store_unique"], p["store_unique"])),
+        ("Attendant Number Used (unique)", f"{c['attendant_unique']:,}", pc(c["attendant_unique"], c),
+         f"{p['attendant_unique']:,}", pc(p["attendant_unique"], p),
+         change(c["attendant_unique"], p["attendant_unique"])),
     ]
     table = pd.DataFrame(rows, columns=["Metric", "Current", "Current %", "Previous", "Previous %", "Change"])
-    store = c["store_rows"]
-    by_shop = (store.groupby("Location").agg(**{"Unique Numbers": ("Digits", "nunique"),
-                                                "Occurrences": ("Digits", "size")})
-               .reset_index().rename(columns={"Location": "Shop"})
-               .sort_values(["Unique Numbers", "Occurrences"], ascending=False))
+
+    flagged = c["flagged"].copy()
+    flagged["Group"] = np.where(flagged["Kind"] == staff_numbers.ATTENDANT, "Attendant", "Store")
+    by_shop = pd.DataFrame(index=pd.Index(sorted(flagged["Location"].unique()), name="Location"))
+    for g in ("Store", "Attendant"):
+        part = flagged[flagged["Group"] == g].groupby("Location")["Digits"]
+        by_shop[f"{g} Numbers"] = part.nunique().reindex(by_shop.index).fillna(0).astype(int)
+        by_shop[f"{g} Uses"] = part.size().reindex(by_shop.index).fillna(0).astype(int)
+    by_shop["Total Uses"] = by_shop["Store Uses"] + by_shop["Attendant Uses"]
+    by_shop = (by_shop.reset_index().rename(columns={"Location": "Shop"})
+               .sort_values(["Total Uses", "Shop"], ascending=[False, True]))
+
+    def belongs_to(kind, digits):
+        if kind == SHARED or digits not in staff.index:
+            return "Shared by many customer records"
+        who = staff.loc[digits]
+        if kind == staff_numbers.STORE:
+            return f"{who['Owner']} store"
+        return f"{who['Owner']} ({who['Shop']})"
+    detail = (flagged.groupby(["Location", "Kind", "Digits"]).size().reset_index(name="Uses")
+              .sort_values(["Uses", "Location"], ascending=[False, True]))
+    detail["Belongs To"] = [belongs_to(k, d) for k, d in zip(detail["Kind"], detail["Digits"])]
+    detail["Number"] = [staff.loc[d, "Number"] if d in staff.index else f"…{d}" for d in detail["Digits"]]
+    detail = detail.rename(columns={"Location": "Shop"})[["Shop", "Kind", "Belongs To", "Number", "Uses"]]
+
     health = c["valid"] / c["records"] * 100 if c["records"] else 0
-    note = f"KYC health score: {health:.1f}% of records carry a valid phone number."
-    shops = ", ".join(f"{r.Shop} ({r.Occurrences})" for r in by_shop.itertuples())
-    store_note = f"Shop's own number used in place of a customer's at: {shops}." if shops else ""
-    return table, by_shop, note, store_note
+    note = (f"KYC health score: {health:.1f}% of records carry a valid phone number. Store and "
+            "attendant numbers are flagged wherever they stand in for a customer's; an "
+            "attendant's own number is only theirs to use at the Staff POS.")
+    notes = []
+    for g, text in (("Store", "Shop's own number used in place of a customer's at"),
+                    ("Attendant", "Attendants' own numbers printed on customer receipts at")):
+        uses = by_shop[by_shop[f"{g} Uses"] > 0]
+        if not uses.empty:
+            notes.append(f"{text}: " + ", ".join(f"{shop} ({n})" for shop, n
+                                                in zip(uses["Shop"], uses[f"{g} Uses"])) + ".")
+    return table, by_shop, detail, note, notes
 
 
 def _branch(value: str) -> str:
@@ -543,7 +594,7 @@ def feedback_section(responses: pd.DataFrame | None, links: pd.DataFrame | None,
 
 
 def key_notes(p: Period, cur: dict, prev: dict, stores: pd.DataFrame, traffic_t: pd.DataFrame,
-              gender_shift: float, fb: dict | None, store_note: str) -> dict[str, list[str]]:
+              gender_shift: float, fb: dict | None, data_notes: list[str]) -> dict[str, list[str]]:
     notes = {"Marketing": [], "Sales": [], "Data": []}
     d = (cur["Revenue"] - prev["Revenue"]) / prev["Revenue"] * 100 if prev["Revenue"] else 0
     if d <= -FLAG_CHANGE:
@@ -578,8 +629,8 @@ def key_notes(p: Period, cur: dict, prev: dict, stores: pd.DataFrame, traffic_t:
             notes["Sales"].append(f"[WIN] {r['Shop']} revenue is up {r['Change %']:.1f}% vs "
                                   f"{p.prev_label} - identify and repeat what worked.")
             break
-    if store_note:
-        notes["Data"].append(f"[MEDIUM] {store_note}")
+    for text in data_notes:
+        notes["Data"].append(f"[MEDIUM] {text}")
     return notes
 
 
@@ -741,14 +792,14 @@ def build(p: Period) -> dict:
              **{"First Order": ("Date", "min"), "Last Order": ("Date", "max")})
         .sort_values("Revenue", ascending=False)) if not jobs.empty else pd.DataFrame()
 
-    out["quality"], out["store_numbers"], out["quality_note"], store_note = \
-        data_quality(cur_df, prev_df, not_customers)
+    (out["quality"], out["store_numbers"], out["staff_numbers"], out["quality_note"],
+     data_notes) = data_quality(cur_df, prev_df, not_customers)
 
     responses, chats = data["responses"], data["chats"]
     links = chats[chats["Feedback Sent"]] if not chats.empty else None
     out["feedback"] = feedback_section(responses, links, p)
     out["notes"] = key_notes(p, cur, prev, out["stores"], out["traffic"], gender_shift,
-                             out["feedback"], store_note)
+                             out["feedback"], data_notes)
     out["generated"] = datetime.now()
     return out
 
@@ -830,7 +881,10 @@ def to_xlsx(r: dict) -> bytes:
                               block(frame=r["corporate_clients"]) if not r["corporate_clients"].empty
                               else block(text="No data for this period.")]),
         ("Data Quality", [block(title="7. Data Quality (KYC)"), block(frame=r["quality"]),
-                          block(title="7.1 Store Numbers Used by Location"), block(frame=r["store_numbers"]),
+                          block(title="7.1 Store & Attendant Numbers Used by Location"),
+                          block(frame=r["store_numbers"]),
+                          block(title="7.2 Store & Attendant Numbers on Customer Receipts"),
+                          block(frame=r["staff_numbers"]),
                           block(text=r["quality_note"])]),
         ("Feedback", [block(title="8. Customer Feedback")]
          + ([block(frame=fb["summary"]), block(title="8.1 Store Breakdown"), block(frame=fb["by_shop"])]

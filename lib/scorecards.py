@@ -31,9 +31,9 @@ Built from one row per order (queries.SCORECARD_ORDERS):
                        form on or after the day they bought (Google Sheet,
                        matched on the last nine digits of the phone).
 
-Customers are known by phone number. The shops' own numbers — the ones on
-the posters, typed in when a customer gives none — and any number shared by
-five or more customer records are not customers, and are left out of the
+Customers are known by phone number. The shops' own numbers (typed in when
+a customer gives none), the shop attendants' own numbers, and any number
+shared by five or more customer records are not customers, and are left out of the
 repeat and feedback figures.
 """
 from __future__ import annotations
@@ -44,12 +44,6 @@ import pandas as pd
 NOT_RECORDED = "Not recorded"
 NOT_SHOPS = {"Staff POS"}
 
-# Each shop's own number, as printed on its posters (last nine digits).
-SHOP_NUMBERS = {
-    "118753780", "714156897", "759296069", "720060705", "712532047", "745390465",
-    "118753776", "715598778", "115920422", "795176310", "798219855", "707392070",
-    "707722454", "790833297", "703869724", "701012197", "118753771",
-}
 PLACEHOLDER_MIN_RECORDS = 5
 
 # Basket value is held to one benchmark everywhere, and so is feedback: 70%
@@ -80,12 +74,17 @@ MEASURES = [
 SCORE_COLUMNS = [m[0] for m in MEASURES]
 
 
-def placeholders(*frames: pd.DataFrame) -> set[str]:
-    """Phone numbers that are not a customer: the shops' own, and any shared
-    by many customer records."""
+def placeholders(*frames: pd.DataFrame, attendants: bool = True) -> set[str]:
+    """Phone numbers that are not a customer: the shops' own and the shop
+    attendants' (both from Odoo, see lib.staff_numbers), and any shared by
+    many customer records. Score cards leave the Staff POS out, so an
+    attendant's number is never a customer here; pass attendants=False where
+    Staff POS sales are kept and the exception is applied per sale."""
+    from lib import staff_numbers
     rows = pd.concat([f[["Customer", "Partner"]] for f in frames], ignore_index=True)
     shared = rows.groupby("Customer")["Partner"].nunique()
-    return set(shared[shared >= PLACEHOLDER_MIN_RECORDS].index) | SHOP_NUMBERS
+    staff = staff_numbers.store_keys() | (staff_numbers.attendant_keys() if attendants else set())
+    return set(shared[shared >= PLACEHOLDER_MIN_RECORDS].index) | staff
 
 
 def prepare(orders: pd.DataFrame, not_customers: set[str]) -> pd.DataFrame:

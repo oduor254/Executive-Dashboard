@@ -138,7 +138,10 @@ def outline(r: dict) -> list[Section]:
         ]),
         Section(7, "Data Quality (KYC)", [
             Block("table", "Phone number quality", r["quality"], total=False),
-            Block("table", "7.1 Store Numbers Used by Location", r["store_numbers"]),
+            Block("table", "7.1 Store & Attendant Numbers Used by Location", r["store_numbers"],
+                  pinned=True),
+            Block("table", "7.2 Store & Attendant Numbers on Customer Receipts", r["staff_numbers"],
+                  pinned=True),
             Block("text", text=r["quality_note"]),
         ]),
     ]
