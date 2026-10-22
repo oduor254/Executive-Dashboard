@@ -96,8 +96,8 @@ def render_footfall(start_date: date, end_date: date) -> None:
         "they are not people through the door, so counting them as buyers (as the Footfall "
         "module's own Buyers column does) overstates conversion. Leads are in the Leads "
         "module and not counted here. A count of **0** stands only when no walk-in bought; "
-        f"a missing count is taken from the Reporting sheet ({filled_from_sheet:,} shop-days "
-        "here). Orders are dated in Kenya time, as on the POS dashboard."
+        f"a missing count before 22 Oct 2026 is taken from the saved Reporting-sheet history "
+        f"({filled_from_sheet:,} shop-days here). Orders are dated in Kenya time, as on the POS dashboard."
         + (" Today is left out: its footfall is entered at close of day." if open_today else ""))
 
     if counted.empty:

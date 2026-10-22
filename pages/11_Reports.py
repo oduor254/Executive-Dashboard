@@ -167,7 +167,7 @@ elif section.startswith("4"):
 
 elif section.startswith("5"):
     st.markdown("#### 5. Foot & Online Traffic Analysis")
-    st.caption("Walk-in Total: walk-ins counted (Footfall module; gaps from the Reporting sheet). "
+    st.caption("Walk-in Total: walk-ins counted (Footfall module; earlier gaps from the saved Reporting-sheet history). "
                "Walk-in Purchased: walk-in orders on the POS. Online and activation orders are "
                "not part of the conversion.")
     _table(report["traffic"], pinned_columns=("Shop",), height=560)

@@ -17,8 +17,8 @@ Definitions, so every figure agrees with the rest of the dashboard:
   Repeat         — bought on two or more different days within the period;
                    New = customers who did not.
   Retention      — bought in this period and the one before, at the same shop.
-  Traffic        — walk-ins counted (Footfall module, gaps from the Reporting
-                   sheet) against walk-in orders on the POS.
+  Traffic        — walk-ins counted (Footfall module, earlier gaps from the
+                   saved Reporting-sheet history) against walk-in orders on the POS.
 """
 from __future__ import annotations
 
