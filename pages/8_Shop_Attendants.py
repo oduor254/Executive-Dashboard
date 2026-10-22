@@ -220,11 +220,10 @@ def _report_tables(start_date: date, end_date: date, location: str, shown: pd.Da
                         "Basket Value", "Basket Size", "Attendants", "Revenue per Attendant",
                         "Customers", "Repeat %", "Retention %", "Feedback %", "Training %",
                         "Response Time (min)"])
-        person_cols = (["Attendant / BA", "Location", "Score"] + scorecards.SCORE_COLUMNS
+        person_cols = (["Attendant / BA", "Location", "Score"] + scorecards.ATTENDANT_SCORE_COLUMNS
                        + ["Target", "Revenue", "Target %", "Days Worked", "Revenue per Day",
                           "Shop Share", "Orders", "Corporate Revenue", "Basket Value",
-                          "Basket Size", "Customers", "Repeat %", "Retention %", "Feedback %",
-                          "Training %"])
+                          "Basket Size", "Customers", "Feedback %", "Training %"])
         tables["Shop Score Cards"] = in_loc(shops)[[c for c in shop_cols if c in shops]]
         tables["Attendant Score Cards"] = in_loc(people)[[c for c in person_cols if c in people]]
         notes["Shop Score Cards"] = ("Scores out of 100; the cumulative score is their average. "
@@ -266,7 +265,8 @@ def _for_word(tables: dict) -> dict:
             continue
         if name.endswith("Score Cards"):
             keys = [c for c in ("Attendant / BA", "Location") if c in frame]
-            cols = keys + ["Score"] + [c for c in scorecards.SCORE_COLUMNS if c in frame]
+            cols = keys + ["Score"] + [c for c in scorecards.SCORE_COLUMNS
+                                       if c in frame and frame[c].notna().any()]
             frame = frame[cols].rename(columns=lambda c: c.replace(" Score", "") if c != "Score"
                                        else "Cumulative Score")
         elif name == "Achievement vs Target":
@@ -640,7 +640,7 @@ def _card(title: str, row: pd.Series, items: list[tuple[str, str, str | None]]) 
             for col, (label, value, note) in zip(st.columns(4), items[start:start + 4]):
                 col.metric(label, value, note, delta_color="off")
         parts = [f"{name.replace(' Score', '')} **{row[name]:.0f}**"
-                 for name in scorecards.SCORE_COLUMNS if pd.notna(row[name])]
+                 for name in scorecards.SCORE_COLUMNS if name in row and pd.notna(row[name])]
         st.caption("Scores out of 100 — " + " · ".join(parts))
 
 
@@ -663,10 +663,11 @@ def _cumulative_chart(table: pd.DataFrame, name: str, title: str) -> None:
     ranked = table.dropna(subset=["Score"]).sort_values("Score").tail(30)
     if ranked.empty:
         return
-    n = len(scorecards.SCORE_COLUMNS)
+    columns = [c for c in scorecards.SCORE_COLUMNS if c in ranked]
+    n = len(columns)
     fig = go.Figure()
-    for column in scorecards.SCORE_COLUMNS:
-        part = ranked[column].fillna(0) / ranked[scorecards.SCORE_COLUMNS].notna().sum(axis=1)
+    for column in columns:
+        part = ranked[column].fillna(0) / ranked[columns].notna().sum(axis=1)
         fig.add_bar(y=ranked[name], x=part, orientation="h",
                     name=column.replace(" Score", ""),
                     marker=dict(color=SCORE_COLORS[column],
@@ -736,17 +737,33 @@ def _day_targets(start_date: date, end_date: date) -> pd.DataFrame:
 def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
     """Everything the score cards are built from, for the section and the
     report export alike. None when there were no sales."""
-    orders = db.run_query(queries.SCORECARD_ORDERS,
-                          {"start_date": start_date, "end_date": end_date})
-    if orders.empty:
-        return None
+    from concurrent.futures import ThreadPoolExecutor
+
     # The same number of days just before, for retention: 8-14 Oct is set
     # against 1-7 Oct, October 1-11 against 20-30 September.
     days = (end_date - start_date).days + 1
     prev_end = start_date - timedelta(days=1)
     prev_start = prev_end - timedelta(days=days - 1)
-    prev_orders = db.run_query(queries.SCORECARD_ORDERS,
-                               {"start_date": prev_start, "end_date": prev_end})
+
+    def quietly(load):
+        try:
+            load()
+        except Exception:   # the section reports the sheet's own error below
+            pass
+
+    # Both periods' orders, the two Google Sheets and the targets at once:
+    # each is cached, so the calls below pick up what these fetched.
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        orders_f = pool.submit(db.run_query, queries.SCORECARD_ORDERS,
+                               {"start_date": start_date, "end_date": end_date})
+        prev_f = pool.submit(db.run_query, queries.SCORECARD_ORDERS,
+                             {"start_date": prev_start, "end_date": prev_end})
+        pool.submit(quietly, feedback.load)
+        pool.submit(quietly, training.load)
+        pool.submit(quietly, lambda: _day_targets(start_date, end_date))
+        orders, prev_orders = orders_f.result(), prev_f.result()
+    if orders.empty:
+        return None
     not_customers = scorecards.placeholders(orders, prev_orders)
     df = scorecards.prepare(orders, not_customers)
     previous = scorecards.prepare(prev_orders, not_customers)
@@ -791,8 +808,9 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         f"customers served sending a form ({scorecards.FEEDBACK_TARGET}% or more scores 100). Basket size, repeat "
         "purchase and retention have no target, so they are scored by rank: 100 is the best "
         "shop (or attendant). Customers are unique people, known by phone "
-        "number. **Repeat Purchase** is the share of the period's customers who bought on two "
-        "or more different days in it. **Retention** is the share of the previous period's "
+        "number. **Repeat Purchase** (shops only) is the share of the period's customers who "
+        "bought on two or more different days in it. **Retention** (shops only) is the share of "
+        "the previous period's "
         f"customers ({prev_start:%d %b} – {prev_end:%d %b}, the same number of days) who bought "
         "again in this one, at the same shop. **Feedback** is the share who sent a feedback "
         "form on or after the day they bought. **Sales Training** counts every daily "
@@ -867,7 +885,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "split equally between the attendants and BAs who served there that day, added up; "
         f"the **corporate target** is {scorecards.CORPORATE_SHARE:.0%} of it. **Shop Share** is "
         "the shop's revenue split the same way, for reference. Corporate revenue, basket value "
-        "and basket size are from the orders the person served.")
+        "and basket size are from the orders the person served. Repeat purchase and retention "
+        "are scored for the shop as a whole, not for each attendant.")
     if people.empty:
         st.info("No attendants or BAs recorded in this range.")
         return
@@ -892,10 +911,6 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
              f"{_pct(r['Basket Value %'])} of {basket}"),
             ("Basket Size", f"{r['Basket Size']:.2f} bags",
              vs("Basket Size", lambda v: f"{v:.2f}")),
-            ("Repeat Purchase", _pct(r["Repeat %"]), vs("Repeat %", _pct)),
-            ("Retention", _pct(r["Retention %"]),
-             f"{r['Retained']:,.0f} of {r['Previous Customers']:,.0f} came back"
-             if pd.notna(r["Previous Customers"]) else "no customers last period"),
             ("Feedback", _pct(r["Feedback %"]),
              f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
              if pd.notna(r["Feedback"]) else None),
@@ -906,12 +921,11 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         st.caption(f"The 12 best cumulative scores are shown as cards; all {len(people)} are in "
                    "the table. Pick a person at the top to see their card.")
     with st.container(border=True):
-        cols = (["Attendant / BA", "Location", "Score"] + scorecards.SCORE_COLUMNS
+        cols = (["Attendant / BA", "Location", "Score"] + scorecards.ATTENDANT_SCORE_COLUMNS
                 + ["Target", "Revenue", "Target %", "Days Worked", "Revenue per Day",
                    "Shop Share", "Orders", "Corporate Revenue", "Corporate Target", "Corporate %",
                    "Basket Value", "Basket Value %",
-                   "Bags", "Basket Size", "Customers", "Repeat %", "Previous Customers",
-                   "Retained", "Retention %", "Feedback", "Feedback %", "Training %"])
+                   "Bags", "Basket Size", "Customers", "Feedback", "Feedback %", "Training %"])
         grid.filterable_table(people[cols], pinned_columns=("Attendant / BA",),
                               currency_columns=("Target", "Revenue", "Revenue per Day", "Corporate Target",
                                                 "Shop Share", "Corporate Revenue", "Basket Value"),

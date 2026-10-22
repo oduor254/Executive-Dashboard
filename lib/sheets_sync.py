@@ -124,6 +124,29 @@ def _client() -> gspread.Client:
     return gspread.authorize(creds)
 
 
+def read_tabs(sheet: gspread.Spreadsheet, titles: list[str] | None = None) -> dict[str, list[list[str]]]:
+    """Several tabs' values in one request instead of one per tab: {title:
+    rows}, each row padded to the widest so columns line up (as
+    get_all_values gives them). `titles` are matched ignoring case; tabs
+    that don't exist are left out. All tabs when titles is None."""
+    existing = [ws.title for ws in sheet.worksheets()]
+    if titles is None:
+        wanted = existing
+    else:
+        by_lower = {t.strip().lower(): t for t in existing}
+        wanted = [by_lower[t.strip().lower()] for t in titles if t.strip().lower() in by_lower]
+    if not wanted:
+        return {}
+    ranges = ["'" + t.replace("'", "''") + "'" for t in wanted]
+    result = sheet.values_batch_get(ranges)
+    out = {}
+    for title, block in zip(wanted, result.get("valueRanges", [])):
+        rows = [[str(v) for v in r] for r in block.get("values", [])]
+        width = max((len(r) for r in rows), default=0)
+        out[title] = [r + [""] * (width - len(r)) for r in rows]
+    return out
+
+
 def _worksheet() -> gspread.Worksheet:
     sheet_id = _require_config("DEALS_TRACKER_SHEET_ID")
     sh = _client().open_by_key(sheet_id)

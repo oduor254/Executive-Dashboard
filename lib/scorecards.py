@@ -16,14 +16,12 @@ Built from one row per order (queries.SCORECARD_ORDERS):
                        corporate target of 10% of the revenue target (for an
                        attendant, 10% of their own target).
   Basket Value       — revenue per order; Basket Size — bags per order.
-  Repeat Purchase    — share of the period's unique customers who bought on
+  Repeat Purchase    — shops only: share of the period's unique customers who bought on
                        two or more different days within the period (two
                        orders on the same day are one visit).
-  Retention          — of the unique customers who bought in the previous
-                       period of the same length (1-7 Oct before 8-14 Oct),
-                       the share who bought again in this one. For a shop,
-                       they came back to that shop; for an attendant, the
-                       customers they served came back to the same shop.
+  Retention          — shops only: of the unique customers who bought in the
+                       previous period of the same length (1-7 Oct before
+                       8-14 Oct), the share who came back to that shop.
   Sales Training     — the daily questionnaire (lib/training.py): every one
                        due at the score it got, a missed one at 0, against a
                        target of 100%. A shop is its whole team list; an
@@ -76,6 +74,11 @@ MEASURES = [
     ("Response Score", "Response vs Target %", "target"),
 ]
 SCORE_COLUMNS = [m[0] for m in MEASURES]
+# Repeat purchase and retention are the shop's, as a whole — a returning
+# customer comes back to the shop, not to one attendant — and WhatsApp
+# response is the shop's too, so an attendant is scored on the rest.
+SHOP_ONLY = ("Repeat Score", "Retention Score", "Response Score")
+ATTENDANT_SCORE_COLUMNS = [c for c in SCORE_COLUMNS if c not in SHOP_ONLY]
 
 
 def placeholders(*frames: pd.DataFrame, attendants: bool = True) -> set[str]:
@@ -174,7 +177,8 @@ def person_days(df: pd.DataFrame, day_targets: pd.DataFrame, served_by: str = "S
     return worked
 
 
-def _score(table: pd.DataFrame, expected: float = 1.0) -> pd.DataFrame:
+def _score(table: pd.DataFrame, expected: float = 1.0,
+           columns: list[str] = SCORE_COLUMNS) -> pd.DataFrame:
     """A score out of 100 for each measure, and the cumulative score.
 
     Revenue targets cover only the days that have been traded, so 100% of
@@ -188,12 +192,14 @@ def _score(table: pd.DataFrame, expected: float = 1.0) -> pd.DataFrame:
                                else np.nan)
     out["Feedback of Target %"] = (out["Feedback %"] / FEEDBACK_TARGET * 100).round(1)
     for column, measure, how in MEASURES:
+        if column not in columns:
+            continue
         values = out[measure] if measure in out else pd.Series(np.nan, index=out.index)
         if how == "target":
             out[column] = values.clip(upper=100).round(0)
         else:
             out[column] = (values.rank(pct=True) * 100).round(0)
-    out["Score"] = out[SCORE_COLUMNS].mean(axis=1).round(0)
+    out["Score"] = out[columns].mean(axis=1).round(0)
     return out
 
 
@@ -269,10 +275,9 @@ def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.Da
     table["Basket Value"] = (table["Revenue"] / table["Orders"]).round(0)
     table["Basket Value %"] = (table["Basket Value"] / BASKET_TARGET * 100).round(1)
     table["Basket Size"] = (table["Bags"] / table["Orders"]).round(2)
-    table = table.join(_customer_rates(staffed, keys))
-    table = table.join(retention(df, previous[previous["Served By"] != NOT_RECORDED], keys))
+    table = table.join(_customer_rates(staffed, keys).drop(columns="Repeat %"))
     table["Training %"] = (training.reindex(table.index).round(1) if training is not None
                            else np.nan)
-    table = _score(table)
+    table = _score(table, columns=ATTENDANT_SCORE_COLUMNS)
     table = table.reset_index().rename(columns={"Served By": "Attendant / BA"})
     return table.sort_values("Score", ascending=False)

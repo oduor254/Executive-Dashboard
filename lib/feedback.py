@@ -90,23 +90,52 @@ def _with_retries(fetch):
             time.sleep(3 * (attempt + 1))
 
 
-def _read_tab(sheet, title: str, words: dict[str, list[str]]) -> pd.DataFrame:
-    tabs = {ws.title.strip().lower(): ws for ws in sheet.worksheets()}
-    ws = tabs.get(title.lower())
-    if ws is None:
-        return pd.DataFrame(columns=_FIELDS + ["Form"])
-    values = _with_retries(ws.get_all_values)
-    if len(values) < 2:
-        return pd.DataFrame(columns=_FIELDS + ["Form"])
-    header = [h.strip().lower() for h in values[0]]
-    rows = pd.DataFrame(values[1:])
-    out = pd.DataFrame(index=rows.index)
-    for field in _FIELDS:
-        position = next((i for i, h in enumerate(header)
-                         if any(w in h for w in words[field])), None)
-        out[field] = rows[position].astype(str).str.strip() if position is not None else ""
-    out["Form"] = ws.title
-    return out
+def _column_letter(index: int) -> str:
+    letters, n = "", index + 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        letters = chr(65 + r) + letters
+    return letters
+
+
+def _read_forms(sheet) -> list[pd.DataFrame]:
+    """Each form's responses, only the columns the dashboard uses.
+
+    The forms ask a dozen-odd questions, and 20,000+ responses of all of
+    them is most of the download; so the header rows come first (one
+    request), then just the needed columns of every tab (one more)."""
+    existing = {ws.title.strip().lower(): ws.title for ws in sheet.worksheets()}
+    tabs = [(existing[t.lower()], words) for t, words in _TABS.items() if t.lower() in existing]
+    if not tabs:
+        return []
+    quote = lambda t: "'" + t.replace("'", "''") + "'"
+    headers = sheet.values_batch_get([f"{quote(t)}!1:1" for t, _ in tabs]).get("valueRanges", [])
+    wanted = []                                   # (tab, field, column letter)
+    for (title, words), block in zip(tabs, headers):
+        header = [str(h).strip().lower() for h in (block.get("values") or [[]])[0]]
+        for field in _FIELDS:
+            position = next((i for i, h in enumerate(header)
+                             if any(w in h for w in words[field])), None)
+            if position is not None:
+                wanted.append((title, field, _column_letter(position)))
+    columns = sheet.values_batch_get(
+        [f"{quote(t)}!{c}2:{c}" for t, _, c in wanted],
+        params={"majorDimension": "COLUMNS"}).get("valueRanges", []) if wanted else []
+    found: dict[str, dict[str, list]] = {}
+    for (title, field, _), block in zip(wanted, columns):
+        found.setdefault(title, {})[field] = [str(v) for v in (block.get("values") or [[]])[0]]
+    frames = []
+    for title, _ in tabs:
+        cols = found.get(title, {})
+        n = max((len(v) for v in cols.values()), default=0)
+        if not n:
+            continue
+        out = pd.DataFrame({f: pd.Series(cols.get(f, []) + [""] * (n - len(cols.get(f, []))))
+                            .astype(str).str.strip().astype(object) for f in _FIELDS})
+        out["Form"] = title
+        out["Form"] = out["Form"].astype(object)
+        frames.append(out)
+    return frames
 
 
 @st.cache_data(ttl=600, show_spinner="Reading customer feedback…")
@@ -114,7 +143,9 @@ def load() -> pd.DataFrame:
     """Every feedback response: Submitted, Name, Phone, Branch, Form, Phone Key."""
     try:
         sheet = _with_retries(lambda: sheets_sync._client().open_by_key(SPREADSHEET_ID))
-        frames = [_read_tab(sheet, title, words) for title, words in _TABS.items()]
+        # Three requests in all: the tab list, the header rows, the needed
+        # columns (it was a tab list and a full read per tab, four times over).
+        frames = _with_retries(lambda: _read_forms(sheet))
     except PermissionError as exc:
         raise FeedbackUnavailable(
             f"The feedback sheet is not shared with {service_account_email()}."
@@ -122,6 +153,8 @@ def load() -> pd.DataFrame:
     except Exception as exc:  # quota, a missing tab, Google being unavailable
         raise FeedbackUnavailable(f"Could not read the feedback sheet: {exc}") from exc
 
+    if not frames:
+        raise FeedbackUnavailable("The feedback sheet has none of the expected form tabs.")
     out = pd.concat(frames, ignore_index=True)
     out = out[out["Submitted"].ne("")]
     out["Submitted"] = _parse_timestamps(out["Submitted"])

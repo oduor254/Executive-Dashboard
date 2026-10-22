@@ -127,7 +127,9 @@ def load() -> dict:
     for sheet_id in SPREADSHEETS:
         try:
             sheet = _with_retries(lambda: client.open_by_key(sheet_id))
-            tabs = {ws.title: _with_retries(ws.get_all_values) for ws in sheet.worksheets()}
+            # Every tab in one request — a month has 30 questionnaire tabs,
+            # and reading them one by one took most of the load time.
+            tabs = _with_retries(lambda: sheets_sync.read_tabs(sheet))
         except Exception as exc:
             raise TrainingUnavailable(
                 f"Could not read the sales training sheet ({exc}). Share it with "
