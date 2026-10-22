@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
+import streamlit as st
 
 from lib import names, phones, scorecards
 
@@ -167,6 +168,14 @@ def placeholders(*frames: pd.DataFrame) -> set[str]:
     return scorecards.placeholders(*[r.dropna(subset=["Customer"]) for r in rows])
 
 
+def _mode(sales: pd.DataFrame, col: str) -> pd.Series:
+    """Each customer's most frequent `col` (ties to the first alphabetically,
+    as Series.mode does) — vectorised; a per-customer mode() took seconds."""
+    counts = sales.groupby(["Key", col]).size().reset_index(name="n")
+    return (counts.sort_values(["Key", "n", col], ascending=[True, False, True])
+            .drop_duplicates("Key").set_index("Key")[col])
+
+
 def customer_table(df: pd.DataFrame) -> pd.DataFrame:
     """One row per customer: orders, purchase days, revenue, shops, channel."""
     sales = df[df["Sale"] & df["Key"].notna()]
@@ -178,8 +187,7 @@ def customer_table(df: pd.DataFrame) -> pd.DataFrame:
     net = df[df["Key"].isin(sales["Key"])].groupby("Key")["Revenue"].sum()
     out = pd.DataFrame({"Orders": g["Order ID"].nunique(), "Days": g["Date"].nunique(),
                         "Revenue": net,
-                        "Gender": g["Gender"].agg(lambda v: v.mode().iat[0]),
-                        "Location": g["Location"].agg(lambda v: v.mode().iat[0])})
+                        "Gender": _mode(sales, "Gender"), "Location": _mode(sales, "Location")})
     out["Repeat"] = out["Days"] >= 2
     return out.reset_index()
 
@@ -577,8 +585,23 @@ def key_notes(p: Period, cur: dict, prev: dict, stores: pd.DataFrame, traffic_t:
 
 # ----------------------------------------------------------------- build ---
 
-def _orders(start: date, end: date) -> pd.DataFrame:
+CLOSED_TTL = 12 * 3600      # a finished day, week or month no longer changes
+OPEN_TTL = 600              # the period still running refreshes every 10 minutes
+
+
+@st.cache_data(ttl=CLOSED_TTL, show_spinner=False, max_entries=400)
+def _orders_closed(start: date, end: date) -> pd.DataFrame:
     from lib import db, queries
+    return db.run_query(queries.REPORT_ORDERS, {"start_date": start, "end_date": end})
+
+
+def _orders(start: date, end: date) -> pd.DataFrame:
+    """A period's orders. A period that has ended is kept for CLOSED_TTL, so
+    the six weeks behind next week's bridge, or last month's report opened by
+    someone else, come from memory rather than the replica."""
+    from lib import db, queries
+    if end < date.today():
+        return _orders_closed(start, end)
     return db.run_query(queries.REPORT_ORDERS, {"start_date": start, "end_date": end})
 
 
@@ -588,36 +611,105 @@ def _corporate(start: date, end: date) -> float:
     return float(t["Revenue"].iloc[0]) if not t.empty else 0.0
 
 
-def build(p: Period) -> dict:
-    """Every section of the report for period `p`, against the one before."""
+def _fetch(p: Period) -> dict:
+    """Everything the report reads, fetched in parallel. The orders come one
+    query per revenue-bridge period (7 days, 6 weeks or 6 months — which
+    already hold this period and the one before it): shorter reads, less
+    likely to be cancelled by the replica, each cached on its own (see
+    _orders), so next week's report reuses five of its six weeks.
+
+    The replica cancels long reads when it is busy ("conflict with recovery");
+    run_query retries, and a read here gets one more round after a pause. If an
+    older bridge period still fails, the bridge shows it as unavailable rather
+    than the whole report failing; this period and the last must load."""
+    import time
+    from concurrent.futures import ThreadPoolExecutor
     from lib import db, feedback, footfall, queries
 
-    cur_raw, prev_raw = _orders(p.start, p.end), _orders(p.prev_start, p.prev_end)
+    spans = bridge_periods(p)
+    timings: dict[str, float] = {}
+    needed = {(p.start, p.end), (p.prev_start, p.prev_end)}
+
+    def timed(name, fn, optional=False):
+        def run():
+            t = time.perf_counter()
+            try:
+                for attempt in (1, 2):
+                    try:
+                        return fn()
+                    except Exception:
+                        if attempt == 2:
+                            if optional:
+                                return None
+                            raise
+                        time.sleep(3)
+            finally:
+                timings[name] = round(time.perf_counter() - t, 2)
+        return run
+
+    def responses():
+        try:
+            return feedback.load()
+        except feedback.FeedbackUnavailable:
+            return None
+
+    jobs = {
+        **{f"orders {i}": (lambda s=s, e=e: _orders(s, e)) for i, (_, s, e) in enumerate(spans)},
+        "corp_cur": lambda: _corporate(p.start, p.end),
+        "corp_prev": lambda: _corporate(p.prev_start, p.prev_end),
+        "corp_lines": lambda: db.run_query(queries.CORPORATE_LINES,
+                                           {"start_date": p.start, "end_date": p.end}),
+        "footfall": lambda: footfall.daily(p.start, p.end)[0],
+        "responses": responses,
+        "chats": lambda: db.run_query(queries.WA_INTERACTIONS,
+                                      {"start_date": p.start, "end_date": p.end}),
+    }
+    # Cached calls made from these threads have no script context, so they
+    # skip their spinners; the page shows one spinner over the whole build.
+    # Eight at a time: the database pool holds ten connections.
+    optional = {f"orders {i}" for i, (_, s, e) in enumerate(spans) if (s, e) not in needed}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {k: pool.submit(timed(k, f, optional=k in optional)) for k, f in jobs.items()}
+        out = {k: f.result() for k, f in futures.items()}
+    keys = [k for k in out if k.startswith("orders ")]
+    parts = [out.pop(k) for k in keys]
+    out["missing_spans"] = {spans[int(k.split()[1])][0] for k, x in zip(keys, parts) if x is None}
+    parts = [x for x in parts if x is not None]
+    out["orders"] = pd.concat([x for x in parts if not x.empty] or parts, ignore_index=True)
+    out["spans"], out["timings"] = spans, timings
+    return out
+
+
+def build(p: Period) -> dict:
+    """Every section of the report for period `p`, against the one before."""
+    data = _fetch(p)
+    orders = data["orders"].copy()
+    orders["Date"] = pd.to_datetime(orders["Date"]).dt.date
+    in_range = lambda s, e: orders[(orders["Date"] >= s) & (orders["Date"] <= e)]
+    cur_raw, prev_raw = in_range(p.start, p.end), in_range(p.prev_start, p.prev_end)
     not_customers = placeholders(cur_raw, prev_raw)
     cur_df, prev_df = prepare(cur_raw, not_customers), prepare(prev_raw, not_customers)
-    corp_cur, corp_prev = _corporate(p.start, p.end), _corporate(p.prev_start, p.prev_end)
-    cur, prev = headline(cur_df, corp_cur), headline(prev_df, corp_prev)
+    cur, prev = headline(cur_df, data["corp_cur"]), headline(prev_df, data["corp_prev"])
 
-    out = {"period": p, "cur": cur, "prev": prev}
+    out = {"period": p, "cur": cur, "prev": prev, "timings": data["timings"]}
     out["executive"], out["flags"], out["exec_note"] = executive(cur, prev, p)
-    out["cust_metrics"], out["frequency"], out["channels"], out["cust_note"] = \
-        customer_metrics(cur_df, prev_df, cur, prev)
+    out["cust_metrics"], out["frequency"], out["channels"], out["cust_note"] =         customer_metrics(cur_df, prev_df, cur, prev)
     out["stores"], out["channel_mix"] = store_performance(cur_df, prev_df)
     out["retention"] = retention_table(cur_df, prev_df)
     (out["gender_ratio"], out["gender"], out["gender_shop"], out["gender_note"],
      out["gender_unknown"], gender_shift) = gender_split(cur_df, prev_df, p)
 
-    foot, _, _ = footfall.daily(p.start, p.end)
-    out["traffic"], out["traffic_note"] = traffic(foot, cur_df) if not foot.empty else \
-        (pd.DataFrame(), "No footfall was counted in this period.")
+    foot = data["footfall"]
+    out["traffic"], out["traffic_note"] = traffic(foot, cur_df) if not foot.empty else         (pd.DataFrame(), "No footfall was counted in this period.")
 
     # Revenue bridge: the last 7 days, 6 weeks or 6 months.
-    spans = bridge_periods(p)
-    window = _orders(spans[0][1], spans[-1][2])
-    window = prepare(window, not_customers)
-    window["Date"] = pd.to_datetime(window["Date"]).dt.date
+    window = prepare(orders, not_customers)
     rows, last = [], None
-    for label, s, e in spans:
+    for label, s, e in data["spans"]:
+        if label in data["missing_spans"]:
+            # The replica wouldn't serve this period even after retries.
+            rows.append((label, np.nan, np.nan, np.nan, "unavailable"))
+            continue
         part = window[(window["Date"] >= s) & (window["Date"] <= e)]
         rev = part["Revenue"].sum()
         custs = part.loc[part["Sale"] & part["Key"].notna(), "Key"].nunique()
@@ -641,7 +733,7 @@ def build(p: Period) -> dict:
         ("Overall Revenue", money(cur["Overall"]), money(prev["Overall"]),
          change(cur["Overall"], prev["Overall"], money_fmt=True)),
     ], columns=["Metric", "Current", "Previous", "Change"])
-    lines = db.run_query(queries.CORPORATE_LINES, {"start_date": p.start, "end_date": p.end})
+    lines = data["corp_lines"]
     jobs = lines[lines["Channel"] == "Corporate Sales"] if not lines.empty else lines
     out["corporate_clients"] = (
         jobs.groupby("Customer", as_index=False)
@@ -652,11 +744,7 @@ def build(p: Period) -> dict:
     out["quality"], out["store_numbers"], out["quality_note"], store_note = \
         data_quality(cur_df, prev_df, not_customers)
 
-    try:
-        responses = feedback.load()
-    except feedback.FeedbackUnavailable:
-        responses = None
-    chats = db.run_query(queries.WA_INTERACTIONS, {"start_date": p.start, "end_date": p.end})
+    responses, chats = data["responses"], data["chats"]
     links = chats[chats["Feedback Sent"]] if not chats.empty else None
     out["feedback"] = feedback_section(responses, links, p)
     out["notes"] = key_notes(p, cur, prev, out["stores"], out["traffic"], gender_shift,

@@ -98,7 +98,8 @@ branch_totals AS (
         -- kept: they net returns off the takings the way Odoo reports it
         -- (Eldoret keyed 777 Lola Black on 7 Sep 2026 and reversed 776 an
         -- hour later; dropping the reversal overstated that day by KES 1.4m).
-        AND po.date_order::DATE BETWEEN dr.start_date AND dr.end_date
+        AND po.date_order >= dr.start_date
+        AND po.date_order < dr.end_date + INTERVAL '1 day'
 
     GROUP BY
         CASE
@@ -3735,7 +3736,8 @@ LEFT JOIN pos_config pconf ON pconf.id = ps.config_id
 LEFT JOIN stock_picking_type spt ON spt.id = pconf.picking_type_id
 LEFT JOIN stock_warehouse sw ON sw.id = spt.warehouse_id
 LEFT JOIN stock_location sl ON sl.id = spt.default_location_src_id
-WHERE po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+WHERE po.date_order >= CAST(:start_date AS TIMESTAMP)
+        AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
   AND po.state IN ('done', 'paid')
   AND (pt."name" ILIKE '%discount%' OR pt."name" ILIKE '%promo%')
 GROUP BY 1, 2, 3
@@ -4103,7 +4105,8 @@ LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
 LEFT JOIN res_users            opener ON opener.id = ps.user_id
 LEFT JOIN res_partner          open_p ON open_p.id = opener.partner_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
-  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 GROUP BY 1, 2, 4, 5, 6, 7
 ORDER BY "Date" DESC, "Location", "Session", "Sales Made" DESC
 """
@@ -4155,7 +4158,8 @@ lines AS (
     LEFT JOIN res_partner     att_p ON att_p.id = att.partner_id
     LEFT JOIN pos_shop_ba     ba    ON ba.id = po.ba_id
     WHERE po.state IN ('done', 'paid', 'invoiced')
-      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+      AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
       AND (TRIM(att_p.name) = :person OR TRIM(ba.name) = :person)
       AND pol.qty > 0
       AND pt.name NOT ILIKE '%Delivery Fee%'
@@ -4216,7 +4220,8 @@ orders AS (
     LEFT JOIN res_partner att_p ON att_p.id = att.partner_id
     LEFT JOIN pos_shop_ba ba    ON ba.id = po.ba_id
     WHERE po.state IN ('done', 'paid', 'invoiced')
-      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+      AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
       AND pol.qty > 0
     GROUP BY 1, 2, 3, 4, 5, 6
 )
@@ -4304,7 +4309,8 @@ orders AS (
     LEFT JOIN stock_warehouse     sw    ON sw.id = spt.warehouse_id
     LEFT JOIN stock_location      sl    ON sl.id = spt.default_location_src_id
     WHERE po.state IN ('done', 'paid', 'invoiced')
-      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+      AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
     GROUP BY 1, 2, 3, 4
 )
 SELECT
@@ -4475,7 +4481,8 @@ LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
 LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
   AND po.amount_total > 0
-  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 """
 
 
@@ -4792,7 +4799,8 @@ orders AS (
     LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
     LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
     WHERE po.state IN ('done', 'paid', 'invoiced')
-      AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+      AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+      AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 ),
 totals AS (
     SELECT o.id,
@@ -4857,7 +4865,8 @@ LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
 LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
   AND pol.qty > 0
-  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
   AND pc.complete_name ILIKE 'Bags /%' AND pc.complete_name NOT ILIKE '%Clothing%'
   AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
   AND COALESCE(lower(pconf.name), '') <> 'staff pos'
@@ -4952,7 +4961,8 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
   AND pol.qty > 0
   AND NOT (pol.qty + COALESCE(ref.qty, 0) = 0
            AND pol.price_subtotal_incl + COALESCE(ref.amount, 0) = 0)
-  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 """
 
 # The corporate figures as Odoo's Sales & POS Dashboard shows them: revenue is
@@ -5080,7 +5090,8 @@ LEFT JOIN stock_picking_type   spt   ON spt.id = pconf.picking_type_id
 LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
 LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
-  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 GROUP BY 1, 2, 3, 4, 5, 6
 """
 
@@ -5126,6 +5137,10 @@ orders AS (
     JOIN product_product  pp  ON pp.id = pol.product_id
     JOIN product_template pt  ON pt.id = pp.product_tmpl_id
     WHERE po.state IN ('done', 'paid', 'invoiced')
+      -- A day either side on the raw timestamp lets the date_order index
+      -- narrow the scan; the Kenya-time date below is the exact test.
+      AND po.date_order >= CAST(:start_date AS TIMESTAMP) - INTERVAL '1 day'
+      AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '2 days'
       AND (po.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE
           BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
     GROUP BY 1, 2, 3, 4
@@ -5207,6 +5222,10 @@ LEFT JOIN stock_picking_type   spt   ON spt.id = pconf.picking_type_id
 LEFT JOIN stock_warehouse      sw    ON sw.id = spt.warehouse_id
 LEFT JOIN stock_location       sl    ON sl.id = spt.default_location_src_id
 WHERE po.state IN ('done', 'paid', 'invoiced')
-  AND po.date_order::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+  -- A range on the raw timestamp, not date_order::DATE BETWEEN …: the same
+  -- rows, but the date_order index can be used (a week: 5s instead of 15-24s,
+  -- and fewer reads long enough for the replica to cancel).
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
 """

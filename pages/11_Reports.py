@@ -1,5 +1,6 @@
 """Reports — the daily, weekly and monthly sales performance reports, laid out
-like the ones the team circulates, with an Excel download."""
+like the ones the team circulates, on one page from 1.0 Executive Summary to
+9.0 Summary & Key Notes, with Excel, Word and PowerPoint downloads."""
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, charts, db, grid, reports, theme
+from lib import auth, charts, db, grid, report_export, reports, theme
 
 st.set_page_config(page_title="Reports · Denri Executive Dashboard", page_icon="📑", layout="wide")
 
@@ -47,33 +48,58 @@ else:
                           + (" (to date)" if d == today.replace(day=1) else ""),
                           key="report_month")
 with c3:
-    db.refresh_button(key="reports_refresh")
+    refreshed = db.refresh_button(key="reports_refresh")
 
 period = reports.period_for(kind, picked)
 
 
-@st.cache_data(ttl=600, show_spinner="Building the report…")
-def _build(kind: str, start: date) -> dict:
+@st.cache_data(ttl=reports.CLOSED_TTL, show_spinner=False, max_entries=60)
+def _build_closed(kind: str, start: date) -> dict:
+    """A finished day, week or month: built once, then shared for 12 hours."""
     return reports.build(reports.period_for(kind, start))
 
 
-report = _build(kind, period.start)
-cur, prev = report["cur"], report["prev"]
+@st.cache_data(ttl=reports.OPEN_TTL, show_spinner=False, max_entries=10)
+def _build_open(kind: str, start: date) -> dict:
+    return reports.build(reports.period_for(kind, start))
+
+
+if refreshed:
+    # Finished periods are otherwise kept for 12 hours; Refresh rebuilds them too.
+    _build_closed.clear()
+    _build_open.clear()
+    reports._orders_closed.clear()
+
+with st.spinner(f"Preparing the {kind.lower()} report…"):
+    report = (_build_closed if period.end < today else _build_open)(kind, period.start)
+sections = report_export.outline(report)
 
 st.subheader(reports.title_for(period))
 st.caption(f"{period.label} · compared to {period.prev_label} · generated "
            f"{report['generated']:%d %b %Y, %H:%M}")
 if period.end >= today:
     st.info("This period is not over yet — its figures cover the days so far.", icon="⏳")
+if report.get("missing_spans"):
+    st.warning("The database was too busy to return "
+               + ", ".join(sorted(report["missing_spans"]))
+               + " for the revenue bridge; press Refresh to try again.", icon="⚠️")
 
-st.download_button(
-    "⬇️ Download report (.xlsx)", reports.to_xlsx(report),
-    file_name=f"Denri_{ {'Daily': 'Day', 'Weekly': 'Week', 'Monthly': 'Month'}[kind] }_"
-              f"{period.start:%Y-%m-%d}_to_{period.end:%Y-%m-%d}.xlsx".replace(" ", ""),
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    key="report_download")
+# --- downloads: each file is built only when its button is clicked ---
+stem = (f"Denri_{ {'Daily': 'Day', 'Weekly': 'Week', 'Monthly': 'Month'}[kind] }_"
+        f"{period.start:%Y-%m-%d}_to_{period.end:%Y-%m-%d}").replace(" ", "")
+d1, d2, d3, _ = st.columns([1, 1, 1, 2])
+d1.download_button("⬇️ Excel (.xlsx)", lambda: reports.to_xlsx(report), file_name=f"{stem}.xlsx",
+                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                   on_click="ignore", width="stretch", key="report_xlsx")
+d2.download_button("⬇️ Word (.docx)", lambda: report_export.to_docx(report), file_name=f"{stem}.docx",
+                   mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                   on_click="ignore", width="stretch", key="report_docx")
+d3.download_button("⬇️ PowerPoint (.pptx)", lambda: report_export.to_pptx(report),
+                   file_name=f"{stem}.pptx",
+                   mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                   on_click="ignore", width="stretch", key="report_pptx")
 
-# --- Key performance indicators (the Summary sheet) ---
+# --- key performance indicators (the Summary sheet) ---
 kpis = reports.summary_rows(report)
 for row_items in (kpis.iloc[:4], kpis.iloc[4:]):
     for col, (_, r) in zip(st.columns(4), row_items.iterrows()):
@@ -82,150 +108,139 @@ for row_items in (kpis.iloc[:4], kpis.iloc[4:]):
             st.metric(r["Label"], r["Value"], r["Change"],
                       delta_color="normal" if arrow in ("▲", "▼") else "off")
 
-SECTIONS = ["1 · Executive Summary", "2 · Customers", "3 · Stores", "4 · Gender", "5 · Traffic",
-            "6 · Revenue", "7 · Data Quality", "8 · Feedback", "9 · Key Notes"]
-section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0], key="report_section",
-                               label_visibility="collapsed") or SECTIONS[0]
+# --- contents: jump links to each section ---
+st.markdown('<div id="contents"></div>', unsafe_allow_html=True)
+with st.container(border=True):
+    st.markdown("**Contents** &nbsp;·&nbsp; " + " &nbsp;·&nbsp; ".join(
+        f"<a href='#{s.anchor}' target='_self'>{s.heading}</a>" for s in sections),
+        unsafe_allow_html=True)
 
 
-def _table(frame: pd.DataFrame, **kwargs) -> None:
+# --- rendering ---
+def _table(block: report_export.Block) -> None:
+    frame = block.frame
     if frame is None or frame.empty:
         st.info("No data for this period.")
         return
     with st.container(border=True):
-        grid.filterable_table(frame, **kwargs)
+        grid.filterable_table(
+            frame, currency_columns=block.money, total=block.total,
+            pinned_columns=(frame.columns[0],) if block.pinned else (),
+            height=min(46 + 34 * (len(frame) + (2 if block.total else 1)), 560))
 
 
-if section.startswith("1"):
-    st.markdown("#### 1. Executive Summary")
-    _table(report["executive"], total=False, height=420)
-    if report["flags"]:
-        st.markdown("**Flags**")
-        for f in report["flags"]:
-            (st.warning if f.startswith("[RISK]") else st.success)(f)
-    st.caption(report["exec_note"])
-
-elif section.startswith("2"):
-    st.markdown("#### 2. Customer Metrics")
-    _table(report["cust_metrics"], total=False, height=230)
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**2.1 Purchase Frequency Distribution**")
-        _table(report["frequency"], height=230)
-    with c2:
-        st.markdown("**2.2 Channel Overview**")
-        _table(report["channels"], currency_columns=("Avg Spend",), height=230)
-    st.caption(report["cust_note"])
-
-elif section.startswith("3"):
-    st.markdown("#### 3. Store Performance")
-    stores = report["stores"]
-    if not stores.empty:
+def _chart(block: report_export.Block) -> None:
+    data = report_export.chart_data(report, block.chart)
+    if data is None or data.empty:
+        return
+    if block.chart == "gender":
         with st.container(border=True):
-            ranked = stores.sort_values("Current")
-            fig = go.Figure()
-            fig.add_bar(y=ranked["Shop"], x=ranked["Previous"], orientation="h",
-                        name=period.prev_label, marker=dict(color=theme.OTHER))
-            fig.add_bar(y=ranked["Shop"], x=ranked["Current"], orientation="h",
-                        name=period.label, marker=dict(color=theme.CATEGORICAL[0]))
-            theme.apply_layout(fig, show_legend=True)
-            fig.update_layout(title="Revenue by Shop — this period and the last", barmode="group",
-                              hovermode="closest", height=max(420, 34 * len(ranked) + 100))
-            theme.show(fig)
-    _table(stores, currency_columns=("Current", "Previous", "Change"), pinned_columns=("Shop",),
-           height=460)
-    st.markdown("**3.1 Channel Mix by Location**")
-    _table(report["channel_mix"], pinned_columns=("Shop",),
-           currency_columns=tuple(c for c in report["channel_mix"].columns if "(KES)" in c),
-           height=460)
-    if kind == reports.MONTHLY:
-        st.markdown("**3.2 Monthly Customer Retention by Location**")
-        st.caption("Repeat: bought on two or more days this month. Retention: also bought at the "
-                   "shop last month.")
-    else:
-        st.markdown("**3.2 Customer Retention by Location**")
-    _table(report["retention"], pinned_columns=("Shop",),
-           currency_columns=tuple(c for c in report["retention"].columns if "(KES)" in c), height=460)
-
-elif section.startswith("4"):
-    st.markdown("#### 4. Gender Performance Analysis")
-    st.caption(f"Ratio: {report['gender_ratio']}")
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        st.markdown("**4.1 Overall Gender Split**")
-        _table(report["gender"], height=200)
-        g = report["gender"]
-        with st.container(border=True):
-            charts.share_chart(charts.fold_other(g["Gender"], g["Count"]), title="Gender Split",
+            charts.share_chart(charts.fold_other(data["Gender"], data["Count"]), title="Gender Split",
                                key="report_gender_kind", unit="customers")
-    with c2:
-        st.markdown("**4.2 Gender by Location**")
-        _table(report["gender_shop"], pinned_columns=("Shop",), height=560)
-    st.caption(report["gender_note"]
-               + (f" {report['gender_unknown']:,} customers have no gender recorded."
-                  if report["gender_unknown"] else ""))
-
-elif section.startswith("5"):
-    st.markdown("#### 5. Foot & Online Traffic Analysis")
-    st.caption("Walk-in Total: walk-ins counted (Footfall module; earlier gaps from the saved Reporting-sheet history). "
-               "Walk-in Purchased: walk-in orders on the POS. Online and activation orders are "
-               "not part of the conversion.")
-    _table(report["traffic"], pinned_columns=("Shop",), height=560)
-    st.caption(report["traffic_note"])
-
-elif section.startswith("6"):
-    st.markdown("#### 6. Revenue Analysis")
-    _table(report["revenue_kpis"], total=False, height=260)
-    st.markdown("**6.1 Revenue Bridge**")
-    bridge = report["bridge"]
-    with st.container(border=True):
-        fig = go.Figure()
-        fig.add_bar(x=bridge["Period"], y=bridge["Revenue"], name="Revenue",
+        return
+    fig = go.Figure()
+    if block.chart == "shops":
+        fig.add_bar(y=data["Shop"], x=data["Previous"], orientation="h", name=period.prev_label,
+                    marker=dict(color=theme.OTHER))
+        fig.add_bar(y=data["Shop"], x=data["Current"], orientation="h", name=period.label,
+                    marker=dict(color=theme.CATEGORICAL[0]))
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(barmode="group", hovermode="closest",
+                          height=max(420, 30 * len(data) + 120))
+    elif block.chart == "frequency":
+        fig.add_bar(x=data["Purchase Frequency"], y=data["Customer Count"],
+                    marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+                    text=[f"{v:,}" for v in data["Customer Count"]], textposition="outside",
+                    hovertemplate="%{x}<br>%{y:,} customers<extra></extra>")
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(height=360)
+    elif block.chart == "conversion":
+        colours = [theme.CATEGORICAL[7] if v < reports.LOW_CONVERSION else theme.CATEGORICAL[0]
+                   for v in data["Conv. Rate %"]]
+        fig.add_bar(y=data["Shop"], x=data["Conv. Rate %"], orientation="h",
+                    marker=dict(color=colours), text=[f"{v:.1f}%" for v in data["Conv. Rate %"]],
+                    textposition="outside", hovertemplate="%{y}: %{x:.1f}%<extra></extra>")
+        fig.add_vline(x=reports.LOW_CONVERSION, line_dash="dash", line_color=theme.TEXT_SECONDARY,
+                      annotation_text=f"{reports.LOW_CONVERSION:.0f}% coaching line",
+                      annotation_position="top")
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(height=max(380, 26 * len(data) + 120), xaxis_ticksuffix="%")
+    elif block.chart == "bridge":
+        fig.add_bar(x=data["Label"], y=data["Revenue"], name="Revenue",
                     marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
                     hovertemplate="%{x}<br>KES %{y:,.0f}<extra></extra>")
-        fig.add_scatter(x=bridge["Period"], y=bridge["Avg Spend"], name="Avg spend", yaxis="y2",
-                        mode="lines+markers", line=dict(color=theme.CATEGORICAL[5], width=2),
+        fig.add_scatter(x=data["Label"], y=data["Avg Spend"], name="Avg spend / customer",
+                        yaxis="y2", mode="lines+markers",
+                        line=dict(color=theme.CATEGORICAL[5], width=2),
                         hovertemplate="%{x}<br>KES %{y:,.0f} a customer<extra></extra>")
         theme.apply_layout(fig, show_legend=True)
-        fig.update_layout(title="Revenue Bridge", height=380,
-                          yaxis2=dict(overlaying="y", side="right", showgrid=False))
+        fig.update_layout(height=380, yaxis2=dict(overlaying="y", side="right", showgrid=False))
+    fig.update_layout(title=block.title)
+    with st.container(border=True):
         theme.show(fig)
-    _table(bridge, currency_columns=("Revenue", "Avg Spend"), total=False, height=300)
-    st.markdown("**6.2 Corporate Revenue**")
-    st.caption("Payments received on corporate invoices, as Odoo's Sales & POS Dashboard shows them.")
-    _table(report["corporate"], total=False, height=140)
-    st.markdown("**6.3 Top Corporate Clients**")
-    _table(report["corporate_clients"], currency_columns=("Revenue",), height=300)
 
-elif section.startswith("7"):
-    st.markdown("#### 7. Data Quality (KYC)")
-    _table(report["quality"], total=False, height=330)
-    st.markdown("**7.1 Store Numbers Used by Location**")
-    _table(report["store_numbers"], height=320)
-    st.caption(report["quality_note"])
 
-elif section.startswith("8"):
-    st.markdown("#### 8. Customer Feedback")
-    fb = report["feedback"]
-    if not fb:
-        st.warning("The feedback sheet could not be read.", icon="🔒")
-    else:
-        _table(fb["summary"], total=False, height=170)
-        st.markdown("**8.1 Store Breakdown**")
-        _table(fb["by_shop"], height=460)
-        if fb["targets"] is not None:
-            st.markdown("**8.2 Feedback Link Targets by Location**")
-            st.caption(f"Online responses against feedback links sent from the WhatsApp Monitor; "
-                       f"target {reports.FEEDBACK_LINK_TARGET:.0f}%.")
-            _table(fb["targets"], pinned_columns=("Shop",), height=460)
+def _flags(items: list[str]) -> None:
+    if not items:
+        st.caption("No changes large enough to flag.")
+    for f in items:
+        tag, body = report_export.tag_of(f)
+        box = st.error if tag in ("CRITICAL",) else st.warning if tag in ("RISK", "HIGH", "MEDIUM") \
+            else st.success
+        box(f"**{tag}** · {body}" if tag else body)
 
-else:
-    st.markdown("#### 9. Summary & Key Notes")
-    for team, items in report["notes"].items():
-        st.markdown(f"**{team}**")
-        if not items:
-            st.caption(f"No {team.lower()} flags this period.")
-        for item in items:
-            box = (st.error if item.startswith("[CRITICAL]") else
-                   st.success if item.startswith("[WIN]") else st.warning)
-            box(item)
+
+def _narrow(b: report_export.Block) -> bool:
+    if b.kind in ("chart", "flags"):
+        return True
+    return (b.kind == "table" and b.frame is not None and len(b.frame.columns) <= 5
+            and len(b.frame) <= report_export.NARROW_ROWS)
+
+
+def _render(b: report_export.Block, show_title: bool) -> None:
+    if show_title and b.title and b.kind != "chart":
+        st.markdown(f"**{b.title}**")
+    if b.kind == "table":
+        _table(b)
+    elif b.kind == "chart":
+        _chart(b)
+    elif b.kind == "flags":
+        _flags(b.items)
+
+
+for s in sections:
+    st.header(s.heading, anchor=s.anchor, divider="gray")
+    blocks, i = s.blocks, 0
+    shown_titles: set[str] = set()
+    while i < len(blocks):
+        b = blocks[i]
+        if b.kind == "text":
+            if b.text:
+                st.caption(b.text)
+            i += 1
+            continue
+        if b.kind == "notes":
+            for team, items in b.notes.items():
+                st.markdown(f"#### {team}")
+                if items:
+                    _flags(items)
+                else:
+                    st.caption(f"No {team.lower()} flags this period.")
+            i += 1
+            continue
+        nxt = blocks[i + 1] if i + 1 < len(blocks) else None
+        if nxt is not None and nxt.kind != "text" and _narrow(b) and _narrow(nxt):
+            # Two narrow pieces (a chart and its table, a table and its flags) side by side.
+            left, right = st.columns(2, gap="medium")
+            for col, piece in ((left, b), (right, nxt)):
+                with col:
+                    _render(piece, piece.title not in shown_titles)
+                    shown_titles.add(piece.title)
+            i += 2
+            continue
+        _render(b, b.title not in shown_titles)
+        shown_titles.add(b.title)
+        i += 1
+    st.markdown("<div style='text-align:right; font-size:0.85rem'>"
+                "<a href='#contents' target='_self'>↑ Back to contents</a></div>",
+                unsafe_allow_html=True)
