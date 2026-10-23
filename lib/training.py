@@ -86,6 +86,15 @@ def _read_responses(title: str, values: list[list[str]], day: date) -> pd.DataFr
         score_col = next((i for i in range(len(header))
                           if rows[i].astype(str).str.match(_SCORE).mean() > 0.5), None)
     name_col, loc_col = find("name"), find("location")
+    # The forms word these differently tab to tab ("Your Name ?", "Your full
+    # names", "Your Location") and the 14th and 15th put Location first, so
+    # look for the word among the leading columns rather than its position.
+    lead = range(min(6, len(header)))
+    if name_col is None:
+        name_col = next((i for i in lead if "name" in low[i] and "email" not in low[i]), None)
+    if loc_col is None:
+        loc_col = next((i for i in lead if any(w in low[i] for w in ("location", "branch", "shop"))),
+                       None)
     if name_col is None or loc_col is None:
         # Unnamed columns ("Column 9", "Column 10") in the leading block are
         # the name and location, in that order.
@@ -171,7 +180,21 @@ def load() -> dict:
         responses["Email"] = responses["Email"].map(
             lambda e: e if e in team.index
             else next(iter(difflib.get_close_matches(e, known, n=1, cutoff=0.9)), e))
-        responses = responses.drop_duplicates(["Day", "Email"], keep="first")
+        # Someone answering from another account (Gloria at Sinza used
+        # glorymunisi8@icloud.com from 13 Oct; the list has
+        # glorymunisi87@gmail.com) is matched on the email's name part, and
+        # failing that on the name and shop they typed.
+        locals_ = {e.split("@")[0]: e for e in known}
+        for email in responses.loc[~responses["Email"].isin(team.index), "Email"].unique():
+            close = difflib.get_close_matches(email.split("@")[0], list(locals_), n=2, cutoff=0.85)
+            match = locals_[close[0]] if len(close) == 1 else None
+            if match is None:
+                typed = responses[responses["Email"] == email].iloc[-1]
+                match = match_person(typed["Typed Name"], typed["Typed Location"], roster)
+            if match:
+                responses.loc[responses["Email"] == email, "Email"] = match
+        responses = (responses.sort_values("Submitted")
+                     .drop_duplicates(["Day", "Email"], keep="first"))
         responses["On List"] = responses["Email"].isin(team.index)
         responses["Name"] = responses["Email"].map(team["Name"]).fillna(
             responses["Typed Name"].str.title())
