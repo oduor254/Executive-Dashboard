@@ -29,9 +29,17 @@ Built from one row per order (queries.SCORECARD_ORDERS):
   Response Time      — shops only: the average first response to WhatsApp
                        chats in the WhatsApp Monitor, against 3 minutes
                        (3 or quicker scores 100, 6 minutes scores 50).
-  Feedback           — share of the customers served who sent a feedback
-                       form on or after the day they bought (Google Sheet,
-                       matched on the last nine digits of the phone).
+  Feedback           — feedback forms received ÷ sales made (Google Sheet).
+                       Each form is credited to one sale, found in turn by:
+                       1. phone — the customer's latest sale up to 30 days
+                          before the form (so a form filled after the period
+                          still counts for the sale in it);
+                       2. name — no phone match (the customer typed another
+                          number): a sale at the same shop to someone with the
+                          same first name, up to 3 days before;
+                       3. time — still none: a sale at the same shop in the 30
+                          minutes before the form, as when it is filled at the
+                          till.
 
 Customers are known by phone number. The shops' own numbers (typed in when
 a customer gives none), the shop attendants' own numbers, and any number
@@ -117,29 +125,87 @@ def retention(current: pd.DataFrame, previous: pd.DataFrame, group: list[str]) -
     return out
 
 
+PHONE_WINDOW = pd.Timedelta(days=30)
+NAME_WINDOW = pd.Timedelta(days=3)
+TILL_WINDOW = pd.Timedelta(minutes=30)
+# A form can be sent a little before the receipt is printed.
+EARLY_ALLOWANCE = pd.Timedelta(hours=2)
+
+
+def _first_name(values: pd.Series) -> pd.Series:
+    first = values.fillna("").astype(str).str.strip().str.split().str[0].fillna("").str.lower()
+    return first.where(first.str.len() >= 3)
+
+
+def match_feedback(df: pd.DataFrame, responses: pd.DataFrame | None) -> pd.DataFrame:
+    """Per order: whether a feedback form was credited to it, the staff-
+    assistance rating given, and how the form was matched (Phone / Name /
+    Till time). Each form is credited to one sale at most — see the module
+    notes for the three steps."""
+    from lib import staff_numbers
+    out = pd.DataFrame({"Feedback": False, "Feedback Rating": np.nan, "Feedback Match": None},
+                       index=df.index)
+    if responses is None or responses.empty or df.empty:
+        out["Feedback"] = np.nan
+        return out
+    orders = df.assign(_row=df.index, Time=pd.to_datetime(df["Time"]),
+                       First=_first_name(df.get("Customer Name", pd.Series(index=df.index, dtype=object))))
+    orders = orders.dropna(subset=["Time"])
+    start = orders["Time"].min().normalize()
+    forms = responses[responses["Submitted"] >= start].copy()
+    forms = forms.assign(_form=range(len(forms)), Location=forms["Branch"].map(staff_numbers.shop_name),
+                         First=_first_name(forms["Name"]),
+                         Rating=pd.to_numeric(forms.get("Assistance"), errors="coerce"),
+                         At=forms["Submitted"] + EARLY_ALLOWANCE)
+    credited = []
+
+    def step(left, right, by, tolerance, label):
+        left = left.dropna(subset=by).sort_values("At")
+        right = right.dropna(subset=by).sort_values("Time")
+        if left.empty or right.empty:
+            return set()
+        m = pd.merge_asof(left, right[by + ["Time", "_row"]], left_on="At", right_on="Time", by=by,
+                          direction="backward", tolerance=tolerance)
+        m = m.dropna(subset=["_row"])
+        credited.append(m.assign(Match=label)[["_form", "_row", "Rating", "Match"]])
+        return set(m["_form"])
+
+    phone = forms.rename(columns={"Phone Key": "Customer"})
+    done = step(phone, orders, ["Customer"], PHONE_WINDOW, "Phone")
+    done |= step(forms[~forms["_form"].isin(done)], orders, ["Location", "First"], NAME_WINDOW, "Name")
+    used = set(pd.concat(credited)["_row"]) if credited else set()
+    step(forms[~forms["_form"].isin(done)], orders[~orders["_row"].isin(used)], ["Location"],
+         TILL_WINDOW, "Till time")
+    if credited:
+        c = pd.concat(credited)
+        c["_row"] = c["_row"].astype(df.index.dtype)
+        g = c.groupby("_row")
+        out.loc[g.size().index, "Feedback"] = True
+        out.loc[g.size().index, "Feedback Rating"] = g["Rating"].mean()
+        out.loc[g.size().index, "Feedback Match"] = g["Match"].first()
+    return out
+
+
 def gave_feedback(df: pd.DataFrame, responses: pd.DataFrame | None) -> pd.Series:
-    """Per order: did its customer send feedback on or after the day they bought?"""
-    if responses is None or responses.empty:
-        return pd.Series(np.nan, index=df.index)
-    first = (responses.dropna(subset=["Phone Key"])
-             .groupby("Phone Key")["Submitted"].min().dt.normalize())
-    fed_on = df["Customer"].map(first)
-    return fed_on.notna() & (fed_on >= pd.to_datetime(df["Date"]))
+    """Per order: was a feedback form credited to it (see match_feedback)?"""
+    return match_feedback(df, responses)["Feedback"]
 
 
 def _customer_rates(df: pd.DataFrame, group: list[str]) -> pd.DataFrame:
     """Repeat and feedback rates over the customers in each group."""
     known = df.dropna(subset=["Customer"])
     per = (known.groupby(group + ["Customer"])
-           .agg(days=("Date", "nunique"), fed=("Feedback", "max"))
+           .agg(days=("Date", "nunique"))
            .reset_index())
     per["repeat"] = per["days"] >= 2
-    out = per.groupby(group).agg(Customers=("Customer", "size"), Repeat=("repeat", "sum"),
-                                 Fed=("fed", "sum"), FedKnown=("fed", "count"))
+    out = per.groupby(group).agg(Customers=("Customer", "size"), Repeat=("repeat", "sum"))
     out["Repeat %"] = (out["Repeat"] / out["Customers"] * 100).round(1)
-    out["Feedback %"] = np.where(out["FedKnown"] > 0, out["Fed"] / out["Customers"] * 100,
-                                 np.nan).round(1)
-    out["Feedback"] = np.where(out["FedKnown"] > 0, out["Fed"], np.nan)
+    # Feedback: forms credited ÷ sales made — every sale, including those
+    # without a usable phone number (a form matched by name or till time).
+    fed = df.assign(Fed=pd.to_numeric(df["Feedback"], errors="coerce")).groupby(group)["Fed"]
+    known_fb = fed.count()
+    out["Feedback"] = fed.sum().where(known_fb > 0).reindex(out.index)
+    out["Feedback %"] = (out["Feedback"] / fed.size().reindex(out.index) * 100).round(1)
     return out[["Customers", "Repeat %", "Feedback", "Feedback %"]]
 
 
@@ -205,9 +271,12 @@ def _score(table: pd.DataFrame, expected: float = 1.0,
 
 def shop_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.DataFrame,
                training: pd.Series | None = None,
-               response: pd.DataFrame | None = None) -> pd.DataFrame:
+               response: pd.DataFrame | None = None,
+               forms: pd.DataFrame | None = None) -> pd.DataFrame:
     """One row per shop. Revenue is set against the shop's daily targets
-    for the days it traded, added up."""
+    for the days it traded, added up. Feedback, when `forms` (every feedback
+    response) is given, is the forms naming the shop in the period ÷ its
+    sales — no matching to a sale needed, as the feedback sheet counts them."""
     g = df.groupby("Location")
     staff = df[df["Served By"] != NOT_RECORDED]
     table = pd.DataFrame({
@@ -227,6 +296,13 @@ def shop_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.DataFra
     table["Revenue per Attendant"] = (table["Revenue"]
                                       / table["Attendants"].where(table["Attendants"] > 0)).round(0)
     table = table.join(_customer_rates(df, ["Location"]))
+    if forms is not None and not forms.empty:
+        from lib import staff_numbers
+        days = pd.to_datetime(df["Date"])
+        sent = forms[(forms["Submitted"] >= days.min()) & (forms["Submitted"] < days.max() + pd.Timedelta(days=1))]
+        received = sent["Branch"].map(staff_numbers.shop_name).value_counts()
+        table["Feedback"] = received.reindex(table.index).fillna(0)
+        table["Feedback %"] = (table["Feedback"] / table["Orders"] * 100).round(1)
     table = table.join(retention(df, previous, ["Location"]))
     table["Training %"] = (training.reindex(table.index).round(1) if training is not None
                            else np.nan)

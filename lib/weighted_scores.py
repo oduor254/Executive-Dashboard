@@ -217,20 +217,12 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     t["Answered in 3 min %"] = fast.round(1)
     t["Respond Fast Score"] = t["Answered in 3 min %"]
 
-    # Service: the staff-assistance rating their customers gave, on the main
-    # form, within two weeks of buying.
-    service = pd.Series(np.nan, index=t.index)
-    if responses is not None and not responses.empty:
-        rated = responses[pd.to_numeric(responses["Assistance"], errors="coerce").notna()].copy()
-        rated["Assistance"] = pd.to_numeric(rated["Assistance"])
-        rated = rated.dropna(subset=["Phone Key"])[["Phone Key", "Submitted", "Assistance"]]
-        bought = served.dropna(subset=["Customer"])[keys + ["Customer", "Date"]]
-        m = bought.merge(rated, left_on="Customer", right_on="Phone Key")
-        day = pd.to_datetime(m["Date"])
-        m = m[(m["Submitted"].dt.normalize() >= day)
-              & (m["Submitted"].dt.normalize() <= day + pd.Timedelta(days=FEEDBACK_WINDOW_DAYS))]
-        m = m.drop_duplicates(keys + ["Customer", "Submitted"])
-        service = m.groupby(keys)["Assistance"].mean().reindex(t.index)
+    # Service: the staff-assistance rating on the feedback forms credited to
+    # their sales (scorecards.match_feedback — by phone, name or till time).
+    if "Feedback Rating" in served:
+        service = served.groupby(keys)["Feedback Rating"].mean().reindex(t.index)
+    else:
+        service = pd.Series(np.nan, index=t.index)
     t["Service Rating"] = service.round(2)
     t["Customer Service Score"] = t["Service Rating"] / 5 * 100
 

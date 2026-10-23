@@ -212,7 +212,8 @@ def _report_tables(start_date: date, end_date: date, location: str, shown: pd.Da
     inputs = _scorecard_inputs(start_date, end_date)
     if inputs is not None:
         shops = scorecards.shop_cards(inputs["df"], inputs["previous"], inputs["day_targets"],
-                                      inputs["shop_training"], _response_times(start_date, end_date))
+                                      inputs["shop_training"], _response_times(start_date, end_date),
+                                      inputs["responses"])
         people = scorecards.attendant_cards(inputs["df"], inputs["previous"], inputs["day_targets"],
                                             inputs["person_training"])
         shop_cols = (["Location", "Score"] + scorecards.SCORE_COLUMNS
@@ -772,13 +773,13 @@ def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
         feedback_note = None
     except feedback.FeedbackUnavailable as exc:
         responses, feedback_note = None, str(exc)
-    df["Feedback"] = scorecards.gave_feedback(df, responses)
+    df = df.join(scorecards.match_feedback(df, responses))
     day_targets = _day_targets(start_date, end_date)
     shop_training, person_training, training_note = _training_scores(df, start_date, end_date)
     return {"df": df, "previous": previous, "day_targets": day_targets, "prev_start": prev_start,
             "prev_end": prev_end, "feedback_note": feedback_note,
             "shop_training": shop_training, "person_training": person_training,
-            "training_note": training_note}
+            "training_note": training_note, "responses": responses}
 
 
 def _weighted_inputs(start_date: date, end_date: date) -> dict:
@@ -880,7 +881,8 @@ def _weights_note(measures: list[tuple]) -> None:
 
 def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_date: date) -> None:
     shops = scorecards.shop_cards(inputs["df"], inputs["previous"], inputs["day_targets"],
-                                  inputs["shop_training"], _response_times(start_date, end_date))
+                                  inputs["shop_training"], _response_times(start_date, end_date),
+                                  inputs["responses"])
     heads = w["heads"] if w["heads"] is not None else pd.DataFrame(columns=["Shop", "Head"])
     cards = weighted_scores.manager_cards(shops, heads, w["footfall"], w["chats"],
                                           w["training_rows"], w["stock"])
@@ -995,8 +997,11 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         "bought on two or more different days in it. **Retention** (shops only) is the share of "
         "the previous period's "
         f"customers ({prev_start:%d %b} – {prev_end:%d %b}, the same number of days) who bought "
-        "again in this one, at the same shop. **Feedback** is the share who sent a feedback "
-        "form on or after the day they bought. **Sales Training** counts every daily "
+        "again in this one, at the same shop. **Feedback** is feedback forms ÷ sales: for a "
+        "shop, every form naming it in the period; for an attendant, the forms credited to "
+        "their sales — matched by the customer's phone (up to 30 days after the sale, so a "
+        "late form still counts), else by first name at the same shop within 3 days, else by "
+        "a form sent at the shop within 30 minutes of a sale. **Sales Training** counts every daily "
         "questionnaire due in the period at the score it got and a missed one at 0, against "
         "a target of 100%. **WhatsApp Response** (shops only) is the average first reply "
         "to WhatsApp chats logged in the WhatsApp Monitor, against "
@@ -1012,7 +1017,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
 
     if view == "🏪 Shop Score Cards":
         shops = scorecards.shop_cards(df, previous, day_targets, shop_training,
-                                      _response_times(start_date, end_date))
+                                      _response_times(start_date, end_date), inputs["responses"])
         shown = shops if location == "All Locations" else shops[shops["Location"] == location]
         _cumulative_chart(shown, "Location", "Cumulative Score Card — Shops")
         for _, r in shown.iterrows():
@@ -1035,7 +1040,7 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                  f"{r['Retained']:,.0f} of {r['Previous Customers']:,.0f} came back"
                  if pd.notna(r["Previous Customers"]) else None),
                 ("Feedback", _pct(r["Feedback %"]),
-                 f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
+                 f"{r['Feedback']:,.0f} forms · target {scorecards.FEEDBACK_TARGET}%"
                  if pd.notna(r["Feedback"]) else None),
                 ("Sales Training", _pct(r["Training %"]), "target 100%"),
                 ("WhatsApp Response", "—" if pd.isna(r["Response Time (min)"])

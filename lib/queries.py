@@ -4826,9 +4826,14 @@ keyed AS (
 SELECT k.id AS "Order ID", k.sale_date AS "Date", k.location AS "Location",
        k.person AS "Served By", k.key AS "Customer", k.partner_id AS "Partner",
        k.corporate AS "Corporate",
-       ROUND(t.revenue::NUMERIC, 2) AS "Revenue", t.bags AS "Bags"
+       ROUND(t.revenue::NUMERIC, 2) AS "Revenue", t.bags AS "Bags",
+       -- For matching feedback forms to the sale they came from: the sale's
+       -- local time and the customer's name.
+       (k.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi') AS "Time",
+       NULLIF(TRIM(rp.name), '') AS "Customer Name"
 FROM keyed k
 JOIN totals t ON t.id = k.id
+LEFT JOIN res_partner rp ON rp.id = k.partner_id
 WHERE t.revenue > 0
 """
 
