@@ -14,10 +14,10 @@ Definitions, so every figure agrees with the rest of the dashboard:
   Customers      — unique people, known by the last nine digits of their
                    phone; a shop's own number typed for a customer, or one
                    shared by many records, is not a customer.
-  New / Repeat   — New: visited once in the period (one order); Repeat: two
-                   or more orders in it — the Purchase Frequency table's
-                   "1 Purchase" and "2+" rows. (The Shop Attendants score
-                   cards count repeat purchase on distinct days instead.)
+  Single-Visit / — Repeat: bought on two or more different days within the
+  Repeat           period (two orders on one day are one visit); Single-Visit:
+                   bought on one day only. A daily report covers one day, so
+                   it has no repeat customers and shows them as n/a.
   Retention      — bought in this period and the one before, at the same shop.
   Traffic        — walk-ins counted (Footfall module, earlier gaps from the
                    saved Reporting-sheet history) against walk-in orders on the POS.
@@ -194,7 +194,7 @@ def customer_table(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({"Orders": g["Order ID"].nunique(), "Days": g["Date"].nunique(),
                         "Revenue": net,
                         "Gender": _mode(sales, "Gender"), "Location": _mode(sales, "Location")})
-    out["Repeat"] = out["Orders"] >= 2          # visited more than once
+    out["Repeat"] = out["Days"] >= 2            # came back on another day
     return out.reset_index()
 
 
@@ -212,7 +212,7 @@ def headline(df: pd.DataFrame, corporate: float) -> dict:
         "Orders": sales["Order ID"].nunique(),
         "Customers": n,
         "Repeat": int(cust["Repeat"].sum()) if n else 0,
-        "New": n - (int(cust["Repeat"].sum()) if n else 0),
+        "Single-Visit": n - (int(cust["Repeat"].sum()) if n else 0),
         "Repeat Rate": pct(cust["Repeat"].sum(), n) if n else 0.0,
         "Avg Rev/Txn": df["Revenue"].sum() / sales["Order ID"].nunique() if len(sales) else 0.0,
         "Avg Spend/Customer": cust["Revenue"].sum() / n if n else 0.0,
@@ -228,14 +228,23 @@ def headline(df: pd.DataFrame, corporate: float) -> dict:
 
 # --------------------------------------------------------------- sections ---
 
+def _repeat_rows(cur: dict, prev: dict, daily: bool, labels: tuple[str, str]) -> list[tuple]:
+    """The repeat rows: n/a on a daily report, which covers a single day."""
+    if daily:
+        return [(labels[0], "n/a", "n/a", "n/a — one day"), (labels[1], "n/a", "n/a", "n/a — one day")]
+    return [(labels[0], f"{cur['Repeat']:,}", f"{prev['Repeat']:,}", change(cur["Repeat"], prev["Repeat"])),
+            (labels[1], f"{cur['Repeat Rate']:.1f}%", f"{prev['Repeat Rate']:.1f}%",
+             change(cur["Repeat Rate"], prev["Repeat Rate"], pp=True))]
+
+
 def executive(cur: dict, prev: dict, p: Period) -> tuple[pd.DataFrame, list[str], str]:
+    daily = p.kind == DAILY
     rows = [
         ("Revenue", money(cur["Revenue"]), money(prev["Revenue"]), change(cur["Revenue"], prev["Revenue"])),
         ("Customers", f"{cur['Customers']:,}", f"{prev['Customers']:,}", change(cur["Customers"], prev["Customers"])),
-        ("New", f"{cur['New']:,}", f"{prev['New']:,}", change(cur["New"], prev["New"])),
-        ("Repeat", f"{cur['Repeat']:,}", f"{prev['Repeat']:,}", change(cur["Repeat"], prev["Repeat"])),
-        ("Repeat Rate", f"{cur['Repeat Rate']:.1f}%", f"{prev['Repeat Rate']:.1f}%",
-         change(cur["Repeat Rate"], prev["Repeat Rate"], pp=True)),
+        ("Single-Visit", f"{cur['Single-Visit']:,}", f"{prev['Single-Visit']:,}",
+         change(cur["Single-Visit"], prev["Single-Visit"])),
+        *_repeat_rows(cur, prev, daily, ("Repeat", "Repeat Rate")),
         ("Avg Rev/Txn", money(cur["Avg Rev/Txn"]), money(prev["Avg Rev/Txn"]),
          change(cur["Avg Rev/Txn"], prev["Avg Rev/Txn"])),
         ("Avg Spend/Customer", money(cur["Avg Spend/Customer"]), money(prev["Avg Spend/Customer"]),
@@ -253,7 +262,10 @@ def executive(cur: dict, prev: dict, p: Period) -> tuple[pd.DataFrame, list[str]
     ]
     table = pd.DataFrame(rows, columns=["Metric", "Current", "Previous", "Change"])
     flags = []
-    for key in ("Customers", "New", "Revenue", "Avg Spend/Customer", "Avg Rev/Txn", "Online Avg Spend"):
+    # A daily report's single-visit count is its customer count, so it isn't flagged twice.
+    keys = ("Customers",) + (() if daily else ("Single-Visit",)) + (
+        "Revenue", "Avg Spend/Customer", "Avg Rev/Txn", "Online Avg Spend")
+    for key in keys:
         c, pv = cur[key], prev[key]
         if pv and abs((c - pv) / pv * 100) >= FLAG_CHANGE:
             d = (c - pv) / pv * 100
@@ -266,13 +278,13 @@ def executive(cur: dict, prev: dict, p: Period) -> tuple[pd.DataFrame, list[str]
     return table, flags, note
 
 
-def customer_metrics(cur_df: pd.DataFrame, prev_df: pd.DataFrame, cur: dict, prev: dict):
+def customer_metrics(cur_df: pd.DataFrame, prev_df: pd.DataFrame, cur: dict, prev: dict,
+                     daily: bool = False):
     metrics = pd.DataFrame([
         ("Total Customers", f"{cur['Customers']:,}", f"{prev['Customers']:,}", change(cur["Customers"], prev["Customers"])),
-        ("New Customers", f"{cur['New']:,}", f"{prev['New']:,}", change(cur["New"], prev["New"])),
-        ("Repeat Customers", f"{cur['Repeat']:,}", f"{prev['Repeat']:,}", change(cur["Repeat"], prev["Repeat"])),
-        ("Repeat Customer Rate", f"{cur['Repeat Rate']:.1f}%", f"{prev['Repeat Rate']:.1f}%",
-         change(cur["Repeat Rate"], prev["Repeat Rate"], pp=True)),
+        ("Single-Visit Customers", f"{cur['Single-Visit']:,}", f"{prev['Single-Visit']:,}",
+         change(cur["Single-Visit"], prev["Single-Visit"])),
+        *_repeat_rows(cur, prev, daily, ("Repeat Customers", "Repeat Customer Rate")),
         ("Avg Orders / Customer", f"{cur['Avg Orders']:.2f}", f"{prev['Avg Orders']:.2f}",
          change(cur["Avg Orders"], prev["Avg Orders"])),
     ], columns=["Metric", "Current", "Previous", "Change"])
@@ -300,8 +312,12 @@ def customer_metrics(cur_df: pd.DataFrame, prev_df: pd.DataFrame, cur: dict, pre
     channel["Note"] = np.where(channel["Channel"] == top, "Highest avg spend", "")
     channel = channel[["Channel", "Customers", "Share %", "Avg Spend", "Note"]]
     d = cur["Repeat Rate"] - prev["Repeat Rate"]
-    note = (f"Repeat customer rate {'rose' if d > 0.5 else 'fell' if d < -0.5 else 'held steady'} "
-            f"at {cur['Repeat Rate']:.1f}% ({d:+.1f} pp).")
+    note = ("Single-visit customers bought on one day only; repeat customers came back on another "
+            "day of the period, so a daily report has none. Purchase frequency counts orders."
+            if daily else
+            f"Repeat customer rate {'rose' if d > 0.5 else 'fell' if d < -0.5 else 'held steady'} "
+            f"at {cur['Repeat Rate']:.1f}% ({d:+.1f} pp). Repeat: bought on two or more different "
+            "days; single-visit: on one day only.")
     return metrics, freq, channel, note
 
 
@@ -310,8 +326,8 @@ def store_performance(cur_df: pd.DataFrame, prev_df: pd.DataFrame):
     prev_rev = prev_df.groupby("Location")["Revenue"].sum()
     known = cur_df[cur_df["Sale"] & cur_df["Key"].notna()]
     customers = known.groupby("Location")["Key"].nunique()
-    # A repeat customer of a shop placed two or more orders there.
-    rep = known.groupby(["Location", "Key"])["Order ID"].nunique().ge(2).groupby("Location").sum()
+    # A repeat customer of a shop bought there on two or more different days.
+    rep = known.groupby(["Location", "Key"])["Date"].nunique().ge(2).groupby("Location").sum()
     shops = sorted(set(cur_rev.index) | set(prev_rev.index))
     table = pd.DataFrame({"Shop": shops})
     table["Current"] = table["Shop"].map(cur_rev).fillna(0).round(2)
@@ -320,10 +336,10 @@ def store_performance(cur_df: pd.DataFrame, prev_df: pd.DataFrame):
     table["Change %"] = (table["Change"] / table["Previous"].where(table["Previous"] != 0) * 100).round(1)
     table["Customers"] = table["Shop"].map(customers).fillna(0).astype(int)
     table["Repeat"] = table["Shop"].map(rep).fillna(0).astype(int)
-    table["New"] = table["Customers"] - table["Repeat"]
+    table["Single-Visit"] = table["Customers"] - table["Repeat"]
     table["Repeat Rate %"] = (table["Repeat"] / table["Customers"].where(table["Customers"] > 0)
                               * 100).round(1).fillna(0)
-    table = table[["Shop", "Current", "Previous", "Change", "Change %", "New", "Repeat",
+    table = table[["Shop", "Current", "Previous", "Change", "Change %", "Single-Visit", "Repeat",
                    "Repeat Rate %"]].sort_values("Current", ascending=False)
 
     sales = cur_df[cur_df["Sale"]]
@@ -345,13 +361,13 @@ def store_performance(cur_df: pd.DataFrame, prev_df: pd.DataFrame):
 
 def retention_table(cur_df: pd.DataFrame, prev_df: pd.DataFrame) -> pd.DataFrame:
     """Per shop: this period's customers and sales, the previous period's,
-    repeat customers (2+ orders this period) and retained customers (also bought
+    repeat customers (2+ days this period) and retained customers (also bought
     at the shop last period), with their sales."""
     def by_shop(df):
         s = df[df["Sale"] & df["Key"].notna()]
-        orders = s.groupby(["Location", "Key"])["Order ID"].nunique()
+        days = s.groupby(["Location", "Key"])["Date"].nunique()
         net = df[df["Key"].notna()].groupby(["Location", "Key"])["Revenue"].sum()
-        return pd.DataFrame({"Orders": orders, "Revenue": net.reindex(orders.index)})
+        return pd.DataFrame({"Days": days, "Revenue": net.reindex(days.index)})
     cur, prev = by_shop(cur_df), by_shop(prev_df)
     cur["Retained"] = cur.index.isin(prev.index)
     g = cur.groupby(level="Location")
@@ -364,7 +380,7 @@ def retention_table(cur_df: pd.DataFrame, prev_df: pd.DataFrame) -> pd.DataFrame
     t["Previous Sales (KES)"] = pg["Revenue"].sum()
     t = t.fillna(0)
     t["Change"] = t["Customers"] - t["Previous"]
-    rep = cur[cur["Orders"] >= 2].groupby(level="Location")
+    rep = cur[cur["Days"] >= 2].groupby(level="Location")
     t["Repeat"] = rep.size()
     t["Repeat Sales (KES)"] = rep["Revenue"].sum()
     ret = cur[cur["Retained"]].groupby(level="Location")
@@ -605,9 +621,10 @@ def key_notes(p: Period, cur: dict, prev: dict, stores: pd.DataFrame, traffic_t:
     if d <= -FLAG_CHANGE:
         notes["Marketing"].append(f"[CRITICAL] Revenue declined {abs(d):.1f}% vs {p.prev_label} - "
                                   "review demand drivers and promotions.")
-    dn = (cur["New"] - prev["New"]) / prev["New"] * 100 if prev["New"] else 0
+    dn = ((cur["Single-Visit"] - prev["Single-Visit"]) / prev["Single-Visit"] * 100
+          if prev["Single-Visit"] and p.kind != DAILY else 0)
     if dn <= -FLAG_CHANGE:
-        notes["Marketing"].append(f"[CRITICAL] New customer acquisition is down {abs(dn):.1f}% vs "
+        notes["Marketing"].append(f"[CRITICAL] Single-visit customers are down {abs(dn):.1f}% vs "
                                   f"{p.prev_label} - strengthen acquisition campaigns.")
     if abs(gender_shift) >= 5:
         notes["Marketing"].append(f"[MEDIUM] Female share {'rose' if gender_shift > 0 else 'fell'} "
@@ -749,9 +766,16 @@ def build(p: Period) -> dict:
 
     out = {"period": p, "cur": cur, "prev": prev, "timings": data["timings"]}
     out["executive"], out["flags"], out["exec_note"] = executive(cur, prev, p)
-    out["cust_metrics"], out["frequency"], out["channels"], out["cust_note"] =         customer_metrics(cur_df, prev_df, cur, prev)
+    daily = p.kind == DAILY
+    out["cust_metrics"], out["frequency"], out["channels"], out["cust_note"] = \
+        customer_metrics(cur_df, prev_df, cur, prev, daily)
     out["stores"], out["channel_mix"] = store_performance(cur_df, prev_df)
     out["retention"] = retention_table(cur_df, prev_df)
+    if daily:
+        # One day has no repeat customers: leave the always-zero columns out.
+        out["stores"] = out["stores"].drop(columns=["Repeat", "Repeat Rate %"])
+        out["retention"] = out["retention"].drop(columns=["Repeat", "Repeat Sales (KES)",
+                                                          "Repeat Rate %"])
     (out["gender_ratio"], out["gender"], out["gender_shop"], out["gender_note"],
      out["gender_unknown"], gender_shift) = gender_split(cur_df, prev_df, p)
 
@@ -832,6 +856,8 @@ def summary_rows(r: dict) -> pd.DataFrame:
         ("Avg Spend/Customer", money(cur["Avg Spend/Customer"]),
          f"{change(cur['Avg Spend/Customer'], prev['Avg Spend/Customer'])} {vs}",
          tone(cur["Avg Spend/Customer"], prev["Avg Spend/Customer"])),
+        ("Repeat Rate", "n/a", "n/a — a daily report covers one day", "neutral")
+        if p.kind == DAILY else
         ("Repeat Rate", f"{cur['Repeat Rate']:.1f}%",
          f"{change(cur['Repeat Rate'], prev['Repeat Rate'], pp=True)} {vs}",
          tone(cur["Repeat Rate"], prev["Repeat Rate"])),
