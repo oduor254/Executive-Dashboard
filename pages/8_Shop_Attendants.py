@@ -571,18 +571,32 @@ def _training(start_date: date, end_date: date, location: str) -> None:
                                grid_rows["On Time"].fillna(1).astype(bool))])
         matrix = cell.pivot_table(index=["Name", "Location"], columns="Period", values="Mark",
                                   aggfunc=lambda v: " / ".join(v)).reindex(columns=periods)
-        per = summary(grid_rows, ["Name", "Location"])[["Answered", "Missed", "Response Rate %"]]
-        matrix = matrix.join(per).reset_index()
+        per = summary(grid_rows, ["Name", "Location"])[["Answered", "Missed", "Response Rate %",
+                                                         "Average Score %"]]
+        # Ranked as the Training Ranking ranks: every questionnaire due at the
+        # score it got and a missed one at 0, so answering and scoring well
+        # count together; ties go to the higher response rate.
+        per["Training Score %"] = (grid_rows.groupby(["Name", "Location"])["Score %"]
+                                   .apply(lambda v: v.fillna(0).mean()).round(1))
+        per = per.sort_values(["Training Score %", "Response Rate %", "Average Score %"],
+                              ascending=False)
+        per.insert(0, "Rank", range(1, len(per) + 1))
+        matrix = per.join(matrix).reset_index()
+        matrix = matrix[["Rank", "Name", "Location", "Training Score %", "Average Score %"]
+                        + [c for c in matrix if c not in ("Rank", "Name", "Location",
+                                                          "Training Score %", "Average Score %")]]
         if show == "Missed at least one":
             matrix = matrix[matrix["Missed"] > 0]
         elif show == "Missed the latest":
             gone = set(zip(missed_latest["Name"], missed_latest["Location"]))
             matrix = matrix[[(n, l) in gone for n, l in zip(matrix["Name"], matrix["Location"])]]
-        st.caption("Every person on the team list against every questionnaire: the score they "
-                   "got, \"(late)\" when sent after the day, or ✗ when not answered.")
+        st.caption("Every person on the team list against every questionnaire, best first: the "
+                   "score they got, \"(late)\" when sent after the day, or ✗ when not answered. "
+                   "**Rank** follows the **Training Score** — every questionnaire due at the score "
+                   "it got and a missed one at 0, so answering and scoring well count together; "
+                   "ties go to the higher response rate. **Average Score** is over the ones answered.")
         with st.container(border=True):
-            grid.filterable_table(matrix.sort_values(["Response Rate %", "Location"]),
-                                  pinned_columns=("Name",), height=520)
+            grid.filterable_table(matrix.sort_values("Rank"), pinned_columns=("Name",), height=520)
         if not missed_latest.empty:
             st.subheader(f"Not Yet Answered — {latest:%A %d %b}")
             with st.container(border=True):
