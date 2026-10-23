@@ -5229,3 +5229,86 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
   AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
 GROUP BY 1, 2, 3, 4, 5, 6, 7, 8
 """
+
+
+# ------------------------------------------------- weighted score cards ---
+# Inputs for lib.weighted_scores: the shop heads, the day's role tags, shop
+# attendance, stock counts and bag lines — all read from the Shop Attendants
+# and stock-count modules.
+
+# Each shop's head (Shop Attendants app → shop → Head).
+SHOP_HEADS = """
+SELECT pc.name AS "Shop", p.name AS "Head"
+FROM pos_config pc
+JOIN res_users   u ON u.id = pc.head_user_id
+JOIN res_partner p ON p.id = u.partner_id
+WHERE pc.active
+"""
+
+# The role each attendant is tagged with (floor / online / admin). The tag
+# holds today's role only — it is reset as the day is planned — so it counts
+# for the day it was last set.
+STAFF_ROLES = """
+SELECT p.name AS "Person", LOWER(TRIM(t.tag)) AS "Role",
+       (t.write_date AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE AS "Date"
+FROM pos_shop_attendant_tag t
+JOIN res_users   u ON u.id = t.user_id
+JOIN res_partner p ON p.id = u.partner_id
+"""
+
+# Attendance marked at the shop (Shop Attendants app), with the rostered
+# start and grace minutes where a roster covers the day.
+SHOP_ATTENDANCE = """
+SELECT a.date AS "Date", p.name AS "Person", pc.name AS "Shop", a.state AS "State",
+       (a.check_in AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi') AS "Check In",
+       rl.start AS "Shift Start", rl.grace_minutes AS "Grace"
+FROM pos_attendant_attendance a
+JOIN res_users   u ON u.id = a.user_id
+JOIN res_partner p ON p.id = u.partner_id
+LEFT JOIN pos_config pc ON pc.id = a.config_id
+LEFT JOIN LATERAL (
+    SELECT MIN(l.start) AS start, MAX(l.grace_minutes) AS grace_minutes
+    FROM denri_att_roster_line l
+    JOIN hr_employee e ON e.id = l.employee_id
+    WHERE e.user_id = a.user_id AND l.date = a.date AND NOT COALESCE(l.day_off, FALSE)
+) rl ON TRUE
+WHERE a.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""
+
+# Stock counts submitted from the scan-count app, per shop: how far the
+# counted quantities were from the system's.
+STOCK_COUNT_VARIANCE = """
+SELECT pc.name AS "Shop", COUNT(DISTINCT s.id) AS "Counts",
+       SUM(ABS(l.difference)) AS "Abs Difference", SUM(l.system_qty) AS "System Qty"
+FROM denri_scan_count_session s
+JOIN denri_scan_count_line l ON l.session_id = s.id
+JOIN pos_config pc ON pc.id = s.pos_config_id
+WHERE s.state = 'submitted'
+  AND s.start_time >= CAST(:start_date AS TIMESTAMP)
+  AND s.start_time < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
+GROUP BY 1
+"""
+
+# Bag lines per order (refunds netted), for new-product sales per attendant.
+SCORECARD_BAG_LINES = r"""
+WITH refunded AS (
+    SELECT r.refunded_orderline_id AS line_id, SUM(r.qty) AS qty
+    FROM pos_order_line r
+    WHERE r.refunded_orderline_id IS NOT NULL
+    GROUP BY r.refunded_orderline_id
+)
+SELECT po.id AS "Order ID", pt.name AS "Product", SUM(pol.qty + COALESCE(ref.qty, 0)) AS "Qty"
+FROM pos_order po
+JOIN pos_order_line   pol ON pol.order_id = po.id
+LEFT JOIN refunded    ref ON ref.line_id = pol.id
+JOIN product_product  pp  ON pp.id = pol.product_id
+JOIN product_template pt  ON pt.id = pp.product_tmpl_id
+LEFT JOIN product_category pc ON pc.id = pt.categ_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
+  AND pol.qty > 0
+  AND pc.complete_name ILIKE 'Bags%'
+  AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
+GROUP BY 1, 2
+"""

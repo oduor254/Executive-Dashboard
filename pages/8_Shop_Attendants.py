@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import (attendant_report, auth, db, feedback, filters, grid, queries, scorecards,
-                 targets, theme, training)
+from lib import (attendant_report, auth, db, feedback, filters, footfall, grid, queries, runway,
+                 scorecards, targets, theme, training, weighted_scores)
 
 st.set_page_config(page_title=auth.page_title("Shop Attendants"),
                    page_icon="🧑‍💼", layout="wide")
@@ -781,6 +781,189 @@ def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
             "training_note": training_note}
 
 
+def _weighted_inputs(start_date: date, end_date: date) -> dict:
+    """What the weighted score cards add to the score cards' own inputs —
+    fetched together; anything that can't be read is left out (its measure
+    then doesn't count)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    params = {"start_date": start_date, "end_date": end_date}
+
+    def safe(fn):
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    def training_rows():
+        data = training.load()
+        days = [d for d in data["days"] if start_date <= d <= end_date and d < date.today()]
+        return training.due(data, days) if days else None
+
+    jobs = {
+        "heads": lambda: db.run_query(queries.SHOP_HEADS),
+        "roles": lambda: db.run_query(queries.STAFF_ROLES),
+        "attendance": lambda: db.run_query(queries.SHOP_ATTENDANCE, params),
+        "stock": lambda: db.run_query(queries.STOCK_COUNT_VARIANCE, params),
+        "bag_lines": lambda: db.run_query(queries.SCORECARD_BAG_LINES, params),
+        "leads": lambda: db.run_query(queries.WALKIN_LEADS, params),
+        "chats": lambda: db.run_query(queries.WA_INTERACTIONS, params),
+        "footfall": lambda: footfall.daily(start_date, end_date)[0],
+        "training_rows": training_rows,
+        "responses": feedback.load,
+        "new_families": lambda: set(runway.runway_families()["Product"]),
+    }
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {k: pool.submit(safe, f) for k, f in jobs.items()}
+        return {k: f.result() for k, f in futures.items()}
+
+
+def _weighted_card(title: str, row: pd.Series, measures: list[tuple],
+                   values: dict[str, tuple[str, str | None]]) -> None:
+    """A weighted score card: the score, then each measure's value, its
+    score and the points it adds (or that it didn't apply)."""
+    with st.container(border=True):
+        badge = "—" if pd.isna(row["Weighted Score"]) else f"{row['Weighted Score']:.0f}/100"
+        st.markdown(f"**{title}** &nbsp; · &nbsp; Weighted score **{badge}** &nbsp; "
+                    f"<span style='opacity:.65'>({row['Weight Counted %']:.0f}% of the weights applied)</span>",
+                    unsafe_allow_html=True)
+        for start in range(0, len(measures), 4):
+            for col, (name, weight, _) in zip(st.columns(4), measures[start:start + 4]):
+                value, note = values.get(name, ("—", None))
+                score = row.get(f"{name} Score")
+                tail = ("not applicable this period" if pd.isna(score)
+                        else f"score {score:.0f} · {row[f'{name} Points']:.1f} of {weight} pts")
+                col.metric(f"{name} · {weight}%", value, f"{note} · {tail}" if note else tail,
+                           delta_color="off")
+
+
+def _weighted_chart(table: pd.DataFrame, name: str, measures: list[tuple], title: str) -> None:
+    """Each bar is the weighted score, split into what each measure adds."""
+    ranked = table.dropna(subset=["Weighted Score"]).sort_values("Weighted Score").tail(30)
+    if ranked.empty:
+        return
+    fig = go.Figure()
+    colours = theme.CATEGORICAL + [theme.OTHER, theme.STATUS["warning"], theme.STATUS["serious"]]
+    for i, (measure, weight, _) in enumerate(measures):
+        part = ranked[f"{measure} Points"].fillna(0) / ranked["Weight Counted %"].where(
+            ranked["Weight Counted %"] > 0) * 100
+        fig.add_bar(y=ranked[name], x=part, orientation="h", name=f"{measure} ({weight}%)",
+                    marker=dict(color=colours[i % len(colours)], line=dict(color=theme.CHART_SURFACE, width=1)),
+                    customdata=ranked[[f"{measure} Score"]],
+                    hovertemplate=(f"<b>%{{y}}</b><br>{measure}: score <b>%{{customdata[0]:.0f}}</b>"
+                                   f" × {weight}%<extra></extra>"))
+    for label, score in zip(ranked[name], ranked["Weighted Score"]):
+        fig.add_annotation(x=score, y=label, text=f"<b>{score:.0f}</b>", showarrow=False,
+                           xanchor="left", xshift=6, font=dict(color=theme.TEXT_PRIMARY, size=11))
+    theme.apply_layout(fig, show_legend=True)
+    fig.update_layout(title=title, barmode="stack", hovermode="closest", legend_traceorder="normal",
+                      height=max(400, 28 * len(ranked) + 130))
+    fig.update_xaxes(range=[0, 108], showgrid=True, gridcolor=theme.GRIDLINE)
+    with st.container(border=True):
+        theme.show(fig)
+
+
+def _weights_note(measures: list[tuple]) -> None:
+    with st.expander("How the weighted score is worked out"):
+        st.markdown(
+            "Each measure is scored out of 100 and carries its weight. The weighted score is "
+            "**Σ (weight × score) ÷ the weights that applied** — a measure that didn't apply in "
+            "the period (no WhatsApp duty, no stock count, no training due, no attendance "
+            "marked) is left out and the others are re-weighted, so a person is not marked "
+            "down for work that wasn't theirs that day. On days one person prints at the desk "
+            "and the rest are on the floor, only those who served customers share the day's "
+            "target. **Respond Fast** counts only on the days the person held the *online* "
+            "role; the role tags keep the current day's role, so past days are known only from "
+            "the day each tag was set.")
+        grid.filterable_table(weighted_scores.measure_table(measures), total=False, height=330)
+
+
+def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_date: date) -> None:
+    shops = scorecards.shop_cards(inputs["df"], inputs["previous"], inputs["day_targets"],
+                                  inputs["shop_training"], _response_times(start_date, end_date))
+    heads = w["heads"] if w["heads"] is not None else pd.DataFrame(columns=["Shop", "Head"])
+    cards = weighted_scores.manager_cards(shops, heads, w["footfall"], w["chats"],
+                                          w["training_rows"], w["stock"])
+    shown = cards if location == "All Locations" else cards[cards["Location"] == location]
+    measures = weighted_scores.MANAGER_MEASURES
+    _weights_note(measures)
+    shown = shown.assign(Name=shown["Location"] + " — " + shown["Head"])
+    _weighted_chart(shown, "Name", measures, "Weighted Score Card — Shop Managers")
+    basket = f"KES {scorecards.BASKET_TARGET:,}"
+    for _, r in shown.iterrows():
+        _weighted_card(f"{r['Location']} — {r['Head']} (head)", r, measures, {
+            "Shop Target": (_money(r["Revenue"]), f"{_pct(r['Target %'])} of {_money(r['Target'])}"),
+            "Basket Value": (_money(r["Basket Value"]), f"target {basket}"),
+            "Walk-in Conversion": (_pct(r["Walk-in Conversion %"]), "walk-ins who bought"),
+            "WhatsApp Conversion": (_pct(r["WhatsApp Conversion %"]),
+                                    f"{r['WhatsApp Chats']:,.0f} chats" if pd.notna(r["WhatsApp Chats"]) else None),
+            "Response Time": ("—" if pd.isna(r.get("Response Time (min)")) else f"{r['Response Time (min)']:.1f} min",
+                              f"target {scorecards.RESPONSE_TARGET_MIN} min"),
+            "Customer Feedback": (_pct(r["Feedback %"]), f"target {scorecards.FEEDBACK_TARGET}%"),
+            "Training Plan": (_pct(r["Training Completion %"]), "answers due, answered"),
+            "Stock Accuracy": ("—" if pd.isna(r["Stock Variance %"]) else f"{r['Stock Variance %']:.2f}% variance",
+                               f"{r['Stock Counts']:,.0f} counts" if pd.notna(r["Stock Counts"]) else None),
+        })
+    with st.container(border=True):
+        st.caption("All shops: each measure's score and points, the weighted score first.")
+        cols = (["Location", "Head", "Weighted Score", "Weight Counted %"]
+                + [f"{m} Score" for m, _, _ in measures] + [f"{m} Points" for m, _, _ in measures]
+                + ["Revenue", "Target", "Target %", "Basket Value", "Walk-in Conversion %",
+                   "WhatsApp Chats", "WhatsApp Conversion %", "Response Time (min)", "Feedback %",
+                   "Training Completion %", "Stock Counts", "Stock Variance %"])
+        grid.filterable_table(cards[[c for c in cols if c in cards]], pinned_columns=("Location",),
+                              currency_columns=("Revenue", "Target", "Basket Value"), height=460)
+
+
+def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
+    df = inputs["df"]
+    people = scorecards.attendant_cards(df, inputs["previous"], inputs["day_targets"],
+                                        inputs["person_training"])
+    if people.empty:
+        st.info("No attendants or BAs recorded in this range.")
+        return
+    cards = weighted_scores.attendant_cards(
+        df, people, bag_lines=w["bag_lines"], new_families=w["new_families"] or set(),
+        leads=w["leads"], chats=w["chats"], roles=w["roles"], responses=w["responses"],
+        attendance=w["attendance"])
+    if location != "All Locations":
+        cards = cards[cards["Location"] == location]
+    measures = weighted_scores.ATTENDANT_MEASURES
+    _weights_note(measures)
+    cards = cards.assign(Name=cards["Attendant / BA"] + " — " + cards["Location"])
+    chosen = cards if person == ALL_PEOPLE else cards[cards["Attendant / BA"] == person]
+    _weighted_chart(chosen, "Name", measures, "Weighted Score Card — Attendants & BAs")
+    basket = f"KES {scorecards.BASKET_TARGET:,}"
+    for _, r in chosen.head(12).iterrows():
+        _weighted_card(r["Name"], r, measures, {
+            "Personal Target": (_money(r["Revenue"]),
+                                f"{_pct(r['Target %'])} of {_money(r['Target'])} · {int(r['Days Worked'])} days on the floor"),
+            "Bulk Orders": (_money(r["Bulk Sales"]), f"{_pct(r['Bulk % of Target'])} of own target"),
+            "Basket Value": (_money(r["Basket Value"]), f"target {basket}"),
+            "New Products": (_pct(r["New Products %"]), "of their bags"),
+            "Conversion": (_pct(r["Conversion %"]), f"{r['Customers Served']:,.0f} customers served"),
+            "Respond Fast": (_pct(r["Answered in 3 min %"]), "on online days"),
+            "Customer Service": ("—" if pd.isna(r["Service Rating"]) else f"{r['Service Rating']:.2f} / 5", None),
+            "Customer Feedback": (_pct(r["Feedback %"]), f"target {scorecards.FEEDBACK_TARGET}%"),
+            "Customer Capture": (_pct(r["Captured %"]), "sales with customer details"),
+            "Training": (_pct(r["Training %"]), None),
+            "Attendance": (_pct(r["Attendance %"]), "on the days marked"),
+        })
+    if person == ALL_PEOPLE and len(cards) > 12:
+        st.caption(f"The 12 best weighted scores are shown as cards; all {len(cards)} are in the "
+                   "table. Pick a person at the top to see their card.")
+    with st.container(border=True):
+        cols = (["Attendant / BA", "Location", "Weighted Score", "Weight Counted %"]
+                + [f"{m} Score" for m, _, _ in measures] + [f"{m} Points" for m, _, _ in measures]
+                + ["Target", "Revenue", "Target %", "Days Worked", "Shop Share", "Orders",
+                   "Bulk Sales", "Bulk % of Target", "Basket Value", "New Products %",
+                   "Customers Served", "Walk-in Leads Lost", "Conversion %", "Answered in 3 min %",
+                   "Service Rating", "Feedback %", "Captured %", "Training %", "Attendance %"])
+        grid.filterable_table(cards[[c for c in cols if c in cards]], pinned_columns=("Attendant / BA",),
+                              currency_columns=("Target", "Revenue", "Shop Share", "Bulk Sales",
+                                                "Basket Value"), height=460)
+
+
 def _score_cards(start_date: date, end_date: date, location: str, person: str) -> None:
     inputs = _scorecard_inputs(start_date, end_date)
     if inputs is None:
@@ -793,9 +976,9 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     on_today = end_date >= date.today()
 
-    view = st.segmented_control("Score cards", ["🏪 Shop Score Cards", "🧑‍💼 Attendant Score Cards"],
-                                default="🏪 Shop Score Cards", key="score_view",
-                                label_visibility="collapsed") or "🏪 Shop Score Cards"
+    views = ["🏪 Shop Score Cards", "👔 Shop Manager Score Cards", "🧑‍💼 Attendant Score Cards"]
+    view = st.segmented_control("Score cards", views, default=views[0], key="score_view",
+                                label_visibility="collapsed") or views[0]
     st.caption(
         "Every measure is scored out of 100 and the **cumulative score** is their average. "
         "**Revenue** is measured day by day: a shop's target is its daily target for every "
@@ -876,60 +1059,11 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
                                   height=460)
         return
 
-    people = scorecards.attendant_cards(df, previous, day_targets, person_training)
-    if location != "All Locations":
-        people = people[people["Location"] == location]
-    st.caption(
-        "**Revenue** is the sales the person generated — the orders they served. Their "
-        "**revenue target** is, for every day they were on the floor, the shop's daily target "
-        "split equally between the attendants and BAs who served there that day, added up; "
-        f"the **corporate target** is {scorecards.CORPORATE_SHARE:.0%} of it. **Shop Share** is "
-        "the shop's revenue split the same way, for reference. Corporate revenue, basket value "
-        "and basket size are from the orders the person served. Repeat purchase and retention "
-        "are scored for the shop as a whole, not for each attendant.")
-    if people.empty:
-        st.info("No attendants or BAs recorded in this range.")
-        return
-    people = people.assign(Name=people["Attendant / BA"] + " — " + people["Location"])
-    chosen = people if person == ALL_PEOPLE else people[people["Attendant / BA"] == person]
-    _cumulative_chart(chosen, "Name", "Cumulative Score Card — Attendants & BAs")
-    for _, r in chosen.head(12).iterrows():
-        peers = people[people["Location"] == r["Location"]]
-        vs = lambda c, fmt: f"shop avg {fmt(peers[c].mean())}"
-        _card(r["Name"], r, [
-            ("Revenue", _money(r["Revenue"]),
-             f"{_pct(r['Target %'])} of {_money(r['Target'])} "
-             f"({int(r['Days Worked'])} days on the floor)"
-             if pd.notna(r["Target %"]) else "no target"),
-            ("Revenue per Day", _money(r["Revenue per Day"]),
-             f"{int(r['Orders']):,} orders served"),
-            ("Shop Share", _money(r["Shop Share"]), "shop's sales split equally that day"),
-            ("Corporate Revenue", _money(r["Corporate Revenue"]),
-             f"{_pct(r['Corporate %'])} of {_money(r['Corporate Target'])}"
-             if pd.notna(r["Corporate Target"]) else "no target"),
-            ("Basket Value", _money(r["Basket Value"]),
-             f"{_pct(r['Basket Value %'])} of {basket}"),
-            ("Basket Size", f"{r['Basket Size']:.2f} bags",
-             vs("Basket Size", lambda v: f"{v:.2f}")),
-            ("Feedback", _pct(r["Feedback %"]),
-             f"{r['Feedback']:,.0f} customers · target {scorecards.FEEDBACK_TARGET}%"
-             if pd.notna(r["Feedback"]) else None),
-            ("Sales Training", _pct(r["Training %"]),
-             "target 100%" if pd.notna(r["Training %"]) else "not matched to the training list"),
-        ])
-    if person == ALL_PEOPLE and len(people) > 12:
-        st.caption(f"The 12 best cumulative scores are shown as cards; all {len(people)} are in "
-                   "the table. Pick a person at the top to see their card.")
-    with st.container(border=True):
-        cols = (["Attendant / BA", "Location", "Score"] + scorecards.ATTENDANT_SCORE_COLUMNS
-                + ["Target", "Revenue", "Target %", "Days Worked", "Revenue per Day",
-                   "Shop Share", "Orders", "Corporate Revenue", "Corporate Target", "Corporate %",
-                   "Basket Value", "Basket Value %",
-                   "Bags", "Basket Size", "Customers", "Feedback", "Feedback %", "Training %"])
-        grid.filterable_table(people[cols], pinned_columns=("Attendant / BA",),
-                              currency_columns=("Target", "Revenue", "Revenue per Day", "Corporate Target",
-                                                "Shop Share", "Corporate Revenue", "Basket Value"),
-                              height=460)
+    w = _weighted_inputs(start_date, end_date)
+    if view == "👔 Shop Manager Score Cards":
+        _manager_view(inputs, w, location, start_date, end_date)
+    else:
+        _attendant_view(inputs, w, location, person)
 
 
 render_attendants(start_date, end_date)
