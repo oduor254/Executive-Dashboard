@@ -47,7 +47,15 @@ _TABS = {
                 "Phone": ["nambari ya simu"], "Branch": ["tawi"],
                 "Experience": ["kuridhika na uzoefu"], "Assistance": ["msaada uliopokea"],
                 "Source": ["aina ya mteja"]},
+    # Walk-in inquiry forms: no ratings, but the sheet's own Report counts
+    # them among the day's feedback responses, so they are read too.
+    "Inquiries": {"Submitted": ["timestamp"], "Name": ["first name"], "Phone": ["phone"],
+                  "Branch": ["branch"], "Experience": ["\x00"], "Assistance": ["\x00"],
+                  "Source": ["\x00"]},
 }
+# The sheet's Report tab rates Overall Experience and Professionalism from the
+# main form only; the response counts take every form above.
+RATED_FORM = WORKSHEET
 _FIELDS = ["Submitted", "Name", "Phone", "Branch", "Experience", "Assistance", "Source"]
 _RETRIES = 4
 

@@ -14,8 +14,10 @@ Definitions, so every figure agrees with the rest of the dashboard:
   Customers      — unique people, known by the last nine digits of their
                    phone; a shop's own number typed for a customer, or one
                    shared by many records, is not a customer.
-  Repeat         — bought on two or more different days within the period;
-                   New = customers who did not.
+  New / Repeat   — New: visited once in the period (one order); Repeat: two
+                   or more orders in it — the Purchase Frequency table's
+                   "1 Purchase" and "2+" rows. (The Shop Attendants score
+                   cards count repeat purchase on distinct days instead.)
   Retention      — bought in this period and the one before, at the same shop.
   Traffic        — walk-ins counted (Footfall module, earlier gaps from the
                    saved Reporting-sheet history) against walk-in orders on the POS.
@@ -30,7 +32,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from lib import names, phones, scorecards, staff_numbers
+from lib import feedback, names, phones, scorecards, staff_numbers
 
 DAILY, WEEKLY, MONTHLY = "Daily", "Weekly", "Monthly"
 CHANNELS = ["Walk-in", "Online", "Activation"]
@@ -192,7 +194,7 @@ def customer_table(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame({"Orders": g["Order ID"].nunique(), "Days": g["Date"].nunique(),
                         "Revenue": net,
                         "Gender": _mode(sales, "Gender"), "Location": _mode(sales, "Location")})
-    out["Repeat"] = out["Days"] >= 2
+    out["Repeat"] = out["Orders"] >= 2          # visited more than once
     return out.reset_index()
 
 
@@ -308,8 +310,8 @@ def store_performance(cur_df: pd.DataFrame, prev_df: pd.DataFrame):
     prev_rev = prev_df.groupby("Location")["Revenue"].sum()
     known = cur_df[cur_df["Sale"] & cur_df["Key"].notna()]
     customers = known.groupby("Location")["Key"].nunique()
-    # A repeat customer of a shop bought there on two or more days.
-    rep = known.groupby(["Location", "Key"])["Date"].nunique().ge(2).groupby("Location").sum()
+    # A repeat customer of a shop placed two or more orders there.
+    rep = known.groupby(["Location", "Key"])["Order ID"].nunique().ge(2).groupby("Location").sum()
     shops = sorted(set(cur_rev.index) | set(prev_rev.index))
     table = pd.DataFrame({"Shop": shops})
     table["Current"] = table["Shop"].map(cur_rev).fillna(0).round(2)
@@ -343,13 +345,13 @@ def store_performance(cur_df: pd.DataFrame, prev_df: pd.DataFrame):
 
 def retention_table(cur_df: pd.DataFrame, prev_df: pd.DataFrame) -> pd.DataFrame:
     """Per shop: this period's customers and sales, the previous period's,
-    repeat customers (2+ days this period) and retained customers (also bought
+    repeat customers (2+ orders this period) and retained customers (also bought
     at the shop last period), with their sales."""
     def by_shop(df):
         s = df[df["Sale"] & df["Key"].notna()]
-        days = s.groupby(["Location", "Key"])["Date"].nunique()
+        orders = s.groupby(["Location", "Key"])["Order ID"].nunique()
         net = df[df["Key"].notna()].groupby(["Location", "Key"])["Revenue"].sum()
-        return pd.DataFrame({"Days": days, "Revenue": net.reindex(days.index)})
+        return pd.DataFrame({"Orders": orders, "Revenue": net.reindex(orders.index)})
     cur, prev = by_shop(cur_df), by_shop(prev_df)
     cur["Retained"] = cur.index.isin(prev.index)
     g = cur.groupby(level="Location")
@@ -362,7 +364,7 @@ def retention_table(cur_df: pd.DataFrame, prev_df: pd.DataFrame) -> pd.DataFrame
     t["Previous Sales (KES)"] = pg["Revenue"].sum()
     t = t.fillna(0)
     t["Change"] = t["Customers"] - t["Previous"]
-    rep = cur[cur["Days"] >= 2].groupby(level="Location")
+    rep = cur[cur["Orders"] >= 2].groupby(level="Location")
     t["Repeat"] = rep.size()
     t["Repeat Sales (KES)"] = rep["Revenue"].sum()
     ret = cur[cur["Retained"]].groupby(level="Location")
@@ -559,8 +561,11 @@ def feedback_section(responses: pd.DataFrame | None, links: pd.DataFrame | None,
     def status(v, n):
         return "Excellent" if v >= 4.5 else "Good" if v >= 4 else "Watch"
     rows = []
+    # Rated from the main form only and counted over every form, as the
+    # feedback sheet's own Report tab does.
+    rated = lambda f: f[f["Form"] == feedback.RATED_FORM]
     for label, col in (("Overall Experience", "Experience"), ("Professionalism", "Assistance")):
-        c, pv = cur[col].mean(), prev[col].mean()
+        c, pv = rated(cur)[col].mean(), rated(prev)[col].mean()
         rows.append((label, round(c, 2) if pd.notna(c) else None, round(pv, 2) if pd.notna(pv) else None,
                      change(c, pv), status(c, len(cur)) if pd.notna(c) else "—"))
     d = len(cur) - len(prev)

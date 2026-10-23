@@ -104,7 +104,7 @@ def outline(r: dict) -> list[Section]:
             Block("table", "3.1 Channel Mix by Location", r["channel_mix"],
                   money=kes(r["channel_mix"]), pinned=True),
             Block("table", retention_title, r["retention"], money=kes(r["retention"]), pinned=True),
-            Block("text", text="Repeat: bought on two or more days in the period. Retention: also "
+            Block("text", text="New: one order in the period; Repeat: two or more. Retention: also "
                                "bought at the shop in the period before."),
         ]),
         Section(4, "Gender Performance Analysis", [
