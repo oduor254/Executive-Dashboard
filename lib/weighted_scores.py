@@ -113,8 +113,12 @@ def manager_cards(shops: pd.DataFrame, heads: pd.DataFrame, footfall: pd.DataFra
         counted = footfall[footfall["Visitors"].fillna(0) > 0]
         g = counted.groupby("Location")
         conv = g["Walk-in Orders"].sum() / g["Visitors"].sum() * 100
+        t["Walk-ins Counted"] = g["Visitors"].sum().reindex(t.index)
+        t["Walk-ins Bought"] = g["Walk-in Orders"].sum().reindex(t.index)
+        t["Days Counted"] = g["Date"].nunique().reindex(t.index)
         t["Walk-in Conversion %"] = conv.reindex(t.index).round(1)
     else:
+        t["Walk-ins Counted"] = t["Walk-ins Bought"] = t["Days Counted"] = np.nan
         t["Walk-in Conversion %"] = np.nan
     t["Walk-in Conversion Score"] = t["Walk-in Conversion %"]
 
@@ -122,9 +126,10 @@ def manager_cards(shops: pd.DataFrame, heads: pd.DataFrame, footfall: pd.DataFra
         g = chats.groupby("Branch")
         rate = g["Converted"].mean() * 100
         t["WhatsApp Chats"] = g.size().reindex(t.index)
+        t["WhatsApp Converted"] = g["Converted"].sum().reindex(t.index)
         t["WhatsApp Conversion %"] = rate.reindex(t.index).round(1)
     else:
-        t["WhatsApp Chats"] = np.nan
+        t["WhatsApp Chats"] = t["WhatsApp Converted"] = np.nan
         t["WhatsApp Conversion %"] = np.nan
     t["WhatsApp Conversion Score"] = _best(t["WhatsApp Conversion %"])
 
@@ -132,9 +137,13 @@ def manager_cards(shops: pd.DataFrame, heads: pd.DataFrame, footfall: pd.DataFra
     t["Customer Feedback Score"] = t["Feedback of Target %"]
 
     if training_rows is not None and not training_rows.empty:
-        done = training_rows.groupby("Location")["Answered"].mean() * 100
-        t["Training Completion %"] = done.reindex(t.index).round(1)
+        tg = training_rows.groupby("Location")
+        t["Training Due"] = tg.size().reindex(t.index)
+        t["Training Answered"] = tg["Answered"].sum().reindex(t.index)
+        t["Training Team"] = tg["Email"].nunique().reindex(t.index)
+        t["Training Completion %"] = (tg["Answered"].mean() * 100).reindex(t.index).round(1)
     else:
+        t["Training Due"] = t["Training Answered"] = t["Training Team"] = np.nan
         t["Training Completion %"] = np.nan
     t["Training Plan Score"] = t["Training Completion %"]
 
@@ -142,9 +151,11 @@ def manager_cards(shops: pd.DataFrame, heads: pd.DataFrame, footfall: pd.DataFra
         s = stock.assign(Location=stock["Shop"].map(staff_numbers.shop_name)).groupby("Location").sum(numeric_only=True)
         variance = s["Abs Difference"] / s["System Qty"].where(s["System Qty"] > 0) * 100
         t["Stock Counts"] = s["Counts"].reindex(t.index)
+        t["Stock Counted Qty"] = s["System Qty"].reindex(t.index)
+        t["Stock Difference"] = s["Abs Difference"].reindex(t.index)
         t["Stock Variance %"] = variance.reindex(t.index).round(2)
     else:
-        t["Stock Counts"] = np.nan
+        t["Stock Counts"] = t["Stock Counted Qty"] = t["Stock Difference"] = np.nan
         t["Stock Variance %"] = np.nan
     t["Stock Accuracy Score"] = 100 - t["Stock Variance %"]
 
@@ -180,6 +191,7 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
 
     bulk = served[(served["Bags"] >= BULK_MIN_BAGS) | served["Corporate"]]
     t["Bulk Sales"] = bulk.groupby(keys)["Revenue"].sum().reindex(t.index).fillna(0).round(0)
+    t["Bulk Orders"] = bulk.groupby(keys)["Order ID"].nunique().reindex(t.index).fillna(0).astype(int)
     t["Bulk % of Target"] = (t["Bulk Sales"] / t["Target"].where(t["Target"] > 0) * 100).round(1)
     t["Bulk Orders Score"] = t["Bulk % of Target"] / BULK_SHARE * 100
 
@@ -190,9 +202,11 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
         lines["New"] = lines["Product"].map(taxonomy.group_of).isin(new_families)
         lg = lines.groupby(keys)
         share = (lines[lines["New"]].groupby(keys)["Qty"].sum() / lg["Qty"].sum() * 100)
-        t["New Products %"] = share.reindex(t.index).fillna(0).where(
-            lg["Qty"].sum().reindex(t.index) > 0).round(1)
+        t["Bags Sold"] = lg["Qty"].sum().reindex(t.index).fillna(0)
+        t["New Bags Sold"] = lines[lines["New"]].groupby(keys)["Qty"].sum().reindex(t.index).fillna(0)
+        t["New Products %"] = share.reindex(t.index).fillna(0).where(t["Bags Sold"] > 0).round(1)
     else:
+        t["Bags Sold"] = t["New Bags Sold"] = np.nan
         t["New Products %"] = np.nan
     t["New Products Score"] = _best(t["New Products %"])
 
@@ -215,6 +229,9 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     online = _roles_by_day(roles)
     online = online[online["Role"] == "online"]
     fast = pd.Series(np.nan, index=t.index)
+    t["Online Days"] = 0
+    t["Online Chats"] = np.nan
+    t["Fast Replies"] = np.nan
     if chats is not None and not chats.empty and not online.empty:
         c = chats.assign(Date=pd.to_datetime(chats["Date"]).dt.date,
                          Minutes=pd.to_numeric(chats["First Response (min)"], errors="coerce"))
@@ -224,8 +241,11 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
         for (person, loc) in t.index:
             days = online.loc[online["Person"] == person, "Date"]
             rows = per_day[per_day.index.isin([(loc, d) for d in days])]
+            t.loc[(person, loc), "Online Days"] = len(set(days))
             if rows["Chats"].sum():
                 fast[(person, loc)] = rows["Fast"].sum() / rows["Chats"].sum() * 100
+                t.loc[(person, loc), "Online Chats"] = rows["Chats"].sum()
+                t.loc[(person, loc), "Fast Replies"] = rows["Fast"].sum()
     t["Answered in 3 min %"] = fast.round(1)
     t["Respond Fast Score"] = t["Answered in 3 min %"]
 
@@ -233,8 +253,10 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     # their sales (scorecards.match_feedback — by phone, name or till time).
     if "Feedback Rating" in served:
         service = served.groupby(keys)["Feedback Rating"].mean().reindex(t.index)
+        t["Rated Forms"] = served.groupby(keys)["Feedback Rating"].count().reindex(t.index).fillna(0)
     else:
         service = pd.Series(np.nan, index=t.index)
+        t["Rated Forms"] = np.nan
     t["Service Rating"] = service.round(2)
     t["Customer Service Score"] = t["Service Rating"] / 5 * 100
 
@@ -243,6 +265,7 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     captured = served["Customer"].notna() & ~served["Customer"].astype(str).str.startswith("partner:")
     t["Captured %"] = (served.assign(Captured=captured).groupby(keys)["Captured"].mean() * 100
                        ).reindex(t.index).round(1)
+    t["Captured Sales"] = served.assign(Captured=captured).groupby(keys)["Captured"].sum().reindex(t.index)
     t["Customer Capture Score"] = t["Captured %"]
 
     t["Training Score"] = t["Training %"]
@@ -258,6 +281,13 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
         a["Point"] = np.where(present & ~late, 1.0, np.where(late, 0.5, 0.0))
         per_person = a.groupby("Person")["Point"].mean() * 100
         att = pd.Series([per_person.get(p) for p, _ in t.index], index=t.index, dtype=float)
+        a = a.assign(Present=present, Late=late)
+        counts = a.groupby("Person").agg(Marked=("State", "size"), Present=("Present", "sum"),
+                                         Late=("Late", "sum"))
+        for col in ("Marked", "Present", "Late"):
+            t[f"Days {col}"] = [counts[col].get(p) for p, _ in t.index]
+    else:
+        t["Days Marked"] = t["Days Present"] = t["Days Late"] = np.nan
     t["Attendance %"] = att.round(1)
     t["Attendance Score"] = t["Attendance %"]
 

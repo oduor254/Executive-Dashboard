@@ -887,8 +887,88 @@ def _weighted_inputs(start_date: date, end_date: date) -> dict:
         return {k: f.result() for k, f in futures.items()}
 
 
+def _n(v, digits: int = 0) -> str:
+    """A count or number for the hover notes, '—' when unknown."""
+    return "—" if v is None or pd.isna(v) else f"{v:,.{digits}f}"
+
+
+def _gap(have, want, money: bool = True) -> str:
+    if pd.isna(have) or pd.isna(want):
+        return "—"
+    d = have - want
+    text = _money(abs(d)) if money else _n(abs(d))
+    return f"{text} {'ahead of' if d >= 0 else 'short of'} target"
+
+
+def _manager_help(r: pd.Series) -> dict[str, list[str]]:
+    """Hover notes for a shop manager's card: the figures behind each KPI."""
+    days = _n(r.get("Days Traded"))
+    return {
+        "Shop Target": [f"Target: {_money(r['Target'])} — the shop's daily targets for the {days} days it traded",
+                        f"Achieved: {_money(r['Revenue'])} ({_pct(r['Target %'])})",
+                        f"Gap: {_gap(r['Revenue'], r['Target'])}"],
+        "Basket Value": [f"Average sale: {_money(r['Basket Value'])} over {_n(r['Orders'])} sales",
+                         f"Benchmark: KES {scorecards.BASKET_TARGET:,} ({_pct(r['Basket Value %'])} of it)"],
+        "Walk-in Conversion": [f"Walk-ins counted: {_n(r.get('Walk-ins Counted'))} over {_n(r.get('Days Counted'))} counted days",
+                               f"Walk-ins who bought: {_n(r.get('Walk-ins Bought'))}",
+                               f"Conversion: {_pct(r['Walk-in Conversion %'])} (bought ÷ counted)"],
+        "WhatsApp Conversion": [f"Chats logged: {_n(r.get('WhatsApp Chats'))}",
+                                f"Converted to a sale: {_n(r.get('WhatsApp Converted'))} ({_pct(r['WhatsApp Conversion %'])})",
+                                "Scored against the best shop's rate (best = 100)"],
+        "Response Time": [f"Average first reply: {_n(r.get('Response Time (min)'), 1)} min over {_n(r.get('Chats'))} chats",
+                          f"Target: {scorecards.RESPONSE_TARGET_MIN} min or quicker scores 100; twice as slow scores 50"],
+        "Customer Feedback": [f"Forms received: {_n(r['Feedback'])} for {_n(r['Orders'])} sales ({_pct(r['Feedback %'])})",
+                              f"Target: {scorecards.FEEDBACK_TARGET}% of sales"],
+        "Training Plan": [f"Team on the list: {_n(r.get('Training Team'))}",
+                          f"Answers due: {_n(r.get('Training Due'))} · answered: {_n(r.get('Training Answered'))}",
+                          f"Completion: {_pct(r['Training Completion %'])}"],
+        "Stock Accuracy": [f"Stock counts submitted: {_n(r.get('Stock Counts'))}",
+                           f"Items counted: {_n(r.get('Stock Counted Qty'))} · off by: {_n(r.get('Stock Difference'))}",
+                           f"Variance: {_pct(r.get('Stock Variance %'))} · accuracy "
+                           f"{_pct(100 - r['Stock Variance %'] if pd.notna(r.get('Stock Variance %')) else None)}"],
+    }
+
+
+def _attendant_help(r: pd.Series) -> dict[str, list[str]]:
+    """Hover notes for an attendant's card: the figures behind each KPI."""
+    days = _n(r.get("Days Worked"))
+    return {
+        "Personal Target": [f"Target: {_money(r['Target'])} — their share of the shop's daily target on the {days} days they were on the floor",
+                            f"Achieved: {_money(r['Revenue'])} ({_pct(r['Target %'])}) from {_n(r['Orders'])} sales",
+                            f"Gap: {_gap(r['Revenue'], r['Target'])}",
+                            f"Shop's sales split equally among the floor team: {_money(r.get('Shop Share'))}"],
+        "Bulk Orders": [f"Bulk sales: {_money(r['Bulk Sales'])} from {_n(r.get('Bulk Orders'))} orders "
+                        f"(5+ bags, or a corporate customer)",
+                        f"Expected: {_money(r['Target'] * weighted_scores.BULK_SHARE / 100 if pd.notna(r['Target']) else None)} "
+                        f"— {weighted_scores.BULK_SHARE:.0f}% of their target",
+                        f"Achieved: {_pct(r['Bulk % of Target'])} of their target"],
+        "Basket Value": [f"Average sale: {_money(r['Basket Value'])} over {_n(r['Orders'])} sales",
+                         f"Benchmark: KES {scorecards.BASKET_TARGET:,} ({_pct(r['Basket Value %'])} of it)"],
+        "New Products": [f"Bags sold: {_n(r.get('Bags Sold'))} · new styles (added after Lafemme): {_n(r.get('New Bags Sold'))}",
+                         f"Share: {_pct(r['New Products %'])} — scored against the best attendant's share"],
+        "Customer Target": [f"Expected customers: {_n(r['Expected Customers'])} = target {_money(r['Target'])} ÷ "
+                            f"shop's average spend {_money(r['Shop Avg Spend'])}",
+                            f"Served: {_n(r['Customers Served'])} ({_pct(r['Customer Target %'])})",
+                            f"Gap: {_gap(r['Customers Served'], r['Expected Customers'], money=False).replace('target', 'expected')}"],
+        "Respond Fast": [f"Online days on record: {_n(r.get('Online Days'))}",
+                         f"Chats on those days: {_n(r.get('Online Chats'))} · answered within 3 min: {_n(r.get('Fast Replies'))}",
+                         f"Share: {_pct(r['Answered in 3 min %'])}"],
+        "Customer Service": [f"Forms with a staff rating: {_n(r.get('Rated Forms'))}",
+                             f"Average rating: {_n(r['Service Rating'], 2)} out of 5"],
+        "Customer Feedback": [f"Forms credited to their sales: {_n(r['Feedback'])} of {_n(r['Orders'])} sales ({_pct(r['Feedback %'])})",
+                              "Matched by phone, else first name at the shop within 3 days, else a form sent within 30 min of a sale",
+                              f"Target: {scorecards.FEEDBACK_TARGET}% of sales"],
+        "Customer Capture": [f"Sales with the customer's own details: {_n(r.get('Captured Sales'))} of {_n(r['Orders'])} ({_pct(r['Captured %'])})",
+                             "Shop, attendant and shared numbers don't count"],
+        "Training": [f"Training score: {_pct(r['Training %'])} — every questionnaire due at its score, a missed one at 0"],
+        "Attendance": [f"Days marked: {_n(r.get('Days Marked'))} · present: {_n(r.get('Days Present'))} · late: {_n(r.get('Days Late'))}",
+                       f"Score: {_pct(r['Attendance %'])} (on time 1, late ½, absent 0)"],
+    }
+
+
 def _weighted_card(title: str, row: pd.Series, measures: list[tuple],
-                   values: dict[str, tuple[str, str | None]]) -> None:
+                   values: dict[str, tuple[str, str | None]],
+                   notes: dict[str, list[str]] | None = None) -> None:
     """A weighted score card: the score, then each measure's value, its
     score and the points it adds. A measure that didn't apply shows so, and
     its weight is shared across the others (the label shows each one's
@@ -912,7 +992,15 @@ def _weighted_card(title: str, row: pd.Series, measures: list[tuple],
                     label = (f"{name} · {weight}%" if abs(now - weight) < 0.05
                              else f"{name} · {weight}% → {now:.1f}%")
                     tail = f"score {score:.0f} · {row[f'{name} Points']:.1f} of {now:.1f} pts"
-                col.metric(label, value, f"{note} · {tail}" if note else tail, delta_color="off")
+                how = next(h for m, _, h in measures if m == name)
+                lines = (notes or {}).get(name, []) + [
+                    f"Scored as: {how}",
+                    "Not applicable this period — its weight is shared across the others"
+                    if pd.isna(score) else
+                    f"Score {score:.0f} × weight {now:.1f}% = {row[f'{name} Points']:.1f} points",
+                ]
+                col.metric(label, value, f"{note} · {tail}" if note else tail, delta_color="off",
+                           help="\n\n".join(lines))
 
 
 def _weighted_chart(table: pd.DataFrame, name: str, measures: list[tuple], title: str) -> None:
@@ -974,7 +1062,7 @@ def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_da
     _weighted_chart(shown, "Name", measures, "Weighted Score Card — Shop Managers")
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     for _, r in shown.iterrows():
-        _weighted_card(f"{r['Location']} — {r['Head']} (head)", r, measures, {
+        _weighted_card(f"{r['Location']} — {r['Head']} (head)", r, measures, notes=_manager_help(r), values={
             "Shop Target": (_money(r["Revenue"]), f"{_pct(r['Target %'])} of {_money(r['Target'])}"),
             "Basket Value": (_money(r["Basket Value"]), f"target {basket}"),
             "Walk-in Conversion": (_pct(r["Walk-in Conversion %"]), "walk-ins who bought"),
@@ -1018,7 +1106,7 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
     _weighted_chart(chosen, "Name", measures, "Weighted Score Card — Attendants & BAs")
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     for _, r in chosen.head(12).iterrows():
-        _weighted_card(r["Name"], r, measures, {
+        _weighted_card(r["Name"], r, measures, notes=_attendant_help(r), values={
             "Personal Target": (_money(r["Revenue"]),
                                 f"{_pct(r['Target %'])} of {_money(r['Target'])} · {int(r['Days Worked'])} days on the floor"),
             "Bulk Orders": (_money(r["Bulk Sales"]), f"{_pct(r['Bulk % of Target'])} of own target"),
