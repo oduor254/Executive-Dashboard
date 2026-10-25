@@ -890,20 +890,29 @@ def _weighted_inputs(start_date: date, end_date: date) -> dict:
 def _weighted_card(title: str, row: pd.Series, measures: list[tuple],
                    values: dict[str, tuple[str, str | None]]) -> None:
     """A weighted score card: the score, then each measure's value, its
-    score and the points it adds (or that it didn't apply)."""
+    score and the points it adds. A measure that didn't apply shows so, and
+    its weight is shared across the others (the label shows each one's
+    weight before → after)."""
     with st.container(border=True):
         badge = "—" if pd.isna(row["Weighted Score"]) else f"{row['Weighted Score']:.0f}/100"
+        out = [f"{name} ({weight}%)" for name, weight, _ in measures
+               if pd.isna(row.get(f"{name} Score"))]
+        shared = (f"{', '.join(out)} didn't apply — {'its' if len(out) == 1 else 'their'} weight "
+                  "is shared across the others" if out else "every measure applied")
         st.markdown(f"**{title}** &nbsp; · &nbsp; Weighted score **{badge}** &nbsp; "
-                    f"<span style='opacity:.65'>({row['Weight Counted %']:.0f}% of the weights applied)</span>",
-                    unsafe_allow_html=True)
+                    f"<span style='opacity:.65'>({shared})</span>", unsafe_allow_html=True)
         for start in range(0, len(measures), 4):
             for col, (name, weight, _) in zip(st.columns(4), measures[start:start + 4]):
                 value, note = values.get(name, ("—", None))
                 score = row.get(f"{name} Score")
-                tail = ("not applicable this period" if pd.isna(score)
-                        else f"score {score:.0f} · {row[f'{name} Points']:.1f} of {weight} pts")
-                col.metric(f"{name} · {weight}%", value, f"{note} · {tail}" if note else tail,
-                           delta_color="off")
+                now = row.get(f"{name} Weight")
+                if pd.isna(score):
+                    label, tail = f"{name} · {weight}% → 0%", "not applicable · weight shared out"
+                else:
+                    label = (f"{name} · {weight}%" if abs(now - weight) < 0.05
+                             else f"{name} · {weight}% → {now:.1f}%")
+                    tail = f"score {score:.0f} · {row[f'{name} Points']:.1f} of {now:.1f} pts"
+                col.metric(label, value, f"{note} · {tail}" if note else tail, delta_color="off")
 
 
 def _weighted_chart(table: pd.DataFrame, name: str, measures: list[tuple], title: str) -> None:
@@ -914,13 +923,14 @@ def _weighted_chart(table: pd.DataFrame, name: str, measures: list[tuple], title
     fig = go.Figure()
     colours = theme.CATEGORICAL + [theme.OTHER, theme.STATUS["warning"], theme.STATUS["serious"]]
     for i, (measure, weight, _) in enumerate(measures):
-        part = ranked[f"{measure} Points"].fillna(0) / ranked["Weight Counted %"].where(
-            ranked["Weight Counted %"] > 0) * 100
+        # Points are already out of each person's adjusted weights, so they
+        # stack up to the weighted score.
+        part = ranked[f"{measure} Points"].fillna(0)
         fig.add_bar(y=ranked[name], x=part, orientation="h", name=f"{measure} ({weight}%)",
                     marker=dict(color=colours[i % len(colours)], line=dict(color=theme.CHART_SURFACE, width=1)),
-                    customdata=ranked[[f"{measure} Score"]],
+                    customdata=ranked[[f"{measure} Score", f"{measure} Weight"]],
                     hovertemplate=(f"<b>%{{y}}</b><br>{measure}: score <b>%{{customdata[0]:.0f}}</b>"
-                                   f" × {weight}%<extra></extra>"))
+                                   " × %{customdata[1]:.1f}%<extra></extra>"))
     for label, score in zip(ranked[name], ranked["Weighted Score"]):
         fig.add_annotation(x=score, y=label, text=f"<b>{score:.0f}</b>", showarrow=False,
                            xanchor="left", xshift=6, font=dict(color=theme.TEXT_PRIMARY, size=11))
@@ -935,11 +945,14 @@ def _weighted_chart(table: pd.DataFrame, name: str, measures: list[tuple], title
 def _weights_note(measures: list[tuple]) -> None:
     with st.expander("How the weighted score is worked out"):
         st.markdown(
-            "Each measure is scored out of 100 and carries its weight. The weighted score is "
-            "**Σ (weight × score) ÷ the weights that applied** — a measure that didn't apply in "
-            "the period (no WhatsApp duty, no stock count, no training due, no attendance "
-            "marked) is left out and the others are re-weighted, so a person is not marked "
-            "down for work that wasn't theirs that day. On days one person prints at the desk "
+            "Each measure is scored out of 100 and carries its weight. A measure that doesn't "
+            "apply to someone in the period — Respond Fast for the Hilton and Ktda attendants "
+            "who aren't the one on WhatsApp, no stock count, no training due, no attendance "
+            "marked — gives its weight to the others **in proportion to their weights**: with "
+            "Respond Fast's 10% out, Personal Target's 30% becomes 30 ÷ 90 = 33.3%. Each card "
+            "shows the weights before → after, the points are out of the adjusted weights, and "
+            "they add up to the weighted score — so nobody is marked down for work that wasn't "
+            "theirs. On days one person prints at the desk "
             "and the rest are on the floor, only those who served customers share the day's "
             "target. **Respond Fast** counts only on the days the person held the *online* "
             "role; the role tags keep the current day's role, so past days are known only from "

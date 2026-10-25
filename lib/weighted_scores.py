@@ -65,18 +65,28 @@ FAST_REPLY_MIN = scorecards.RESPONSE_TARGET_MIN
 
 
 def weighted(table: pd.DataFrame, measures: list[tuple]) -> pd.DataFrame:
-    """Add each measure's points and the weighted score."""
+    """Add each measure's weight for this person, points and the weighted score.
+
+    A measure that doesn't apply to someone — Respond Fast for an attendant
+    at Hilton or Ktda who isn't the one on WhatsApp, Attendance before it is
+    marked — gives its weight to the others in proportion to theirs: with
+    Respond Fast's 10% out, Personal Target's 30% becomes 30 ÷ 90 = 33.3%.
+    "{measure} Weight" is that adjusted weight, the points are out of it, and
+    they add up to the weighted score (out of 100)."""
     out = table.copy()
-    used = pd.Series(0.0, index=out.index)
+    scores = {name: out[f"{name} Score"].clip(lower=0, upper=100) for name, _, _ in measures}
+    used = sum(pd.Series(np.where(scores[n].notna(), w, 0), index=out.index) for n, w, _ in measures)
     total = pd.Series(0.0, index=out.index)
     for name, weight, _ in measures:
-        s = out[f"{name} Score"].clip(lower=0, upper=100)
+        s = scores[name]
+        share = (weight / used.where(used > 0) * 100).where(s.notna())
+        points = s * share / 100
+        total += points.fillna(0)
         out[f"{name} Score"] = s.round(0)
-        out[f"{name} Points"] = (s * weight / 100).round(1)
-        used += np.where(s.notna(), weight, 0)
-        total += (s * weight / 100).fillna(0)
+        out[f"{name} Weight"] = share.round(1)
+        out[f"{name} Points"] = points.round(1)
     out["Weight Counted %"] = used
-    out["Weighted Score"] = (total / used.where(used > 0) * 100).round(0)
+    out["Weighted Score"] = total.where(used > 0).round(0)
     return out
 
 
