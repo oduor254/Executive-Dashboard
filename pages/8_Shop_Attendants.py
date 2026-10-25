@@ -1012,7 +1012,7 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
             "Basket Value": (_money(r["Basket Value"]), f"target {basket}"),
             "New Products": (_pct(r["New Products %"]), "of their bags"),
             "Customer Target": (
-                f"{r['Customers Served']:,.0f} of {r['Expected Customers']:,.1f}"
+                f"{r['Customers Served']:,.0f} of {r['Expected Customers']:,.0f}"
                 if pd.notna(r["Expected Customers"]) else f"{r['Customers Served']:,.0f}",
                 f"{_pct(r['Customer Target %'])} · shop avg spend {_money(r['Shop Avg Spend'])}"),
             "Respond Fast": (_pct(r["Answered in 3 min %"]), "on online days"),

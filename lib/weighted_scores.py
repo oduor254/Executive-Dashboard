@@ -195,7 +195,7 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     avg_spend = shop["Revenue"] / shop["Sales"].where(shop["Sales"] > 0)
     t["Shop Avg Spend"] = [avg_spend.get(loc) for _, loc in t.index]
     t["Shop Avg Spend"] = t["Shop Avg Spend"].round(0)
-    t["Expected Customers"] = (t["Target"] / t["Shop Avg Spend"].where(t["Shop Avg Spend"] > 0)).round(1)
+    t["Expected Customers"] = (t["Target"] / t["Shop Avg Spend"].where(t["Shop Avg Spend"] > 0)).round(0)
     t["Customers Served"] = g["Order ID"].nunique().reindex(t.index).fillna(0).astype(int)
     t["Customer Target %"] = (t["Customers Served"] / t["Expected Customers"].where(t["Expected Customers"] > 0)
                               * 100).round(1)
