@@ -428,6 +428,59 @@ def _person_sales(person: str, start_date: date, end_date: date, location: str) 
             currency_columns=("Total",), pinned_columns=("Customer",), height=480)
 
 
+def _training_ranking(rows: pd.DataFrame) -> None:
+    """Shops and attendants ranked by Training Score: every questionnaire due
+    at the score it got and a missed one at 0, so answering and scoring well
+    count together; ties go to the higher response rate."""
+    if rows.empty:
+        return
+
+    def rank(by: list[str]) -> pd.DataFrame:
+        g = rows.groupby(by)
+        out = pd.DataFrame({
+            "Training Score %": g["Score %"].apply(lambda v: v.fillna(0).mean()).round(1),
+            "Team Size": g["Email"].nunique(),
+            "Answers Due": g.size(),
+            "Answered": g["Answered"].sum().astype(int),
+        })
+        out["Missed"] = out["Answers Due"] - out["Answered"]
+        out["Response Rate %"] = (out["Answered"] / out["Answers Due"] * 100).round(1)
+        ans = rows[rows["Answered"]].groupby(by)
+        out["Same Day %"] = (ans["On Time"].mean() * 100).round(1)
+        out["Completion %"] = ans["Completion %"].mean().round(1)
+        out["Average Score %"] = ans["Score %"].mean().round(1)
+        out = out.sort_values(["Training Score %", "Response Rate %", "Average Score %"],
+                              ascending=False)
+        out.insert(0, "Rank", range(1, len(out) + 1))
+        return out.reset_index()
+
+    st.subheader("🏆 Training Ranking")
+    who = st.segmented_control("Rank", ["🏪 Shops", "🧑‍💼 Attendants"], default="🏪 Shops",
+                               key="training_rank_view", label_visibility="collapsed") or "🏪 Shops"
+    if who == "🏪 Shops":
+        table = rank(["Location"])
+        names = table["Location"]
+        cols = ["Location", "Rank", "Training Score %", "Team Size", "Answers Due", "Answered",
+                "Missed", "Response Rate %", "Same Day %", "Completion %", "Average Score %"]
+    else:
+        table = rank(["Name", "Location"])
+        names = table["Name"] + " — " + table["Location"]
+        cols = ["Name", "Rank", "Location", "Training Score %", "Answers Due", "Answered", "Missed",
+                "Response Rate %", "Same Day %", "Completion %", "Average Score %"]
+    for col, medal, (label, (_, r)) in zip(st.columns(3), ("🥇", "🥈", "🥉"),
+                                           zip(names, table.head(3).iterrows())):
+        with col.container(border=True):
+            avg = "—" if pd.isna(r["Average Score %"]) else f"{r['Average Score %']:.0f}%"
+            st.metric(f"{medal} {label}", f"{r['Training Score %']:.1f}%",
+                      f"{int(r['Answered'])} of {int(r['Answers Due'])} answered · avg score {avg}",
+                      delta_color="off")
+    with st.container(border=True):
+        st.caption("Best first. **Training Score** counts every questionnaire due at the score it "
+                   "got and a missed one at 0, so it rewards answering and scoring well together; "
+                   "ties go to the higher response rate.")
+        grid.filterable_table(table[cols], pinned_columns=(cols[0],), height=420)
+
+
 def _training(start_date: date, end_date: date, location: str) -> None:
     """Daily sales training: who answered the questionnaire, how fully and how well."""
     try:
@@ -486,6 +539,8 @@ def _training(start_date: date, end_date: date, location: str) -> None:
     view = st.segmented_control("Training view", ["🏪 By Shop", "✅ Tracker", "🧑‍💼 Respondents"],
                                 default="🏪 By Shop", key="training_view",
                                 label_visibility="collapsed") or "🏪 By Shop"
+    if view == "✅ Tracker":
+        _training_ranking(grid_rows)
     grain = st.radio("Group by", ["Day", "Week (Sun–Sat)", "Month"], horizontal=True,
                      key="training_grain")
     period = pd.to_datetime(grid_rows["Day"])
