@@ -5317,3 +5317,108 @@ WHERE po.state IN ('done', 'paid', 'invoiced')
   AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
 GROUP BY 1, 2
 """
+
+
+# ------------------------------------------------------------- dispatch ---
+# Inputs for lib.dispatch (the Dispatch page): the dispatch module's shops,
+# requests and transits, the shops' end-of-day stock snapshots, and the
+# inventory module's stock moves. Bags only throughout.
+
+_BAGS_ONLY = """
+JOIN product_product  pp ON pp.id = {alias}.product_id
+JOIN product_template pt ON pt.id = pp.product_tmpl_id
+JOIN product_category pc ON pc.id = pt.categ_id AND pc.complete_name ILIKE 'Bags%%'
+"""
+
+# The retail shops the dispatch module serves, with their stock and
+# goods-in-transit locations.
+DISPATCH_SHOPS = """
+SELECT ds.id AS "Shop ID", ds.name AS "Shop", ds.stock_location_id AS "Stock Location",
+       ds.transit_location_id AS "Transit Location"
+FROM denri_dispatch_shop ds
+WHERE ds.active AND ds.shop_type = 'retail' AND ds.include_in_dispatch
+"""
+
+# Each shop's bags as at the end of a day: the last end-of-day snapshot taken
+# on or before it (they run nightly).
+SHOP_STOCK_AT = """
+WITH snap AS (
+    SELECT id, snapshot_datetime FROM denri_shop_stock_snapshot
+    WHERE snapshot_type = 'eod' AND state = 'done'
+      -- taken at 21:00 UTC, midnight in Nairobi: its UTC date is the day it closes
+      AND snapshot_datetime::DATE <= CAST(:day AS DATE)
+    ORDER BY snapshot_datetime DESC LIMIT 1
+)
+SELECT l.shop_id AS "Shop ID", l.product_id AS "Product ID", pt.name AS "SKU",
+       SUM(l.qty_on_hand) AS "Qty", MAX(snap.snapshot_datetime) AS "Taken"
+FROM denri_shop_stock_snapshot_line l
+JOIN snap ON snap.id = l.snapshot_id
+""" + _BAGS_ONLY.format(alias="l") + """
+GROUP BY 1, 2, 3
+"""
+
+# Every done stock move into or out of a shop's stock between two moments
+# (the opening and closing snapshots), by kind: received from dispatch (out
+# of the shop's own goods-in-transit location), transfers that skipped
+# dispatch, sales and customer returns, and inventory adjustments.
+SHOP_STOCK_MOVES = """
+WITH shops AS (
+    SELECT id, stock_location_id AS loc, transit_location_id AS tr
+    FROM denri_dispatch_shop WHERE active AND shop_type = 'retail' AND include_in_dispatch
+)
+SELECT s.id AS "Shop ID", m.product_id AS "Product ID", pt.name AS "SKU",
+       CASE
+           WHEN m.location_dest_id = s.loc AND m.location_id = s.tr   THEN 'Received from Dispatch'
+           WHEN m.location_dest_id = s.loc AND ls.usage = 'customer'  THEN 'Customer Returns'
+           WHEN m.location_dest_id = s.loc AND ls.usage = 'inventory' THEN 'Adjustments In'
+           WHEN m.location_dest_id = s.loc                            THEN 'Transfers In (outside dispatch)'
+           WHEN ld.usage = 'customer'                                 THEN 'Sold'
+           WHEN ld.usage = 'inventory'                                THEN 'Adjustments Out'
+           ELSE 'Transfers Out'
+       END AS "Kind",
+       COALESCE(NULLIF(ls.complete_name, ''), ls.name) AS "From",
+       COALESCE(NULLIF(ld.complete_name, ''), ld.name) AS "To",
+       SUM(m.product_qty) AS "Qty", COUNT(*) AS "Moves"
+FROM stock_move m
+JOIN shops s ON s.loc IN (m.location_id, m.location_dest_id)
+JOIN stock_location ls ON ls.id = m.location_id
+JOIN stock_location ld ON ld.id = m.location_dest_id
+""" + _BAGS_ONLY.format(alias="m") + """
+WHERE m.state = 'done'
+  AND m.location_id <> m.location_dest_id
+  AND m.date > CAST(:start_ts AS TIMESTAMP) AND m.date <= CAST(:end_ts AS TIMESTAMP)
+GROUP BY 1, 2, 3, 4, 5, 6
+"""
+
+# Dispatches to the shops in the period, with what was asked for them.
+DISPATCH_TRANSIT_LINES = """
+SELECT t.shop_id AS "Shop ID", t.name AS "Transit", t.source_type AS "Source",
+       o.name AS "Order", o.request_type AS "Request Type", o.requested_by_name AS "Requested By",
+       (t.dispatch_date AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE AS "Dispatched On",
+       (t.receive_date AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE AS "Received On",
+       t.state AS "State", tl.product_id AS "Product ID", pt.name AS "SKU",
+       COALESCE(tl.qty_effective_dispatched, tl.qty_dispatched) AS "Dispatched",
+       tl.qty_received AS "Received", tl.qty_in_transit AS "In Transit"
+FROM denri_dispatch_transit t
+JOIN denri_dispatch_transit_line tl ON tl.transit_id = t.id
+LEFT JOIN denri_dispatch_order o ON o.id = t.order_id
+""" + _BAGS_ONLY.format(alias="tl") + """
+WHERE t.state <> 'cancel'
+  AND t.dispatch_date >= CAST(:start_date AS TIMESTAMP) - INTERVAL '3 hours'
+  AND t.dispatch_date < CAST(:end_date AS TIMESTAMP) + INTERVAL '21 hours'
+"""
+
+# What the shops asked for (stock ordering in the dispatch module) in the
+# period, line by line, and how much was dispatched and received.
+SHOP_REQUEST_LINES = """
+SELECT o.shop_id AS "Shop ID", o.name AS "Order", o.state AS "State",
+       o.order_date::DATE AS "Ordered On", o.requested_by_name AS "Requested By",
+       ol.product_id AS "Product ID", pt.name AS "SKU",
+       ol.qty_ordered AS "Requested", ol.qty_fulfilled AS "Dispatched", ol.qty_received AS "Received",
+       ol.qty_remaining AS "Outstanding"
+FROM denri_dispatch_order o
+JOIN denri_dispatch_order_line ol ON ol.order_id = o.id
+""" + _BAGS_ONLY.format(alias="ol") + """
+WHERE o.request_type = 'shop' AND o.state NOT IN ('draft')
+  AND o.order_date::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""

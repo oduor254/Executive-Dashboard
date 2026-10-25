@@ -55,7 +55,7 @@ WHERE e.active
   AND COALESCE(TRIM(p.phone), '') <> ''
 """
 
-_SHOP_NAMES = {"ktda": "Ktda", "website sales": "Website", "website": "Website",
+_SHOP_NAMES = {"ktda": "Ktda", "website sales": "Website", "website": "Website", "website store": "Website",
                "dar-es-alam": "Sinza", "dar es salaam": "Sinza", "sinza": "Sinza"}
 
 
