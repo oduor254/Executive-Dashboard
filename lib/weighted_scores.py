@@ -20,7 +20,7 @@ shop manager plans who does what each morning. So:
   * Attendance — only for days marked in the shop's attendance.
 
 Scoring: a measure with a target is scored against it (capped at 100); a
-natural rate (conversion, customers captured, chats answered within three
+natural rate (the customer target, customers captured, chats answered within three
 minutes) is scored as the rate itself; WhatsApp-lead conversion and the share
 of new products — where rates differ by nature between shops and people —
 are scored against the best (best = 100).
@@ -50,7 +50,7 @@ ATTENDANT_MEASURES = [
     ("Bulk Orders", 5, "bulk sales against 10% of their own target"),
     ("Basket Value", 10, f"average transaction value against KES {scorecards.BASKET_TARGET:,}"),
     ("New Products", 4, "share of their bags that are new styles, against the best"),
-    ("Conversion", 15, "own sales ÷ customers served (sales + walk-in leads not converted)"),
+    ("Customer Target", 15, "customers served ÷ expected (their target ÷ the shop's average spend per customer)"),
     ("Respond Fast", 10, "WhatsApp chats answered within 3 min, on their online days"),
     ("Customer Service", 7, "average staff-assistance rating from their customers (of 5)"),
     ("Customer Feedback", 4, f"feedback received ÷ customers served, against {scorecards.FEEDBACK_TARGET}%"),
@@ -153,7 +153,7 @@ def _roles_by_day(roles: pd.DataFrame | None) -> pd.DataFrame:
 
 
 def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.DataFrame | None,
-                    new_families: set[str], leads: pd.DataFrame | None, chats: pd.DataFrame | None,
+                    new_families: set[str], chats: pd.DataFrame | None,
                     roles: pd.DataFrame | None, responses: pd.DataFrame | None,
                     attendance: pd.DataFrame | None) -> pd.DataFrame:
     """One row per attendant/BA per shop: the attendant measures, weighted.
@@ -186,18 +186,20 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
         t["New Products %"] = np.nan
     t["New Products Score"] = _best(t["New Products %"])
 
-    sales = g["Order ID"].nunique()
-    if leads is not None and not leads.empty:
-        lost = leads[~leads["Converted"].astype(bool)].assign(
-            Location=leads["Branch"].map(staff_numbers.shop_name))
-        lost = lost.rename(columns={"Attendant": "Attendant / BA"}).groupby(keys).size()
-    else:
-        lost = pd.Series(dtype=float)
-    t["Walk-in Leads Lost"] = lost.reindex(t.index).fillna(0).astype(int)
-    t["Customers Served"] = sales.reindex(t.index).fillna(0) + t["Walk-in Leads Lost"]
-    t["Conversion %"] = (sales.reindex(t.index) / t["Customers Served"].where(t["Customers Served"] > 0)
-                         * 100).round(1)
-    t["Conversion Score"] = t["Conversion %"]
+    # Customer target: the customers their share of the target needs at the
+    # shop's average spend per customer (100,000 a day at 4,000 is 25
+    # customers; two on the floor, 12.5 each). Their target is already the
+    # sum of their daily shares, so expected = target ÷ the shop's average
+    # spend over the period. Customers are counted as sales, in both.
+    shop = df.groupby("Location").agg(Revenue=("Revenue", "sum"), Sales=("Order ID", "nunique"))
+    avg_spend = shop["Revenue"] / shop["Sales"].where(shop["Sales"] > 0)
+    t["Shop Avg Spend"] = [avg_spend.get(loc) for _, loc in t.index]
+    t["Shop Avg Spend"] = t["Shop Avg Spend"].round(0)
+    t["Expected Customers"] = (t["Target"] / t["Shop Avg Spend"].where(t["Shop Avg Spend"] > 0)).round(1)
+    t["Customers Served"] = g["Order ID"].nunique().reindex(t.index).fillna(0).astype(int)
+    t["Customer Target %"] = (t["Customers Served"] / t["Expected Customers"].where(t["Expected Customers"] > 0)
+                              * 100).round(1)
+    t["Customer Target Score"] = t["Customer Target %"]
 
     # Respond fast: the shop's chats on the days the person held the online role.
     online = _roles_by_day(roles)

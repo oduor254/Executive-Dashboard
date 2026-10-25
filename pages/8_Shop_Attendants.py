@@ -876,7 +876,6 @@ def _weighted_inputs(start_date: date, end_date: date) -> dict:
         "attendance": lambda: db.run_query(queries.SHOP_ATTENDANCE, params),
         "stock": lambda: db.run_query(queries.STOCK_COUNT_VARIANCE, params),
         "bag_lines": lambda: db.run_query(queries.SCORECARD_BAG_LINES, params),
-        "leads": lambda: db.run_query(queries.WALKIN_LEADS, params),
         "chats": lambda: db.run_query(queries.WA_INTERACTIONS, params),
         "footfall": lambda: footfall.daily(start_date, end_date)[0],
         "training_rows": training_rows,
@@ -995,7 +994,7 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
         return
     cards = weighted_scores.attendant_cards(
         df, people, bag_lines=w["bag_lines"], new_families=w["new_families"] or set(),
-        leads=w["leads"], chats=w["chats"], roles=w["roles"], responses=w["responses"],
+        chats=w["chats"], roles=w["roles"], responses=w["responses"],
         attendance=w["attendance"])
     if location != "All Locations":
         cards = cards[cards["Location"] == location]
@@ -1012,7 +1011,10 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
             "Bulk Orders": (_money(r["Bulk Sales"]), f"{_pct(r['Bulk % of Target'])} of own target"),
             "Basket Value": (_money(r["Basket Value"]), f"target {basket}"),
             "New Products": (_pct(r["New Products %"]), "of their bags"),
-            "Conversion": (_pct(r["Conversion %"]), f"{r['Customers Served']:,.0f} customers served"),
+            "Customer Target": (
+                f"{r['Customers Served']:,.0f} of {r['Expected Customers']:,.1f}"
+                if pd.notna(r["Expected Customers"]) else f"{r['Customers Served']:,.0f}",
+                f"{_pct(r['Customer Target %'])} · shop avg spend {_money(r['Shop Avg Spend'])}"),
             "Respond Fast": (_pct(r["Answered in 3 min %"]), "on online days"),
             "Customer Service": ("—" if pd.isna(r["Service Rating"]) else f"{r['Service Rating']:.2f} / 5", None),
             "Customer Feedback": (_pct(r["Feedback %"]), f"target {scorecards.FEEDBACK_TARGET}%"),
@@ -1028,7 +1030,8 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
                 + [f"{m} Score" for m, _, _ in measures] + [f"{m} Points" for m, _, _ in measures]
                 + ["Target", "Revenue", "Target %", "Days Worked", "Shop Share", "Orders",
                    "Bulk Sales", "Bulk % of Target", "Basket Value", "New Products %",
-                   "Customers Served", "Walk-in Leads Lost", "Conversion %", "Answered in 3 min %",
+                   "Shop Avg Spend", "Expected Customers", "Customers Served", "Customer Target %",
+                   "Answered in 3 min %",
                    "Service Rating", "Feedback %", "Captured %", "Training %", "Attendance %"])
         grid.filterable_table(cards[[c for c in cols if c in cards]], pinned_columns=("Attendant / BA",),
                               currency_columns=("Target", "Revenue", "Shop Share", "Bulk Sales",
