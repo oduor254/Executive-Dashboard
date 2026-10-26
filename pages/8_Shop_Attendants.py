@@ -678,6 +678,8 @@ def _training(start_date: date, end_date: date, location: str) -> None:
         per["Missed at Least One"] = per["On the Team List"] - per["Answered Every One"]
         per["Participation %"] = (per["Took Part"] / per["On the Team List"] * 100).round(1)
         per["Response Rate %"] = (per["Answers Given"] / per["Answers Due"] * 100).round(1)
+        per["Average Score %"] = (grid_rows[grid_rows["Answered"]].groupby("Period")["Score %"].mean()
+                                  .reindex(per.index).round(1))
         per = per.reindex(periods).reset_index().rename(columns={"index": "Period"})
         last = per.iloc[-1]
         _kpis_row([
@@ -686,6 +688,8 @@ def _training(start_date: date, end_date: date, location: str) -> None:
             ("Participation", f"{last['Participation %']:.1f}%", f"answered at least one that {unit}"),
             ("Answered Every One", f"{int(last['Answered Every One'])}",
              f"{int(last['Missed at Least One'])} missed at least one"),
+            ("Average Score", f"{last['Average Score %']:.1f}%" if pd.notna(last["Average Score %"]) else "—",
+             f"on the answers given that {unit}"),
             (f"Average participation", f"{per['Participation %'].mean():.1f}%", f"over {len(per)} {unit}s"),
         ])
         with st.container(border=True):
@@ -850,10 +854,10 @@ def _training_scores(df: pd.DataFrame, start_date: date, end_date: date):
     try:
         data = training.load()
     except training.TrainingUnavailable as exc:
-        return None, None, f"Sales training is left out: {exc}"
+        return None, None, f"Sales training is left out: {exc}", {}
     days = [d for d in data["days"] if start_date <= d <= end_date and d < date.today()]
     if not days:
-        return None, None, "No daily training questionnaire closed in this range, so Sales "                            "Training is not scored."
+        return None, None, ("No daily training questionnaire closed in this range, so Sales "                            "Training is not scored."), {}
     rows = training.due(data, days)
     score = lambda v: v.fillna(0).mean() * 1.0
     shop = rows.groupby("Location")["Score %"].apply(score)
@@ -863,11 +867,18 @@ def _training_scores(df: pd.DataFrame, start_date: date, end_date: date):
               for p, loc in zip(pairs["Served By"], pairs["Location"])]
     person = pd.Series([by_email.get(e) if e else None for e in emails],
                        index=pd.MultiIndex.from_frame(pairs), dtype=float)
+    # The average score on the questionnaires answered (missed ones left out),
+    # shown beside the training score on the score cards.
+    answered = rows[rows["Answered"]]
+    avg_email = answered.groupby("Email")["Score %"].mean()
+    averages = {"person": pd.Series([avg_email.get(e) if e else None for e in emails],
+                                    index=person.index, dtype=float),
+                "shop": answered.groupby("Location")["Score %"].mean()}
     unmatched = int(pd.isna(person).sum())
     note = (f"Sales Training covers {len(days)} questionnaire(s). {unmatched} attendant(s)/BA(s) "
             "could not be matched to the training team list by name and are scored without it."
             if unmatched else None)
-    return shop, person, note
+    return shop, person, note, averages
 
 
 def _day_targets(start_date: date, end_date: date) -> pd.DataFrame:
@@ -916,11 +927,11 @@ def _scorecard_inputs(start_date: date, end_date: date) -> dict | None:
         responses, feedback_note = None, str(exc)
     df = df.join(scorecards.match_feedback(df, responses))
     day_targets = _day_targets(start_date, end_date)
-    shop_training, person_training, training_note = _training_scores(df, start_date, end_date)
+    shop_training, person_training, training_note, training_avg = _training_scores(df, start_date, end_date)
     return {"df": df, "previous": previous, "day_targets": day_targets, "prev_start": prev_start,
             "prev_end": prev_end, "feedback_note": feedback_note,
             "shop_training": shop_training, "person_training": person_training,
-            "training_note": training_note, "responses": responses}
+            "training_note": training_note, "responses": responses, "training_avg": training_avg}
 
 
 def _weighted_inputs(start_date: date, end_date: date) -> dict:
@@ -993,7 +1004,8 @@ def _manager_help(r: pd.Series) -> dict[str, list[str]]:
                               f"Target: {scorecards.FEEDBACK_TARGET}% of sales"],
         "Training Plan": [f"Team on the list: {_n(r.get('Training Team'))}",
                           f"Answers due: {_n(r.get('Training Due'))} · answered: {_n(r.get('Training Answered'))}",
-                          f"Completion: {_pct(r['Training Completion %'])}"],
+                          f"Completion: {_pct(r['Training Completion %'])}",
+                          f"Team's average score: {_pct(r.get('Training Avg Score %'))} on the questionnaires answered"],
         "Stock Accuracy": [f"Stock counts submitted: {_n(r.get('Stock Counts'))}",
                            f"Items counted: {_n(r.get('Stock Counted Qty'))} · off by: {_n(r.get('Stock Difference'))}",
                            f"Variance: {_pct(r.get('Stock Variance %'))} · accuracy "
@@ -1032,7 +1044,8 @@ def _attendant_help(r: pd.Series) -> dict[str, list[str]]:
                               f"Target: {scorecards.FEEDBACK_TARGET}% of sales"],
         "Customer Capture": [f"Sales with the customer's own details: {_n(r.get('Captured Sales'))} of {_n(r['Orders'])} ({_pct(r['Captured %'])})",
                              "Shop, attendant and shared numbers don't count"],
-        "Training": [f"Training score: {_pct(r['Training %'])} — every questionnaire due at its score, a missed one at 0"],
+        "Training": [f"Training score: {_pct(r['Training %'])} — every questionnaire due at its score, a missed one at 0",
+                     f"Average score: {_pct(r.get('Training Avg Score %'))} — on the questionnaires they answered"],
         "Attendance": [f"Days marked: {_n(r.get('Days Marked'))} · present: {_n(r.get('Days Present'))} · late: {_n(r.get('Days Late'))}",
                        f"Score: {_pct(r['Attendance %'])} (on time 1, late ½, absent 0)"],
     }
@@ -1127,6 +1140,9 @@ def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_da
     heads = w["heads"] if w["heads"] is not None else pd.DataFrame(columns=["Shop", "Head"])
     cards = weighted_scores.manager_cards(shops, heads, w["footfall"], w["chats"],
                                           w["training_rows"], w["stock"])
+    shop_avg = inputs.get("training_avg", {}).get("shop")
+    cards["Training Avg Score %"] = (cards["Location"].map(shop_avg).round(1)
+                                     if shop_avg is not None else float("nan"))
     shown = cards if location == "All Locations" else cards[cards["Location"] == location]
     measures = weighted_scores.MANAGER_MEASURES
     _weights_note(measures)
@@ -1143,7 +1159,8 @@ def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_da
             "Response Time": ("—" if pd.isna(r.get("Response Time (min)")) else f"{r['Response Time (min)']:.1f} min",
                               f"target {scorecards.RESPONSE_TARGET_MIN} min"),
             "Customer Feedback": (_pct(r["Feedback %"]), f"target {scorecards.FEEDBACK_TARGET}%"),
-            "Training Plan": (_pct(r["Training Completion %"]), "answers due, answered"),
+            "Training Plan": (_pct(r["Training Completion %"]),
+                              f"answers due, answered · avg score {_pct(r.get('Training Avg Score %'))}"),
             "Stock Accuracy": ("—" if pd.isna(r["Stock Variance %"]) else f"{r['Stock Variance %']:.2f}% variance",
                                f"{r['Stock Counts']:,.0f} counts" if pd.notna(r["Stock Counts"]) else None),
         })
@@ -1153,7 +1170,7 @@ def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_da
                 + [f"{m} Score" for m, _, _ in measures] + [f"{m} Points" for m, _, _ in measures]
                 + ["Revenue", "Target", "Target %", "Basket Value", "Walk-in Conversion %",
                    "WhatsApp Chats", "WhatsApp Conversion %", "Response Time (min)", "Feedback %",
-                   "Training Completion %", "Stock Counts", "Stock Variance %"])
+                   "Training Completion %", "Training Avg Score %", "Stock Counts", "Stock Variance %"])
         grid.filterable_table(cards[[c for c in cols if c in cards]], pinned_columns=("Location",),
                               currency_columns=("Revenue", "Target", "Basket Value"), height=460)
 
@@ -1169,6 +1186,10 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
         df, people, bag_lines=w["bag_lines"], new_families=w["new_families"] or set(),
         chats=w["chats"], roles=w["roles"], responses=w["responses"],
         attendance=w["attendance"])
+    avg = inputs.get("training_avg", {}).get("person")
+    cards["Training Avg Score %"] = ([avg.get((p, l)) for p, l in zip(cards["Attendant / BA"], cards["Location"])]
+                                     if avg is not None else None)
+    cards["Training Avg Score %"] = pd.to_numeric(cards["Training Avg Score %"], errors="coerce").round(1)
     if location != "All Locations":
         cards = cards[cards["Location"] == location]
     measures = weighted_scores.ATTENDANT_MEASURES
@@ -1192,7 +1213,7 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
             "Customer Service": ("—" if pd.isna(r["Service Rating"]) else f"{r['Service Rating']:.2f} / 5", None),
             "Customer Feedback": (_pct(r["Feedback %"]), f"target {scorecards.FEEDBACK_TARGET}%"),
             "Customer Capture": (_pct(r["Captured %"]), "sales with customer details"),
-            "Training": (_pct(r["Training %"]), None),
+            "Training": (_pct(r["Training %"]), f"avg score {_pct(r.get('Training Avg Score %'))}"),
             "Attendance": (_pct(r["Attendance %"]), "on the days marked"),
         })
     if person == ALL_PEOPLE and len(cards) > 12:
@@ -1205,7 +1226,8 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
                    "Bulk Sales", "Bulk % of Target", "Basket Value", "New Products %",
                    "Shop Avg Spend", "Expected Customers", "Customers Served", "Customer Target %",
                    "Answered in 3 min %",
-                   "Service Rating", "Feedback %", "Captured %", "Training %", "Attendance %"])
+                   "Service Rating", "Feedback %", "Captured %", "Training %", "Training Avg Score %",
+                   "Attendance %"])
         grid.filterable_table(cards[[c for c in cols if c in cards]], pinned_columns=("Attendant / BA",),
                               currency_columns=("Target", "Revenue", "Shop Share", "Bulk Sales",
                                                 "Basket Value"), height=460)
