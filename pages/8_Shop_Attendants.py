@@ -1088,6 +1088,37 @@ def _weighted_card(title: str, row: pd.Series, measures: list[tuple],
                            help="\n\n".join(lines))
 
 
+def _overall_card(table: pd.DataFrame, name: str, measures: list[tuple], who: str) -> None:
+    """One card for everyone shown: their average weighted score and each
+    KPI's average score, with the best and lowest beside it."""
+    scored = table.dropna(subset=["Weighted Score"])
+    if scored.empty:
+        return
+    top = scored.loc[scored["Weighted Score"].idxmax()]
+    low = scored.loc[scored["Weighted Score"].idxmin()]
+    with st.container(border=True):
+        st.markdown(
+            f"**📊 Overall — {len(scored)} {who}** &nbsp; · &nbsp; Average weighted score "
+            f"**{scored['Weighted Score'].mean():.0f}/100** &nbsp; <span style='opacity:.65'>"
+            f"(best {top[name]} {top['Weighted Score']:.0f} · lowest {low[name]} "
+            f"{low['Weighted Score']:.0f})</span>", unsafe_allow_html=True)
+        for start in range(0, len(measures), 4):
+            for col, (measure, weight, how) in zip(st.columns(4), measures[start:start + 4]):
+                s = scored[f"{measure} Score"].dropna()
+                if s.empty:
+                    col.metric(f"{measure} · {weight}%", "—", f"didn't apply to any of the {who}",
+                               delta_color="off")
+                    continue
+                best = scored.loc[s.idxmax(), name]
+                worst = scored.loc[s.idxmin(), name]
+                col.metric(f"{measure} · {weight}%", f"{s.mean():.0f} / 100",
+                           f"average of {len(s)} · range {s.min():.0f}–{s.max():.0f}", delta_color="off",
+                           help="\n\n".join([
+                               f"Average score: {s.mean():.1f} across the {len(s)} {who} it applied to",
+                               f"Best: {best} ({s.max():.0f}) · lowest: {worst} ({s.min():.0f})",
+                               f"Scored as: {how}"]))
+
+
 def _weighted_chart(table: pd.DataFrame, name: str, measures: list[tuple], title: str) -> None:
     """Each bar is the weighted score, split into what each measure adds."""
     ranked = table.dropna(subset=["Weighted Score"]).sort_values("Weighted Score").tail(30)
@@ -1147,6 +1178,7 @@ def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_da
     measures = weighted_scores.MANAGER_MEASURES
     _weights_note(measures)
     shown = shown.assign(Name=shown["Location"] + " — " + shown["Head"])
+    _overall_card(shown, "Name", measures, "shops")
     _weighted_chart(shown, "Name", measures, "Weighted Score Card — Shop Managers")
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     for _, r in shown.iterrows():
@@ -1196,6 +1228,7 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
     _weights_note(measures)
     cards = cards.assign(Name=cards["Attendant / BA"] + " — " + cards["Location"])
     chosen = cards if person == ALL_PEOPLE else cards[cards["Attendant / BA"] == person]
+    _overall_card(chosen, "Name", measures, "attendants & BAs")
     _weighted_chart(chosen, "Name", measures, "Weighted Score Card — Attendants & BAs")
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     for _, r in chosen.head(12).iterrows():
