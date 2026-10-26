@@ -536,7 +536,8 @@ def _training(start_date: date, end_date: date, location: str) -> None:
     if not expected:
         return
 
-    view = st.segmented_control("Training view", ["🏪 By Shop", "✅ Tracker", "🧑‍💼 Respondents"],
+    view = st.segmented_control("Training view", ["🏪 By Shop", "✅ Tracker", "📅 Participation",
+                                                  "🧑‍💼 Respondents"],
                                 default="🏪 By Shop", key="training_view",
                                 label_visibility="collapsed") or "🏪 By Shop"
     if view == "✅ Tracker":
@@ -658,6 +659,77 @@ def _training(start_date: date, end_date: date, location: str) -> None:
                 grid.filterable_table(
                     missed_latest[["Name", "Location", "Email"]].sort_values(["Location", "Name"]),
                     pinned_columns=("Name",), total=False, height=320)
+
+    elif view == "📅 Participation":
+        # Per day (or week / month): of everyone on the team list, how many
+        # answered, and who missed which questionnaires.
+        unit = {"Day": "day", "Week (Sun–Sat)": "week", "Month": "month"}[grain]
+        g = grid_rows.groupby("Period")
+        per = pd.DataFrame({
+            "Questionnaires": g["Day"].nunique(),
+            "On the Team List": g["Email"].nunique(),
+            "Answers Due": g.size(),
+            "Answers Given": g["Answered"].sum().astype(int),
+        })
+        took_part = grid_rows[grid_rows["Answered"]].groupby("Period")["Email"].nunique()
+        per["Took Part"] = took_part.reindex(per.index).fillna(0).astype(int)
+        all_done = grid_rows.groupby(["Period", "Email"])["Answered"].all().groupby("Period").sum()
+        per["Answered Every One"] = all_done.reindex(per.index).fillna(0).astype(int)
+        per["Missed at Least One"] = per["On the Team List"] - per["Answered Every One"]
+        per["Participation %"] = (per["Took Part"] / per["On the Team List"] * 100).round(1)
+        per["Response Rate %"] = (per["Answers Given"] / per["Answers Due"] * 100).round(1)
+        per = per.reindex(periods).reset_index().rename(columns={"index": "Period"})
+        last = per.iloc[-1]
+        _kpis_row([
+            (f"Latest {unit}", str(last["Period"]),
+             f"{int(last['Took Part'])} of {int(last['On the Team List'])} took part"),
+            ("Participation", f"{last['Participation %']:.1f}%", f"answered at least one that {unit}"),
+            ("Answered Every One", f"{int(last['Answered Every One'])}",
+             f"{int(last['Missed at Least One'])} missed at least one"),
+            (f"Average participation", f"{per['Participation %'].mean():.1f}%", f"over {len(per)} {unit}s"),
+        ])
+        with st.container(border=True):
+            fig = go.Figure()
+            fig.add_bar(x=per["Period"], y=per["Participation %"], name="Took part",
+                        marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+                        customdata=per[["Took Part", "On the Team List"]],
+                        hovertemplate="%{x}<br>%{customdata[0]} of %{customdata[1]} took part (%{y:.1f}%)<extra></extra>")
+            fig.add_scatter(x=per["Period"], y=per["Response Rate %"], name="Response rate",
+                            mode="lines+markers", line=dict(color=theme.CATEGORICAL[5], width=2),
+                            hovertemplate="%{x}<br>%{y:.1f}% of answers due given<extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title=f"Participation by {unit}", height=380)
+            fig.update_yaxes(range=[0, 105], ticksuffix="%")
+            theme.show(fig)
+            st.caption(f"**Took part**: on the team list and answered at least one questionnaire that {unit} "
+                       "(on a daily view, answered that day's). **Response rate**: answers given ÷ answers "
+                       "due (everyone on the list × every questionnaire). Late answers count for the day "
+                       "of their questionnaire.")
+            grid.filterable_table(per, pinned_columns=("Period",), total=False, height=360)
+
+        st.subheader("Who Missed — and Which Days")
+        missed = grid_rows[~grid_rows["Answered"]]
+        if missed.empty:
+            st.success("Nobody missed a questionnaire in this range.")
+        else:
+            days_of = lambda d: ", ".join(pd.to_datetime(sorted(d)).strftime("%a %d %b"))
+            who = (missed.groupby(["Name", "Location"])
+                   .agg(Missed=("Day", "nunique"), **{"Days Missed": ("Day", days_of)})
+                   .reset_index())
+            due = grid_rows.groupby(["Name", "Location"])["Day"].nunique()
+            who.insert(3, "Due", [due.get((n, l)) for n, l in zip(who["Name"], who["Location"])])
+            who["Response Rate %"] = ((who["Due"] - who["Missed"]) / who["Due"] * 100).round(1)
+            with st.container(border=True):
+                st.caption(f"{len(who)} of {grid_rows['Email'].nunique()} people on the team list missed at "
+                           "least one questionnaire in the range — most missed first.")
+                grid.filterable_table(who.sort_values(["Missed", "Location"], ascending=[False, True]),
+                                      pinned_columns=("Name",), height=460)
+            with st.expander(f"Missed by {unit}"):
+                by = (missed.groupby(["Period", "Name", "Location"])
+                      .agg(Missed=("Day", "nunique"), **{"Days Missed": ("Day", days_of)}).reset_index())
+                by["Period"] = pd.Categorical(by["Period"], periods, ordered=True)
+                grid.filterable_table(by.sort_values(["Period", "Location", "Name"]),
+                                      pinned_columns=("Period",), height=420)
 
     else:
         people = summary(grid_rows, ["Name", "Location"])
