@@ -5422,3 +5422,4 @@ JOIN denri_dispatch_order_line ol ON ol.order_id = o.id
 WHERE o.request_type = 'shop' AND o.state NOT IN ('draft')
   AND o.order_date::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 """
+
