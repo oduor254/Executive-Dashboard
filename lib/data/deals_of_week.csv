@@ -360,3 +360,81 @@ year,month,product,location,type,price_then,price_now,tier,starts
 2026,October,Trecento,Nairobi Town,Deal of the Week,2100.0,1700.0,11 - 24 Oct,2026-10-11
 2026,October,Fayola,Nairobi Town,Deal of the Week,2100.0,1700.0,11 - 24 Oct,2026-10-11
 2026,October,Remi,Nairobi Town,Deal of the Week,2700.0,2300.0,11 - 24 Oct,2026-10-11
+2026,October,Kai,Nairobi Town,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Nairobi Town,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Safiri Travel,Nairobi Town,Deal of the Week,3600.0,3200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Nairobi Town,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Nairobi Town,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Mini Umbra,Nairobi Town,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kai,Kitengela,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Big Man Bag,Kitengela,Deal of the Week,2100.0,1700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Kitengela,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Kitengela,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Gym Bag,Kitengela,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Kitengela,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kai,Thika,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Big Man Bag,Thika,Deal of the Week,2100.0,1700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Thika,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Thika,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Gym Bag,Thika,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Thika,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kai,Rongai,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Big Man Bag,Rongai,Deal of the Week,2100.0,1700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Rongai,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Rongai,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Gym Bag,Rongai,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Rongai,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Kakamega,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Jade,Kakamega,Deal of the Week,3100.0,2700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Kakamega,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Remi,Kakamega,Deal of the Week,2700.0,2300.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kate,Kakamega,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Reo Travel,Kakamega,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Busia,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Jade,Busia,Deal of the Week,3100.0,2700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Busia,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Remi,Busia,Deal of the Week,2700.0,2300.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kate,Busia,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Reo Travel,Busia,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Kisumu,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Jade,Kisumu,Deal of the Week,3100.0,2700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Kisumu,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Remi,Kisumu,Deal of the Week,2700.0,2300.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kate,Kisumu,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Reo Travel,Kisumu,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Kisii,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Jade,Kisii,Deal of the Week,3100.0,2700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Kisii,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Remi,Kisii,Deal of the Week,2700.0,2300.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kate,Kisii,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Reo Travel,Kisii,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kai,Eldoret,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Eldoret,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Eldoret,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Eldoret,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Pioneer,Eldoret,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Sierra Handbag,Eldoret,Deal of the Week,2700.0,2300.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kai,Nakuru,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zane Man,Nakuru,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Nakuru,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Nakuru,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Pioneer,Nakuru,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Sierra Handbag,Nakuru,Deal of the Week,2700.0,2300.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Pioneer,Meru,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kate,Meru,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Meru,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zipped Lunchset,Meru,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Meru,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Meru,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Pioneer,Nanyuki,Deal of the Week,2600.0,2200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kate,Nanyuki,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Nanyuki,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Zipped Lunchset,Nanyuki,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Nanyuki,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Lola,Nanyuki,Deal of the Week,2100.0,1800.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Kai,Mombasa,Deal of the Week,2800.0,2400.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Big Man Bag,Mombasa,Deal of the Week,2100.0,1700.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Oval Handbag,Mombasa,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Belt Bag,Mombasa,Deal of the Week,1400.0,1000.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Mini Umbra,Mombasa,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
+2026,October,Fabela,Mombasa,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
