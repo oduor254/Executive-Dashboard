@@ -5423,3 +5423,93 @@ WHERE o.request_type = 'shop' AND o.state NOT IN ('draft')
   AND o.order_date::DATE BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 """
 
+
+
+# --------------------------------------------------------- stock movement ---
+# Inputs for lib.stock_flow (Stock Levels → Stock Movement): every done move of
+# bags into or out of an outlet's stock, and what each outlet holds now. An
+# outlet is a shop's warehouse, the Website, or the CBD store; moves between
+# two locations of the same outlet are left out.
+
+_FLOW_OUTLETS = """
+outlets AS (
+    SELECT code, name FROM stock_warehouse
+    WHERE code IN ('CBD','STAR','HAZ','MSA','NAKS','ELD','KSM','MERU','THK','KITE','WEB','NAN',
+                   'KAK','HTN','DAR','UG','KSI','KTDA','BUSIA','RONG','NYERI','MACHA')
+)"""
+
+_FLOW_BAGS = """
+JOIN product_product  pp ON pp.id = {alias}.product_id
+JOIN product_template pt ON pt.id = pp.product_tmpl_id
+JOIN product_category pc ON pc.id = pt.categ_id
+    AND pc.complete_name ILIKE 'Bags /%' AND pc.complete_name NOT ILIKE '%Clothing%'
+"""
+
+# Bags per outlet, Nairobi day and kind, from each outlet's side of the move:
+# out to a customer is Sold, back from one is Returns, to or from an
+# inventory location is an adjustment, anything else a transfer.
+STOCK_FLOW_MOVES = "WITH" + _FLOW_OUTLETS + """,
+moves AS (
+    SELECT m.product_qty AS qty,
+           (m.date AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE AS day,
+           so.code AS src, dst.code AS dst, ls.usage AS src_usage, ld.usage AS dst_usage
+    FROM stock_move m
+    JOIN stock_location ls ON ls.id = m.location_id
+    JOIN stock_location ld ON ld.id = m.location_dest_id
+    LEFT JOIN outlets so  ON ls.usage = 'internal' AND so.code  = split_part(ls.complete_name, '/', 1)
+    LEFT JOIN outlets dst ON ld.usage = 'internal' AND dst.code = split_part(ld.complete_name, '/', 1)
+""" + _FLOW_BAGS.format(alias="m") + """
+    WHERE m.state = 'done'
+      AND m.date >= CAST(:start_date AS TIMESTAMP) - INTERVAL '3 hours'
+      AND m.date <  CAST(:end_date AS TIMESTAMP) + INTERVAL '21 hours'
+      AND (so.code IS NOT NULL OR dst.code IS NOT NULL)
+      AND COALESCE(so.code, '') <> COALESCE(dst.code, '')
+      AND NOT COALESCE(pt.is_combo, FALSE)
+)
+SELECT day AS "Date", src AS "Code",
+       CASE dst_usage WHEN 'customer' THEN 'Sold' WHEN 'inventory' THEN 'Adj Removed'
+                      ELSE 'Transferred Out' END AS "Kind",
+       SUM(qty) AS "Qty"
+FROM moves WHERE src IS NOT NULL GROUP BY 1, 2, 3
+UNION ALL
+SELECT day, dst,
+       CASE src_usage WHEN 'customer' THEN 'Returns' WHEN 'inventory' THEN 'Adj Added'
+                      ELSE 'Received' END,
+       SUM(qty)
+FROM moves WHERE dst IS NOT NULL GROUP BY 1, 2, 3
+"""
+
+# Each outlet's bags right now: on hand, and standing in its own
+# FINWH/Goods in Transit location.
+STOCK_FLOW_NOW = r"WITH" + _FLOW_OUTLETS + r""",
+transit AS (
+    SELECT sl.id,
+           CASE UPPER(split_part(sl.complete_name, '/', 3))
+               WHEN 'CBD STOCKS'    THEN 'CBD'
+               WHEN 'WEBSITE STORE' THEN 'WEB'
+               ELSE (SELECT o.code FROM outlets o
+                     WHERE UPPER(TRIM(REGEXP_REPLACE(o.name, '\s*SHOP\s*', '', 'gi')))
+                         = UPPER(TRIM(REGEXP_REPLACE(split_part(sl.complete_name, '/', 3),
+                                                     '\s*SHOP\s*', '', 'gi')))
+                     LIMIT 1)
+           END AS code
+    FROM stock_location sl
+    WHERE sl.complete_name ILIKE 'FINWH/Goods in Transit/%'
+),
+placed AS (
+    SELECT o.code, 'Current Stock' AS kind, sq.quantity, sq.product_id
+    FROM stock_quant sq
+    JOIN stock_location sl ON sl.id = sq.location_id AND sl.usage = 'internal'
+    JOIN outlets o ON o.code = split_part(sl.complete_name, '/', 1)
+    UNION ALL
+    SELECT t.code, 'In Transit', sq.quantity, sq.product_id
+    FROM stock_quant sq
+    JOIN transit t ON t.id = sq.location_id AND t.code IS NOT NULL
+)
+SELECT o.code AS "Code", o.name AS "Warehouse", p.kind AS "Kind", SUM(p.quantity) AS "Qty"
+FROM placed p
+JOIN outlets o ON o.code = p.code
+""" + _FLOW_BAGS.format(alias="p") + r"""
+WHERE NOT COALESCE(pt.is_combo, FALSE)
+GROUP BY 1, 2, 3
+"""

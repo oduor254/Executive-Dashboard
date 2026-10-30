@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from lib import auth, charts, colors, db, grid, queries, theme
+from lib import stock_flow as sf
 from lib import stock_planning as sp
 
 st.set_page_config(page_title="Stock · Denri Executive Dashboard", page_icon="📦", layout="wide")
@@ -191,12 +192,15 @@ def _status_by_shop(df: pd.DataFrame, title: str) -> go.Figure:
 
 @st.fragment()
 def render_prediction() -> None:
+    view = _section(["🏆 Top Sellers", "📋 Stock Overview", "🔄 Stock Movement", "📏 Min & Max Levels"],
+                    "plan_section")
+    if view == "🔄 Stock Movement":
+        _stock_movement()
+        return
     position, demand, targets, cal, shops = _load()
     if demand.empty:
         st.info("No bag sales in the last 90 days to plan from.")
         return
-
-    view = _section(["🏆 Top Sellers", "📋 Stock Report", "📏 Min & Max Levels"], "plan_section")
     if view == "🏆 Top Sellers":
         _top_sellers(position, demand, shops)
         return
@@ -214,7 +218,7 @@ def render_prediction() -> None:
         st.caption(f"Next month's bag targets ({cal.next_month:%B %Y}) are not set in Odoo yet, "
                    f"so {cal.month_start:%B}'s are used for next month until they are.")
 
-    if view == "📋 Stock Report":
+    if view == "📋 Stock Overview":
         _stock_report(planned_sku, position, cal, basis, level)
     else:
         _min_max(base, planned_sku, targets, cal, basis, level)
@@ -406,6 +410,72 @@ def _stock_report(planned: pd.DataFrame, position: pd.DataFrame, cal: sp.Calenda
                "Need Next Month", "Deficit Next Month"]].sort_values(
                 ["Location", "Deficit Next Month"], ascending=[True, False]),
             pinned_columns=("Location",), height=420)
+
+
+def _stock_movement() -> None:
+    with st.spinner("Reading stock moves…"):
+        daily, live = sf.load()
+    c1, c2 = st.columns([3, 2])
+    grain = c1.segmented_control("History by", list(sf.GRAINS), default="Weekly", key="flow_grain")
+    grain = grain if grain in sf.GRAINS else "Weekly"
+    outlets = live.sort_values("Outlet")
+    outlet = c2.selectbox("Outlet", ["All outlets"] + outlets["Outlet"].tolist(), key="flow_outlet")
+    codes = None if outlet == "All outlets" else outlets.loc[outlets["Outlet"] == outlet, "Code"].tolist()
+    hist = sf.history(daily, live, grain, codes)
+
+    st.subheader(f"Stock History — {outlet}")
+    st.caption(f"{grain} bags in and out{' (Sunday to Saturday)' if grain == 'Weekly' else ''}, "
+               "newest first; the current period runs to today. Click a row to break it down "
+               "by outlet below. Adjustments are stock-count corrections: added, removed and the net.")
+    with st.container(border=True):
+        picked = st.dataframe(
+            hist.drop(columns=["Start", "End"]), hide_index=True, width="stretch", height=420,
+            on_select="rerun", selection_mode="single-row", key=f"flow_hist_{grain}_{outlet}",
+            column_config={
+                **{c: st.column_config.NumberColumn(c, format="localized")
+                   for c in ["Opening", "Received", "Sold", "Transferred Out", "Adj Added",
+                             "Adj Removed", "Adjustments", "Closing"]},
+                "Sell-through %": st.column_config.NumberColumn("Sell-through", format="%.1f%%"),
+                "Adjustments": st.column_config.NumberColumn("Net Adjustments", format="%+d"),
+            })
+    rows = picked.selection.rows if picked else []
+    sel = hist.iloc[rows[0] if rows else 0]
+    start, end = sel["Start"], sel["End"]
+
+    flows = sf.flows(daily, live, start, end)
+    scope = flows if codes is None else flows[flows["Code"].isin(codes)]
+    sold, stocked = scope["Sold"].sum(), scope["Opening"].sum() + scope["Received"].sum()
+    st.subheader(f"Breakdown — {sel['Period']}")
+    _kpis([
+        ("Opening Stock", f"{scope['Opening'].sum():,.0f}", f"on {start:%d %b}"),
+        ("Received", f"{scope['Received'].sum():,.0f}", "from other stores"),
+        ("Sold", f"{sold:,.0f}",
+         f"{sold / stocked * 100:.1f}% sell-through" if stocked > 0 else None),
+        ("Transferred Out", f"{scope['Transferred Out'].sum():,.0f}", "to other stores"),
+        ("Stock Adjustments", f"{scope['Adjustments'].sum():+,.0f}",
+         f"+{scope['Adj Added'].sum():,.0f} / −{scope['Adj Removed'].sum():,.0f}"),
+        ("Closing Stock", f"{scope['Closing'].sum():,.0f}", f"on {end:%d %b}"),
+    ])
+    st.html(sf.table_html(flows, start, end), unsafe_allow_javascript=True)
+
+    with st.expander("How these numbers are worked out"):
+        st.markdown(
+            "Every row adds up: **Opening + Received − Sold − Transferred out ± Adjustments = "
+            "Closing**. All from Odoo's completed stock moves for bag products, at each outlet's "
+            "stock locations. CBD Stocks is the hub: it receives from FINWH and supplies the "
+            "Website, KTDA and the other shops, so most of its stock leaves as transfers.\n\n"
+            "- **Opening stock**: bags on hand at the start date, worked back from today's stock "
+            "by undoing every stock move since then.\n"
+            "- **Received**: bags booked in from another store: FINWH dispatches (via Goods in "
+            "Transit), the CBD store, and shop-to-shop transfers.\n"
+            "- **Sold**: bags out to customers (POS and delivery orders) less customer returns. "
+            "Sell-through = sold ÷ (opening + received).\n"
+            "- **Transferred out**: bags sent to another store (other shops, rejects, workshop, "
+            "warehouse).\n"
+            "- **Stock adjustments**: stock-count corrections, added minus removed.\n"
+            "- **In transit** and **current stock** are live, as of now. When the range ends "
+            "today, closing stock equals current stock; for a past range, the difference is what "
+            "moved after the end date.")
 
 
 def _min_max(base: pd.DataFrame, planned_sku: pd.DataFrame, targets: pd.DataFrame,
