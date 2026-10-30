@@ -8,6 +8,8 @@ import re
 import pandas as pd
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 
+from lib import theme
+
 _CURRENCY_FORMATTER = JsCode(
     "function(params) {"
     "  if (params.value === null || params.value === undefined) return '';"
@@ -59,6 +61,34 @@ def _total_row_js(label_col: str | None, sum_cols: list[str]) -> JsCode:
         "  else api.setPinnedBottomRowData([tot]);"
         "}"
     )
+
+
+# The grid draws in its own frame, so the app's fonts and ink don't reach it:
+# without this it falls back to a serif face in a faded grey that is hard to
+# read on the light theme. Same text colours as the rest of the app.
+_GRID_FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'
+
+
+def _grid_css() -> dict:
+    light = theme.mode() == "light"
+    ink = "#111114" if light else "#f2f2f5"
+    head = "#111114" if light else "#ffffff"
+    line = "rgba(17,17,20,0.14)" if light else "rgba(255,255,255,0.10)"
+    return {
+        ".ag-root-wrapper, .ag-root-wrapper *": {"font-family": f"{_GRID_FONT} !important"},
+        ".ag-root-wrapper": {"border-radius": "12px !important", "border-color": f"{line} !important"},
+        ".ag-cell, .ag-cell-value, .ag-row": {"color": f"{ink} !important", "font-size": "13px !important"},
+        ".ag-header-cell-text": {"color": f"{head} !important", "font-weight": "700 !important",
+                                 "font-size": "12.5px !important"},
+        ".ag-row": {"border-color": f"{line} !important"},
+        ".ag-floating-bottom .ag-cell": {"font-weight": "700 !important"},
+        ".ag-input-field-input, .ag-text-field-input": {"color": f"{ink} !important"},
+        **({".ag-header, .ag-floating-filter": {"background-color": "#eceef3 !important"},
+            ".ag-row-odd": {"background-color": "#f7f8fb !important"},
+            ".ag-row-even": {"background-color": "#ffffff !important"},
+            ".ag-floating-bottom, .ag-floating-bottom .ag-row": {"background-color": "#eceef3 !important"}}
+           if light else {}),
+    }
 
 
 def _has_total_rows(df: pd.DataFrame) -> bool:
@@ -124,4 +154,5 @@ def filterable_table(
         show_toolbar=True,
         show_search=True,
         show_download_button=True,
+        custom_css=_grid_css(),
     )

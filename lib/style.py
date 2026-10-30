@@ -19,8 +19,8 @@ _CSS = """
 :root, html[data-denri-theme="light"] {
   --denri-ink-rgb: 23, 23, 28;
   --denri-text: #17171c;
-  --denri-text-2: #4b4b57;
-  --denri-muted: #7b7b88;
+  --denri-text-2: #3a3a44;
+  --denri-muted: #5f5f6b;
   --denri-glass: rgba(255, 255, 255, 0.72);
   --denri-glass-hover: rgba(255, 255, 255, 0.86);
   --denri-glass-edge: rgba(255, 255, 255, 0.95);
@@ -98,16 +98,96 @@ section[data-testid="stSidebar"] > div:first-child {
   overflow: hidden;
 }
 [data-testid="stSidebarContent"] { border-radius: 26px; }
-[data-testid="stSidebarNav"] a, [data-testid="stSidebarNavLink"] {
+section[data-testid="stSidebar"] {
+  transition: width 320ms cubic-bezier(.2, .8, .2, 1), min-width 320ms cubic-bezier(.2, .8, .2, 1),
+              transform 320ms cubic-bezier(.2, .8, .2, 1) !important;
+}
+[data-testid="stSidebarNavLink"] {
   border-radius: 999px !important;
   margin: 2px 6px;
+  gap: 10px;
   transition: background 160ms ease, transform 160ms ease;
 }
-[data-testid="stSidebarNavLink"]:hover { transform: translateX(2px); }
-[data-testid="stSidebarNavLink"][aria-current="page"] {
-  background: #c9bffc !important;
-}
+[data-testid="stSidebarNavLink"]:hover { transform: translateX(3px); }
+[data-testid="stSidebarNavLink"][aria-current="page"] { background: #c9bffc !important; }
 [data-testid="stSidebarNavLink"][aria-current="page"] span { color: #121216 !important; font-weight: 700; }
+
+/* every page gets an icon (Material Symbols, already loaded by Streamlit) */
+[data-testid="stSidebarNavLink"]::before {
+  content: var(--denri-icon, "radio_button_unchecked");
+  font-family: "Material Symbols Rounded";
+  font-size: 20px; line-height: 1; font-weight: 400;
+  font-feature-settings: "liga"; -webkit-font-feature-settings: "liga";
+  flex-shrink: 0; width: 22px; text-align: center;
+  color: #a9a9b8;
+  transition: transform 260ms cubic-bezier(.3, 1.6, .5, 1), color 160ms ease;
+}
+[data-testid="stSidebarNavLink"]:hover::before { transform: scale(1.18) rotate(-6deg); color: #ececf1; }
+[data-testid="stSidebarNavLink"][aria-current="page"]::before { color: #121216; }
+[data-denri-home] { --denri-icon: "home"; }
+[data-testid="stSidebarNavLink"][href$="/Sales"] { --denri-icon: "payments"; }
+[data-testid="stSidebarNavLink"][href$="/Product_Sales"] { --denri-icon: "shopping_bag"; }
+[data-testid="stSidebarNavLink"][href$="/Customers"] { --denri-icon: "groups"; }
+[data-testid="stSidebarNavLink"][href$="/Production"] { --denri-icon: "precision_manufacturing"; }
+[data-testid="stSidebarNavLink"][href$="/Dispatch_Tracking"] { --denri-icon: "local_shipping"; }
+[data-testid="stSidebarNavLink"][href$="/Stock_Levels"] { --denri-icon: "inventory_2"; }
+[data-testid="stSidebarNavLink"][href$="/WhatsApp_and_Social_DMs"] { --denri-icon: "forum"; }
+[data-testid="stSidebarNavLink"][href$="/Shop_Attendants"] { --denri-icon: "badge"; }
+[data-testid="stSidebarNavLink"][href$="/Shop_Performance"] { --denri-icon: "storefront"; }
+[data-testid="stSidebarNavLink"][href$="/Footfall_Traffic"] { --denri-icon: "directions_walk"; }
+[data-testid="stSidebarNavLink"][href$="/Reports"] { --denri-icon: "description"; }
+/* pages that bring their own icon (sales_operations_app.py) keep it */
+[data-testid="stSidebarNavLink"]:has([data-testid^="stIcon"])::before { display: none; }
+/* the entry page is called "app" after its file; show it as Home */
+[data-denri-home] p { font-size: 0; }
+[data-denri-home] p::after {
+  content: "Home"; font-size: 0.875rem;
+}
+
+/* collapsed: a slim icon rail instead of vanishing */
+section[data-testid="stSidebar"][aria-expanded="false"] {
+  transform: none !important;
+  width: 88px !important; min-width: 88px !important; max-width: 88px !important;
+}
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarUserContent"],
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] > :not([data-testid="stSidebarCollapseButton"]),
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavSeparator"],
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavViewButton"] { display: none !important; }
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNav"] { padding-top: 40px; }
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"] {
+  width: 44px; height: 44px; min-height: 0; padding: 0 !important; margin: 3px auto; justify-content: center;
+  animation: denriRailIn 420ms cubic-bezier(.3, 1.4, .5, 1) both;
+}
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"] > span { display: none; }
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"]::before { font-size: 22px; }
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"]:hover {
+  transform: scale(1.08); background: rgba(255, 255, 255, 0.08);
+}
+section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"][aria-current="page"] {
+  box-shadow: 0 0 0 4px rgba(201, 191, 252, 0.18), 0 8px 18px rgba(124, 104, 238, 0.35);
+}
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(1) [data-testid="stSidebarNavLink"] { animation-delay: 30ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(2) [data-testid="stSidebarNavLink"] { animation-delay: 60ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(3) [data-testid="stSidebarNavLink"] { animation-delay: 90ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(4) [data-testid="stSidebarNavLink"] { animation-delay: 120ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(5) [data-testid="stSidebarNavLink"] { animation-delay: 150ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(6) [data-testid="stSidebarNavLink"] { animation-delay: 180ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(7) [data-testid="stSidebarNavLink"] { animation-delay: 210ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(8) [data-testid="stSidebarNavLink"] { animation-delay: 240ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(9) [data-testid="stSidebarNavLink"] { animation-delay: 270ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(10) [data-testid="stSidebarNavLink"] { animation-delay: 300ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(11) [data-testid="stSidebarNavLink"] { animation-delay: 330ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(12) [data-testid="stSidebarNavLink"] { animation-delay: 360ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(13) [data-testid="stSidebarNavLink"] { animation-delay: 390ms; }
+section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(14) [data-testid="stSidebarNavLink"] { animation-delay: 420ms; }
+section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarNavLink"] > span {
+  animation: denriLabelIn 360ms ease both;
+}
+@keyframes denriRailIn { from { opacity: 0; transform: translateX(-14px) scale(0.6); } to { opacity: 1; transform: none; } }
+@keyframes denriLabelIn { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+/* the » button beside the rail reopens the full sidebar */
+[data-testid="stExpandSidebarButton"] { transition: transform 200ms ease; }
+[data-testid="stExpandSidebarButton"]:hover { transform: translateX(3px) scale(1.12); }
 
 /* ---------- glass cards (bordered containers) ---------- */
 [data-denri-card] {
@@ -153,10 +233,26 @@ section[data-testid="stSidebar"] > div:first-child {
   backdrop-filter: none; padding: 2px 0;
 }
 [data-denri-card] [data-testid="stMetric"]:hover { transform: none; }
+/* Figures are never cut short ("KES 81,0…"). The script below fits each value
+   to its own tile: short ones stay full size, long ones shrink just enough to
+   show in full at any zoom or column width, and wrap only as a last resort.
+   Labels and delta tags wrap instead of being clipped. */
 [data-testid="stMetricLabel"] p { color: var(--denri-muted); font-weight: 600; font-size: 0.8rem; }
-[data-testid="stMetricValue"] { font-weight: 800; letter-spacing: -0.02em; font-size: clamp(1.25rem, 1.65vw, 2rem); }
-/* long figures wrap instead of being cut to "KES 82,3…" */
-[data-testid="stMetricValue"] > div { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.15; }
+[data-testid="stMetricValue"] { font-weight: 800; letter-spacing: -0.02em; line-height: 1.12; font-size: 2rem; }
+[data-testid="stMetricValue"] p { font-size: inherit; line-height: inherit; margin: 0; }
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] > div, [data-testid="stMetricValue"] p {
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+[data-testid="stMetric"] label, [data-testid="stMetric"] label *,
+[data-testid="stMetricDelta"], [data-testid="stMetricDelta"] * {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+[data-testid="stMetricDelta"] { height: auto !important; align-items: flex-start; max-width: 100%; }
+[data-testid="stMetricDelta"] svg { flex-shrink: 0; margin-top: 2px; }
+[data-testid="stMetricDelta"] p { font-size: 0.78rem; line-height: 1.3; }
 
 /* ---------- pill filters: segmented control, pills, tabs ---------- */
 [data-testid="stButtonGroup"] > div {
@@ -279,6 +375,12 @@ _SCRIPT = """
         if (bg && bg !== "rgba(0, 0, 0, 0)") root.style.setProperty("--denri-sidebar-bg", bg);
       }
     }
+    document.querySelectorAll('[data-testid="stSidebarNavLink"]:not([title])').forEach((a) => {
+      const span = a.querySelector("span[label]");
+      const label = span ? span.getAttribute("label") : a.textContent.trim();
+      if (label === "app") a.dataset.denriHome = "1";
+      a.title = label === "app" ? "Home" : label;  // the rail's hover label
+    });
     document.querySelectorAll('[data-testid="stVerticalBlock"][data-test-scroll-behavior]:not([data-denri-seen])')
       .forEach((el) => {
         el.dataset.denriSeen = "1";
@@ -286,17 +388,46 @@ _SCRIPT = """
         if (parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle !== "none") el.dataset.denriCard = "1";
       });
   };
+  // Fit every KPI figure to its tile (see the stMetricValue CSS).
+  const fit = () => {
+    document.querySelectorAll('[data-testid="stMetricValue"]').forEach((v) => {
+      const p = v.querySelector("p") || v;
+      const tile = v.closest('[data-testid="stMetric"]') || v.parentElement;
+      const cs = getComputedStyle(tile);
+      const room = tile.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      if (room <= 0) return;
+      const key = room + "|" + p.textContent;
+      if (p.dataset.denriFit === key) return;
+      p.style.fontSize = "";
+      p.style.whiteSpace = "nowrap";
+      let size = parseFloat(getComputedStyle(p).fontSize);
+      if (p.scrollWidth > room) {
+        size = Math.max(15, Math.floor(size * room / p.scrollWidth));
+        p.style.fontSize = size + "px";
+        while (p.scrollWidth > room && size > 15) { size -= 1; p.style.fontSize = size + "px"; }
+      }
+      p.style.whiteSpace = p.scrollWidth > room ? "normal" : "nowrap";
+      p.dataset.denriFit = key;
+    });
+  };
   let queued = false;
   const schedule = () => {
     if (queued) return;
     queued = true;
-    requestAnimationFrame(() => { queued = false; sync(); });
+    requestAnimationFrame(() => { queued = false; sync(); fit(); });
   };
   new MutationObserver(schedule).observe(document.body, { childList: true, subtree: true });
   new MutationObserver(schedule).observe(document.head, { childList: true, subtree: true, characterData: true });
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", schedule);
+  window.addEventListener("resize", schedule);  // browser zoom fires this too
   window.__denriStyle = schedule;
   sync();
+  fit();
+  // Re-measure once the web font arrives; it is wider than the fallback.
+  if (document.fonts) document.fonts.ready.then(() => {
+    document.querySelectorAll("[data-denri-fit]").forEach((p) => delete p.dataset.denriFit);
+    fit();
+  });
 })();
 </script>
 """
