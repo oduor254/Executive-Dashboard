@@ -41,6 +41,7 @@ _CSS = """
   --denri-tint-4: #e4f0ff;
   /* sidebar liquid glass */
   --denri-side-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.30) 55%, rgba(255, 255, 255, 0.46));
+  --denri-side-solid: rgba(246, 245, 252, 0.94);
   --denri-side-edge: rgba(255, 255, 255, 0.85);
   --denri-side-ink: #17171c;
   --denri-side-muted: #5b5b68;
@@ -77,6 +78,7 @@ html[data-denri-theme="dark"] {
   --denri-tint-3: rgba(90, 210, 160, 0.10);
   --denri-tint-4: rgba(90, 160, 250, 0.11);
   --denri-side-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.07));
+  --denri-side-solid: rgba(22, 22, 30, 0.94);
   --denri-side-edge: rgba(255, 255, 255, 0.22);
   --denri-side-ink: #ececf1;
   --denri-side-muted: #a3a3b2;
@@ -244,7 +246,9 @@ html[data-denri-liquid] .denri-lens {
   content: "Home"; font-size: 0.875rem;
 }
 
-/* collapsed: a slim icon rail instead of vanishing */
+/* collapsed: a slim icon rail instead of vanishing — tablets and desktops
+   only; on phones the sidebar is a drawer over the page, so it hides */
+@media (min-width: 768px) {
 section[data-testid="stSidebar"][aria-expanded="false"] {
   transform: none !important;
   width: 88px !important; min-width: 88px !important; max-width: 88px !important;
@@ -278,6 +282,33 @@ section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(11) [data-t
 section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(12) [data-testid="stSidebarNavLink"] { animation-delay: 360ms; }
 section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(13) [data-testid="stSidebarNavLink"] { animation-delay: 390ms; }
 section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(14) [data-testid="stSidebarNavLink"] { animation-delay: 420ms; }
+}
+
+/* KPI rows wrap onto a second line rather than squeeze a card below a
+   readable width (tablets, split screens) */
+[data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] [data-testid="stMetric"]) { flex-wrap: wrap; }
+[data-testid="stColumn"]:has([data-testid="stMetric"]) { min-width: min(190px, 100%) !important; flex: 1 1 190px !important; }
+
+/* phones: the open drawer is near-solid glass over a dimmed page, so the
+   figures behind it don't show through; the page itself tightens up */
+@media (max-width: 767.98px) {
+  section[data-testid="stSidebar"][aria-expanded="true"] {
+    box-shadow: 0 0 0 100vmax rgba(8, 8, 12, 0.45);
+  }
+  section[data-testid="stSidebar"][aria-expanded="true"] > div:first-child,
+  html[data-denri-liquid] section[data-testid="stSidebar"][aria-expanded="true"] > div:first-child {
+    background:
+      linear-gradient(var(--denri-side-solid), var(--denri-side-solid)) padding-box,
+      linear-gradient(135deg, var(--denri-side-edge), transparent 45%, rgba(255, 255, 255, 0.18)) border-box !important;
+    backdrop-filter: blur(28px) saturate(160%);
+    -webkit-backdrop-filter: blur(28px) saturate(160%);
+  }
+  section[data-testid="stSidebar"][aria-expanded="false"] { box-shadow: none; }
+  [data-testid="stMainBlockContainer"] { padding: 3.6rem 0.9rem 2.5rem; }
+  h1 { font-size: 1.75rem !important; }
+  [data-testid="stMetricValue"] { font-size: 1.6rem; }
+  [data-testid="stSidebarNavLink"] { min-height: 42px; }
+}
 section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarNavLink"] > span {
   animation: denriLabelIn 360ms ease both;
 }
@@ -473,6 +504,7 @@ _SCRIPT = """
       }
     }
     lens();
+    tablet();
     document.querySelectorAll('[data-testid="stSidebarNavLink"]:not([title])').forEach((a) => {
       const span = a.querySelector("span[label]");
       const label = span ? span.getAttribute("label") : a.textContent.trim();
@@ -513,6 +545,21 @@ _SCRIPT = """
     el(drop, "feDisplacementMap", { in: "SourceGraphic", in2: "n", scale: "6", xChannelSelector: "R", yChannelSelector: "G" });
     document.body.appendChild(holder);
   }
+
+  // Tablets open on the icon rail so the page gets the width; once per tab,
+  // so a sidebar opened by hand stays open.
+  let railed = false;
+  const tablet = () => {
+    if (railed) return;
+    if (window.innerWidth < 768 || window.innerWidth >= 1180) { railed = true; return; }
+    try { if (sessionStorage.getItem("denriRail")) { railed = true; return; } } catch (e) {}
+    const side = document.querySelector('section[data-testid="stSidebar"][aria-expanded="true"]');
+    const close = side && side.querySelector('[data-testid="stSidebarCollapseButton"] button');
+    if (!close) return;
+    railed = true;
+    try { sessionStorage.setItem("denriRail", "1"); } catch (e) {}
+    close.click();
+  };
 
   // The sidebar lens: follows the pointer down the page list, springs back to
   // the open page when the pointer leaves, and magnifies whatever it covers.

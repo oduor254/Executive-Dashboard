@@ -147,11 +147,9 @@ def status_color(value: float, warn_at: float, critical_at: float, higher_is_wor
     return STATUS["good"]
 
 
-# Vertical space the chart header takes, in px. The title sits at the top of
-# the figure and the legend on its own row beneath it, so neither is ever
-# drawn over the other or over the plot.
+# Vertical space the chart title takes, in px. The legend hangs beneath it on
+# rows of its own, so neither is ever drawn over the other or over the plot.
 _TITLE_BAND = 44
-_LEGEND_BAND = 34
 
 
 def finalize(fig: go.Figure) -> go.Figure:
@@ -167,7 +165,9 @@ def finalize(fig: go.Figure) -> go.Figure:
                          and (fig.layout.legend.orientation or "h") == "h")
     legend_shown = bool(fig.layout.showlegend) and horizontal_legend
 
-    top = (_TITLE_BAND if title else 12) + (_LEGEND_BAND if legend_shown else 0)
+    # The legend's own rows are added by Plotly (see below), however many it
+    # wraps onto on a narrow phone screen.
+    top = _TITLE_BAND if title else 12
     margin = fig.layout.margin
     fig.update_layout(margin=dict(
         t=top if (title or legend_shown) else (margin.t if margin.t is not None else top),
@@ -184,10 +184,12 @@ def finalize(fig: go.Figure) -> go.Figure:
             font=dict(color=_CHROME[mode()]["TEXT_PRIMARY"], size=15, family=FONT_FAMILY),
         ))
     if legend_shown:
-        # Anchored to the top edge of the plot, i.e. in the band under the title.
+        # Hung from the figure just under the title; anchored to the figure
+        # rather than the plot, Plotly widens the top margin to fit every
+        # row, so a legend that wraps never climbs over the title.
         fig.update_layout(legend=dict(
-            orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom",
-            yref="paper", bgcolor="rgba(0,0,0,0)",
+            orientation="h", x=0, xanchor="left", y=1 - top / (fig.layout.height or 450),
+            yanchor="top", yref="container", bgcolor="rgba(0,0,0,0)",
             font=dict(color=_CHROME[mode()]["TEXT_SECONDARY"], size=12),
         ))
 
