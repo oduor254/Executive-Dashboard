@@ -6,7 +6,8 @@ inject() runs from auth.require_login(), which every page calls first.
 
 CSS can't ask Streamlit which theme is showing, so a small script stamps
 <html data-denri-theme="light|dark"> from the app background's brightness and
-keeps it current when the theme is switched. It also marks bordered
+keeps it current when the theme is switched. The same script runs the
+sidebar's glass lens and its refraction filters. It also marks bordered
 st.container()s with data-denri-card — their markup is otherwise identical to
 a plain container — so only those become glass cards.
 """
@@ -38,6 +39,20 @@ _CSS = """
   --denri-tint-2: #ffe8ee;
   --denri-tint-3: #e3f6ee;
   --denri-tint-4: #e4f0ff;
+  /* sidebar liquid glass */
+  --denri-side-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.30) 55%, rgba(255, 255, 255, 0.46));
+  --denri-side-edge: rgba(255, 255, 255, 0.85);
+  --denri-side-ink: #17171c;
+  --denri-side-muted: #5b5b68;
+  --denri-side-hover: rgba(255, 255, 255, 0.55);
+  --denri-side-on-bg: rgba(255, 255, 255, 0.92);
+  --denri-side-on-fg: #17171c;
+  --denri-side-on-icon: #6d5ce8;
+  --denri-side-shadow: 0 24px 60px rgba(60, 50, 120, 0.16), 0 2px 6px rgba(60, 50, 120, 0.08);
+  --denri-lens: rgba(255, 255, 255, 0.22);
+  --denri-orb-a: rgba(140, 120, 250, 0.55);
+  --denri-orb-b: rgba(255, 150, 190, 0.45);
+  --denri-orb-c: rgba(110, 200, 255, 0.40);
 }
 html[data-denri-theme="dark"] {
   --denri-ink-rgb: 255, 255, 255;
@@ -61,6 +76,19 @@ html[data-denri-theme="dark"] {
   --denri-tint-2: rgba(255, 140, 170, 0.10);
   --denri-tint-3: rgba(90, 210, 160, 0.10);
   --denri-tint-4: rgba(90, 160, 250, 0.11);
+  --denri-side-glass: linear-gradient(160deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.03) 55%, rgba(255, 255, 255, 0.07));
+  --denri-side-edge: rgba(255, 255, 255, 0.22);
+  --denri-side-ink: #ececf1;
+  --denri-side-muted: #a3a3b2;
+  --denri-side-hover: rgba(255, 255, 255, 0.07);
+  --denri-side-on-bg: #c9bffc;
+  --denri-side-on-fg: #121216;
+  --denri-side-on-icon: #121216;
+  --denri-side-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --denri-lens: rgba(255, 255, 255, 0.06);
+  --denri-orb-a: rgba(124, 104, 238, 0.36);
+  --denri-orb-b: rgba(214, 92, 140, 0.22);
+  --denri-orb-c: rgba(60, 140, 230, 0.22);
 }
 
 /* ---------- canvas ---------- */
@@ -83,34 +111,106 @@ h1 { font-weight: 800 !important; letter-spacing: -0.025em; }
 h2, h3 { font-weight: 700 !important; letter-spacing: -0.015em; }
 [data-testid="stCaptionContainer"] { color: var(--denri-muted); }
 
-/* ---------- floating pill sidebar ---------- */
+/* ---------- liquid-glass sidebar ----------
+   Light glass in Light mode, smoked glass in Dark. Colour orbs drift behind
+   it so the glass has something to bend; in Chromium browsers an SVG
+   displacement filter adds the refraction, elsewhere it stays frosted. */
 section[data-testid="stSidebar"] {
   background: transparent !important;
   box-shadow: none;
-}
-section[data-testid="stSidebar"] > div:first-child {
-  margin: 12px 0 12px 12px;
-  height: calc(100% - 24px);
-  border-radius: 26px;
-  background: var(--denri-sidebar-bg, #121216);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 18px 44px rgba(10, 10, 20, 0.28);
-  overflow: hidden;
-}
-[data-testid="stSidebarContent"] { border-radius: 26px; }
-section[data-testid="stSidebar"] {
   transition: width 320ms cubic-bezier(.2, .8, .2, 1), min-width 320ms cubic-bezier(.2, .8, .2, 1),
               transform 320ms cubic-bezier(.2, .8, .2, 1) !important;
 }
+section[data-testid="stSidebar"]::before {
+  content: ""; position: fixed; left: -60px; top: 6vh; width: 340px; height: 88vh; z-index: -1;
+  pointer-events: none; filter: blur(30px);
+  background:
+    radial-gradient(150px 150px at 30% 18%, var(--denri-orb-a), transparent 70%),
+    radial-gradient(170px 170px at 75% 55%, var(--denri-orb-b), transparent 70%),
+    radial-gradient(150px 150px at 25% 88%, var(--denri-orb-c), transparent 70%);
+  animation: denriOrbs 18s ease-in-out infinite alternate;
+}
+@keyframes denriOrbs {
+  0% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(18px, -24px) rotate(8deg); }
+  100% { transform: translate(-10px, 20px) rotate(-6deg); }
+}
+section[data-testid="stSidebar"] > div:first-child {
+  position: relative;
+  margin: 12px 0 12px 12px;
+  height: calc(100% - 24px);
+  border-radius: 28px;
+  /* the glass, plus a specular rim: bright at the top-left, fading round the edge */
+  border: 1.2px solid transparent;
+  background:
+    var(--denri-side-glass) padding-box,
+    linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.12) 32%,
+                    rgba(255, 255, 255, 0.04) 62%, rgba(255, 255, 255, 0.55)) border-box;
+  backdrop-filter: blur(22px) saturate(185%) brightness(1.04);
+  -webkit-backdrop-filter: blur(22px) saturate(185%) brightness(1.04);
+  box-shadow:
+    var(--denri-side-shadow),
+    inset 1.5px 1.5px 0 var(--denri-side-edge),
+    inset -1px -1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 26px rgba(255, 255, 255, 0.10);
+  overflow: hidden;
+}
+html[data-denri-liquid] section[data-testid="stSidebar"] > div:first-child {
+  backdrop-filter: blur(16px) url(#denri-refract) saturate(185%) brightness(1.04);
+}
+/* a soft glare band across the top */
+section[data-testid="stSidebar"] > div:first-child::after {
+  content: ""; position: absolute; left: -20%; top: -12%; width: 140%; height: 34%; pointer-events: none; z-index: 1;
+  background: radial-gradient(ellipse at 40% 0%, rgba(255, 255, 255, 0.35), transparent 65%);
+  opacity: 0.55;
+}
+[data-testid="stSidebarContent"] { border-radius: 28px; background: transparent !important; position: relative; z-index: 3; }
+[data-testid="stSidebarContent"] * { color: var(--denri-side-ink); }
+
+[data-testid="stSidebarNavItems"] { position: relative; }
 [data-testid="stSidebarNavLink"] {
+  position: relative; z-index: 1;
   border-radius: 999px !important;
   margin: 2px 6px;
   gap: 10px;
-  transition: background 160ms ease, transform 160ms ease;
+  background: transparent !important;
+  transition: background 200ms ease;
 }
-[data-testid="stSidebarNavLink"]:hover { transform: translateX(3px); }
-[data-testid="stSidebarNavLink"][aria-current="page"] { background: #c9bffc !important; }
-[data-testid="stSidebarNavLink"][aria-current="page"] span { color: #121216 !important; font-weight: 700; }
+[data-testid="stSidebarNavLink"] > span {
+  transform-origin: 0% 50%;
+  transition: transform 340ms cubic-bezier(.3, 1.5, .5, 1), letter-spacing 340ms ease;
+}
+[data-testid="stSidebarNavLink"][aria-current="page"] {
+  background: var(--denri-side-on-bg) !important;
+  box-shadow: 0 6px 18px rgba(60, 50, 120, 0.14), inset 1px 1px 0 rgba(255, 255, 255, 0.9);
+}
+[data-testid="stSidebarNavLink"][aria-current="page"] span,
+[data-testid="stSidebarNavLink"][aria-current="page"] p { color: var(--denri-side-on-fg) !important; font-weight: 700; }
+
+/* the lens: a drop of glass that glides to whichever page is under the
+   pointer and magnifies it as it passes, like the iOS tab bar */
+.denri-lens {
+  position: absolute; left: 6px; right: 6px; top: 0; height: 36px; z-index: 2; pointer-events: none;
+  border-radius: 999px; opacity: 0;
+  background: var(--denri-lens);
+  backdrop-filter: blur(1.5px) saturate(170%) brightness(1.06);
+  -webkit-backdrop-filter: blur(1.5px) saturate(170%) brightness(1.06);
+  box-shadow:
+    inset 1.5px 1.5px 0 rgba(255, 255, 255, 0.85),
+    inset -1px -1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -6px 14px rgba(255, 255, 255, 0.18),
+    0 10px 24px rgba(40, 30, 90, 0.18);
+  transition: transform 460ms cubic-bezier(.3, 1.35, .45, 1), opacity 220ms ease,
+              height 300ms ease, left 300ms ease, right 300ms ease;
+}
+html[data-denri-liquid] .denri-lens {
+  backdrop-filter: url(#denri-lens-refract) saturate(170%) brightness(1.06);
+}
+.denri-lens.on { opacity: 1; }
+.denri-lens.moving { animation: denriSquash 460ms cubic-bezier(.3, 1.35, .45, 1); }
+@keyframes denriSquash { 0% { scale: 1 1; } 35% { scale: 1.04 0.86; } 70% { scale: 0.99 1.05; } 100% { scale: 1 1; } }
+[data-denri-lensed] > span { transform: scale(1.16); letter-spacing: 0.01em; }
+[data-denri-lensed]::before { transform: scale(1.28) !important; }
 
 /* every page gets an icon (Material Symbols, already loaded by Streamlit) */
 [data-testid="stSidebarNavLink"]::before {
@@ -119,11 +219,11 @@ section[data-testid="stSidebar"] {
   font-size: 20px; line-height: 1; font-weight: 400;
   font-feature-settings: "liga"; -webkit-font-feature-settings: "liga";
   flex-shrink: 0; width: 22px; text-align: center;
-  color: #a9a9b8;
-  transition: transform 260ms cubic-bezier(.3, 1.6, .5, 1), color 160ms ease;
+  color: var(--denri-side-muted);
+  transition: transform 340ms cubic-bezier(.3, 1.6, .5, 1), color 160ms ease;
 }
-[data-testid="stSidebarNavLink"]:hover::before { transform: scale(1.18) rotate(-6deg); color: #ececf1; }
-[data-testid="stSidebarNavLink"][aria-current="page"]::before { color: #121216; }
+[data-testid="stSidebarNavLink"]:hover::before { color: var(--denri-side-ink); }
+[data-testid="stSidebarNavLink"][aria-current="page"]::before { color: var(--denri-side-on-icon); }
 [data-denri-home] { --denri-icon: "home"; }
 [data-testid="stSidebarNavLink"][href$="/Sales"] { --denri-icon: "payments"; }
 [data-testid="stSidebarNavLink"][href$="/Product_Sales"] { --denri-icon: "shopping_bag"; }
@@ -160,11 +260,9 @@ section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarN
 }
 section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"] > span { display: none; }
 section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"]::before { font-size: 22px; }
-section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"]:hover {
-  transform: scale(1.08); background: rgba(255, 255, 255, 0.08);
-}
+section[data-testid="stSidebar"][aria-expanded="false"] .denri-lens { left: 50%; right: auto; width: 44px; margin-left: -22px; height: 44px; }
 section[data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarNavLink"][aria-current="page"] {
-  box-shadow: 0 0 0 4px rgba(201, 191, 252, 0.18), 0 8px 18px rgba(124, 104, 238, 0.35);
+  box-shadow: 0 0 0 4px rgba(165, 148, 249, 0.18), 0 8px 18px rgba(124, 104, 238, 0.30), inset 1px 1px 0 rgba(255, 255, 255, 0.9);
 }
 section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(1) [data-testid="stSidebarNavLink"] { animation-delay: 30ms; }
 section[data-testid="stSidebar"][aria-expanded="false"] li:nth-child(2) [data-testid="stSidebarNavLink"] { animation-delay: 60ms; }
@@ -367,14 +465,7 @@ _SCRIPT = """
       const mode = lum(getComputedStyle(app).backgroundColor) < 0.5 ? "dark" : "light";
       if (root.dataset.denriTheme !== mode) root.dataset.denriTheme = mode;
     }
-    const side = document.querySelector('section[data-testid="stSidebar"]');
-    if (side) {
-      const inner = side.querySelector('[data-testid="stSidebarContent"]');
-      if (inner) {
-        const bg = getComputedStyle(inner).backgroundColor;
-        if (bg && bg !== "rgba(0, 0, 0, 0)") root.style.setProperty("--denri-sidebar-bg", bg);
-      }
-    }
+    lens();
     document.querySelectorAll('[data-testid="stSidebarNavLink"]:not([title])').forEach((a) => {
       const span = a.querySelector("span[label]");
       const label = span ? span.getAttribute("label") : a.textContent.trim();
@@ -388,6 +479,78 @@ _SCRIPT = """
         if (parseFloat(cs.borderTopWidth) > 0 && cs.borderTopStyle !== "none") el.dataset.denriCard = "1";
       });
   };
+  // Refraction needs SVG filters inside backdrop-filter, which only Chromium
+  // draws; other browsers keep the plain frosted glass.
+  const brands = (navigator.userAgentData && navigator.userAgentData.brands) || [];
+  if (brands.some((b) => /Chromium/.test(b.brand))) root.dataset.denriLiquid = "1";
+  if (!document.getElementById("denri-glass-filters")) {
+    const ns = "http://www.w3.org/2000/svg";
+    const holder = document.createElementNS(ns, "svg");
+    holder.id = "denri-glass-filters";
+    holder.setAttribute("width", "0"); holder.setAttribute("height", "0");
+    holder.style.position = "absolute";
+    // Built node by node: markup inside this script would be stripped.
+    const el = (parent, tag, attrs) => {
+      const node = document.createElementNS(ns, tag);
+      Object.entries(attrs).forEach(([k, v]) => node.setAttribute(k, v));
+      parent.appendChild(node);
+      return node;
+    };
+    const box = { x: "0", y: "0", width: "100%", height: "100%" };
+    const panel = el(holder, "filter", { id: "denri-refract", ...box });
+    el(panel, "feTurbulence", { type: "fractalNoise", baseFrequency: "0.006 0.009", numOctaves: "2", seed: "7", result: "n" });
+    el(panel, "feGaussianBlur", { in: "n", stdDeviation: "8", result: "nb" });
+    el(panel, "feDisplacementMap", { in: "SourceGraphic", in2: "nb", scale: "16", xChannelSelector: "R", yChannelSelector: "G" });
+    const drop = el(holder, "filter", { id: "denri-lens-refract", ...box });
+    el(drop, "feTurbulence", { type: "fractalNoise", baseFrequency: "0.02 0.05", numOctaves: "1", seed: "3", result: "n" });
+    el(drop, "feDisplacementMap", { in: "SourceGraphic", in2: "n", scale: "6", xChannelSelector: "R", yChannelSelector: "G" });
+    document.body.appendChild(holder);
+  }
+
+  // The sidebar lens: follows the pointer down the page list, springs back to
+  // the open page when the pointer leaves, and magnifies whatever it covers.
+  let lensFor = null;
+  const place = (lensEl, link, list, magnify = true) => {
+    if (!link) { lensEl.classList.remove("on"); return; }
+    const top = link.getBoundingClientRect().top - list.getBoundingClientRect().top;
+    if (lensEl.dataset.y !== String(top)) {
+      lensEl.classList.remove("moving"); void lensEl.offsetWidth; lensEl.classList.add("moving");
+    }
+    lensEl.dataset.y = String(top);
+    lensEl.style.height = link.offsetHeight + "px";
+    lensEl.style.transform = `translateY(${top}px)`;
+    lensEl.classList.add("on");
+    list.querySelectorAll("[data-denri-lensed]").forEach((l) => { if (l !== link) delete l.dataset.denriLensed; });
+    if (magnify) link.dataset.denriLensed = "1";
+    clearTimeout(lensEl.fade);
+  };
+  const lens = () => {
+    const list = document.querySelector('[data-testid="stSidebarNavItems"]');
+    if (!list) return;
+    let lensEl = list.querySelector(":scope > .denri-lens");
+    if (!lensEl) {
+      lensEl = document.createElement("div");
+      lensEl.className = "denri-lens";
+      list.appendChild(lensEl);
+    }
+    if (lensFor !== list) {
+      lensFor = list;
+      // On leaving, the lens glides back onto the open page and dissolves into it.
+      const home = () => {
+        place(lensEl, list.querySelector('[data-testid="stSidebarNavLink"][aria-current="page"]'), list, false);
+        lensEl.fade = setTimeout(() => lensEl.classList.remove("on"), 420);
+      };
+      list.addEventListener("pointerover", (e) => {
+        const link = e.target.closest('[data-testid="stSidebarNavLink"]');
+        if (link) place(lensEl, link, list);
+      });
+      list.addEventListener("pointerleave", () => {
+        list.querySelectorAll("[data-denri-lensed]").forEach((l) => delete l.dataset.denriLensed);
+        home();
+      });
+    }
+  };
+
   // Fit every KPI figure to its tile (see the stMetricValue CSS).
   const fit = () => {
     document.querySelectorAll('[data-testid="stMetricValue"]').forEach((v) => {

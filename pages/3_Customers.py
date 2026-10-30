@@ -33,7 +33,7 @@ MAX_TABLE_ROWS = 5000
 GENDER_COLORS = {
     "Male": theme.CATEGORICAL[0],
     "Female": theme.CATEGORICAL[2],
-    "N/A": theme.TEXT_MUTED,
+    "Corporate": theme.CATEGORICAL[3],
 }
 
 
@@ -118,7 +118,8 @@ def render_customers(start_date: date, end_date: date) -> None:
 
     with col_gender:
         with st.container(border=True):
-            gender_counts = filtered["Gender"].value_counts().reindex(["Male", "Female", "N/A"]).fillna(0)
+            # Corporate orders carry "Corporate" as their gender in Odoo.
+            gender_counts = filtered["Gender"].value_counts().reindex(list(GENDER_COLORS)).fillna(0)
             gender_pct = (gender_counts / gender_counts.sum() * 100) if gender_counts.sum() else gender_counts
             fig = go.Figure()
             fig.add_bar(

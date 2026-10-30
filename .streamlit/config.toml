@@ -19,11 +19,12 @@ borderColor = "#e2e4ea"
 dataframeHeaderBackgroundColor = "#f3f4f7"
 
 [theme.light.sidebar]
-primaryColor = "#c9bffc"
-backgroundColor = "#121216"
-secondaryBackgroundColor = "#1e1e24"
-textColor = "#ececf1"
-borderColor = "#26262e"
+# frosted light glass (lib/style.py draws the glass itself)
+primaryColor = "#6d5ce8"
+backgroundColor = "#f3f2fa"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#17171c"
+borderColor = "#e2e4ea"
 
 [theme.dark]
 primaryColor = "#a594f9"
