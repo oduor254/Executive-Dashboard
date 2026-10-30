@@ -25,14 +25,14 @@ _PERIOD_CSS = f"""
   margin-bottom: 2px !important;
 }}
 .denri-period-wrap div[data-baseweb="select"] > div {{
-  background: #10161a;
-  border: 1px solid rgba(255,255,255,0.09);
+  background: var(--denri-field, #10161a);
+  border: 1px solid var(--denri-hair, rgba(255,255,255,0.09));
   border-radius: 9px;
   min-height: 36px;
   font-size: 0.86rem;
 }}
 .denri-period-wrap div[data-baseweb="select"] > div:hover {{
-  border-color: rgba(25,195,154,0.45);
+  border-color: rgba(165,148,249,0.55);
 }}
 /* dropdown menu */
 ul[data-baseweb="menu"] li[aria-selected="true"] {{
@@ -40,7 +40,7 @@ ul[data-baseweb="menu"] li[aria-selected="true"] {{
   color: {ui.ACCENT} !important;
 }}
 ul[data-baseweb="menu"] li:hover {{
-  background: rgba(255,255,255,0.05);
+  background: rgba(var(--denri-ink-rgb, 255,255,255),0.05);
 }}
 </style>
 """

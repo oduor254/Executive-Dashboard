@@ -115,7 +115,7 @@ def filterable_table(
             options["onRowDataUpdated"] = js
             options["getRowStyle"] = JsCode(
                 "function(p) { if (p.node.rowPinned === 'bottom') "
-                "return {fontWeight: 'bold', borderTop: '2px solid rgba(255,255,255,0.35)'}; }")
+                "return {fontWeight: 'bold', borderTop: '2px solid rgba(128,128,140,0.45)'}; }")
     AgGrid(
         df,
         gridOptions=options,

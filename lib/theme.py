@@ -1,8 +1,8 @@
 """Shared chart styling: the validated palette from the dataviz skill,
 applied consistently across every page via one Plotly layout template.
 
-Dark mode is the selected theme (matches .streamlit/config.toml base="dark") —
-its own validated steps from the same ramps, not an automatic light flip.
+The hues are the same in Light and Dark; only the chrome (text, gridlines)
+switches, via the module __getattr__ below.
 """
 from __future__ import annotations
 
@@ -45,41 +45,76 @@ DIVERGING = {"cool": "#2a78d6", "warm": "#e34948", "mid": "#383835"}
 # reads as "not one of the named series" rather than as a ninth hue.
 OTHER = "#6f6e69"
 
-# Dark chart chrome
-CHART_SURFACE = "#1a1a19"
-PAGE_PLANE = "#0d0d0d"
-TEXT_PRIMARY = "#ffffff"
-TEXT_SECONDARY = "#c3c2b7"
-TEXT_MUTED = "#898781"
-GRIDLINE = "#2c2c2a"
-AXIS_LINE = "#383835"
-BORDER = "rgba(255,255,255,0.10)"
+# Chart chrome per theme. Charts sit on the glass cards from lib/style.py, so
+# their own surface is transparent; text and gridlines follow whichever theme
+# the viewer has picked (st.context.theme — Light, Dark or System).
+_CHROME = {
+    "dark": {
+        "CHART_SURFACE": "rgba(0,0,0,0)",
+        "HOVER_SURFACE": "#1b1b22",
+        "PAGE_PLANE": "#0b0b0f",
+        "TEXT_PRIMARY": "#f2f2f5",
+        "TEXT_SECONDARY": "#c4c4cf",
+        "TEXT_MUTED": "#8d8d9a",
+        "GRIDLINE": "rgba(255,255,255,0.07)",
+        "AXIS_LINE": "rgba(255,255,255,0.16)",
+        "BORDER": "rgba(255,255,255,0.10)",
+    },
+    "light": {
+        "CHART_SURFACE": "rgba(0,0,0,0)",
+        "HOVER_SURFACE": "#ffffff",
+        "PAGE_PLANE": "#eef0f4",
+        "TEXT_PRIMARY": "#17171c",
+        "TEXT_SECONDARY": "#4b4b57",
+        "TEXT_MUTED": "#7b7b88",
+        "GRIDLINE": "rgba(23,23,28,0.07)",
+        "AXIS_LINE": "rgba(23,23,28,0.18)",
+        "BORDER": "rgba(23,23,28,0.10)",
+    },
+}
+
+
+def mode() -> str:
+    """'light' or 'dark' — the theme this viewer's browser is showing."""
+    try:
+        kind = st.context.theme.type
+    except Exception:  # outside a script run (tests, threads)
+        kind = None
+    return "light" if kind == "light" else "dark"
+
+
+def __getattr__(name: str):
+    # theme.TEXT_PRIMARY etc. resolve per viewer, at the moment they're used.
+    if name in _CHROME["dark"]:
+        return _CHROME[mode()][name]
+    raise AttributeError(name)
 
 
 def apply_layout(fig: go.Figure, *, show_legend: bool | None = None) -> go.Figure:
     """Apply consistent chrome: fonts, gridlines, hover, margins, colorway."""
+    c = _CHROME[mode()]
     n_series = sum(1 for _ in fig.data)
     if show_legend is None:
         show_legend = n_series >= 2
 
     fig.update_layout(
         colorway=CATEGORICAL,
-        font=dict(family=FONT_FAMILY, color=TEXT_SECONDARY, size=13),
-        title_font=dict(color=TEXT_PRIMARY, size=15),
-        paper_bgcolor=CHART_SURFACE,
-        plot_bgcolor=CHART_SURFACE,
+        font=dict(family=FONT_FAMILY, color=c["TEXT_SECONDARY"], size=13),
+        title_font=dict(color=c["TEXT_PRIMARY"], size=15),
+        paper_bgcolor=c["CHART_SURFACE"],
+        plot_bgcolor=c["CHART_SURFACE"],
         showlegend=show_legend,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=8, r=8, t=40 if show_legend else 24, b=8),
         hovermode="x unified",
-        hoverlabel=dict(bgcolor=CHART_SURFACE, font=dict(color=TEXT_PRIMARY)),
+        hoverlabel=dict(bgcolor=c["HOVER_SURFACE"], font=dict(color=c["TEXT_PRIMARY"])),
     )
     fig.update_xaxes(
-        showgrid=False, linecolor=AXIS_LINE, tickfont=dict(color=TEXT_MUTED),
+        showgrid=False, linecolor=c["AXIS_LINE"], tickfont=dict(color=c["TEXT_MUTED"]),
     )
     fig.update_yaxes(
-        showgrid=True, gridcolor=GRIDLINE, zeroline=False,
-        tickfont=dict(color=TEXT_MUTED),
+        showgrid=True, gridcolor=c["GRIDLINE"], zeroline=False,
+        tickfont=dict(color=c["TEXT_MUTED"]),
     )
     return fig
 
@@ -146,14 +181,14 @@ def finalize(fig: go.Figure) -> go.Figure:
             text=title, x=0, xref="container", xanchor="left",
             y=1, yref="container", yanchor="top",
             pad=dict(t=14, l=12),
-            font=dict(color=TEXT_PRIMARY, size=15, family=FONT_FAMILY),
+            font=dict(color=_CHROME[mode()]["TEXT_PRIMARY"], size=15, family=FONT_FAMILY),
         ))
     if legend_shown:
         # Anchored to the top edge of the plot, i.e. in the band under the title.
         fig.update_layout(legend=dict(
             orientation="h", x=0, xanchor="left", y=1.0, yanchor="bottom",
             yref="paper", bgcolor="rgba(0,0,0,0)",
-            font=dict(color=TEXT_SECONDARY, size=12),
+            font=dict(color=_CHROME[mode()]["TEXT_SECONDARY"], size=12),
         ))
 
     # Long branch and product names reserve the room they need instead of

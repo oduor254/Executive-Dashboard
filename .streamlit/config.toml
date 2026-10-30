@@ -1,10 +1,45 @@
+# Light, Dark and "Use system setting" all come from the two sections below —
+# Streamlit's ⋮ → Settings menu lists them once both are defined. The glass
+# card / pill styling on top of these lives in lib/style.py.
 [theme]
-base = "dark"
-primaryColor = "#3987e5"
-backgroundColor = "#0d0d0d"
-secondaryBackgroundColor = "#1a1a19"
-textColor = "#ffffff"
-font = "sans serif"
+font = "Plus Jakarta Sans:https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap, sans-serif"
+headingFont = "Plus Jakarta Sans, sans-serif"
+baseRadius = "14px"
+buttonRadius = "full"
+showSidebarBorder = false
+showWidgetBorder = true
+
+[theme.light]
+primaryColor = "#18181b"
+backgroundColor = "#eef0f4"
+secondaryBackgroundColor = "#f6f7fa"
+textColor = "#17171c"
+linkColor = "#6d5ce8"
+borderColor = "#e2e4ea"
+dataframeHeaderBackgroundColor = "#f3f4f7"
+
+[theme.light.sidebar]
+primaryColor = "#c9bffc"
+backgroundColor = "#121216"
+secondaryBackgroundColor = "#1e1e24"
+textColor = "#ececf1"
+borderColor = "#26262e"
+
+[theme.dark]
+primaryColor = "#a594f9"
+backgroundColor = "#0b0b0f"
+secondaryBackgroundColor = "#17171d"
+textColor = "#f2f2f5"
+linkColor = "#b9acfb"
+borderColor = "#25252d"
+dataframeHeaderBackgroundColor = "#16161c"
+
+[theme.dark.sidebar]
+primaryColor = "#c9bffc"
+backgroundColor = "#18181f"
+secondaryBackgroundColor = "#1f1f26"
+textColor = "#ececf1"
+borderColor = "#2a2a33"
 
 [server]
 runOnSave = true

@@ -75,31 +75,31 @@ _LEDGER_CSS = """
 .denri-led, .denri-lb { display: flex; flex-direction: column; font-size: 0.86rem; }
 .denri-led-row, .denri-lb-row {
   display: grid; align-items: center; padding: 7px 10px; gap: 8px;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(var(--denri-ink-rgb, 255,255,255),0.06);
 }
 .denri-led-row { grid-template-columns: 4px 1.6fr 1.4fr 0.8fr 0.5fr 1.4fr; }
 .denri-lb-row { grid-template-columns: 28px 1.4fr repeat(6, 0.75fr) 1.3fr; }
 .denri-led-head, .denri-lb-head {
   color: var(--denri-muted, #898781); font-size: 0.72rem; font-weight: 600;
-  letter-spacing: 0.04em; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.14);
+  letter-spacing: 0.04em; text-transform: uppercase; border-bottom: 1px solid rgba(var(--denri-ink-rgb, 255,255,255),0.14);
 }
-.denri-led-body:hover, .denri-lb-body:hover { background: rgba(255,255,255,0.03); }
+.denri-led-body:hover, .denri-lb-body:hover { background: rgba(var(--denri-ink-rgb, 255,255,255),0.03); }
 .denri-led-spine { width: 4px; height: 22px; border-radius: 2px; }
-.denri-led-shop, .denri-lb-shop { font-weight: 600; color: #ffffff; }
-.denri-led-days, .denri-led-turn { color: #c3c2b7; }
+.denri-led-shop, .denri-lb-shop { font-weight: 600; color: var(--denri-text, #ffffff); }
+.denri-led-days, .denri-led-turn { color: var(--denri-text-2, #c3c2b7); }
 .denri-led-bags { text-align: right; font-variant-numeric: tabular-nums; }
 .denri-led-none { color: var(--denri-muted, #898781); font-style: italic; }
 .denri-led-out { color: #e66767; font-weight: 600; }
-.denri-lb-num { text-align: right; font-variant-numeric: tabular-nums; color: #c3c2b7; }
+.denri-lb-num { text-align: right; font-variant-numeric: tabular-nums; color: var(--denri-text-2, #c3c2b7); }
 .denri-lb-rank {
   display: flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: 50%; background: rgba(255,255,255,0.08);
+  width: 22px; height: 22px; border-radius: 50%; background: rgba(var(--denri-ink-rgb, 255,255,255),0.08);
   font-weight: 700; font-size: 0.75rem;
 }
 .denri-lb-rank.top { background: rgba(25,195,154,0.18); color: #19c39a; }
 .denri-lb-score { display: flex; align-items: center; gap: 8px; }
 .denri-lb-track {
-  flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.08); overflow: hidden;
+  flex: 1; height: 6px; border-radius: 3px; background: rgba(var(--denri-ink-rgb, 255,255,255),0.08); overflow: hidden;
 }
 .denri-lb-bar { display: block; height: 100%; border-radius: 3px; }
 .denri-lb-val { font-weight: 700; font-variant-numeric: tabular-nums; width: 34px; text-align: right; }
@@ -1172,8 +1172,8 @@ def _receiving(df, *, with_metrics: bool = True) -> None:
                 # line per segment and lose the card.
                 hovermode="closest",
                 hoverlabel=dict(
-                    bgcolor="#12181b",
-                    bordercolor="rgba(255,255,255,0.14)",
+                    bgcolor=theme.HOVER_SURFACE,
+                    bordercolor=theme.BORDER,
                     font=dict(color=theme.TEXT_PRIMARY, size=12,
                               family=theme.FONT_FAMILY),
                     align="left",

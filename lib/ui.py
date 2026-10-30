@@ -8,7 +8,7 @@ from lib import theme
 # Brand accent — theme.CATEGORICAL[0] is the one hue every decorative visual
 # in this app uses (see lib/auth.py's login screen), so widget chrome outside
 # the chart layer borrows it here rather than picking its own color.
-TEXT_MUTED = theme.TEXT_MUTED
+TEXT_MUTED = "var(--denri-muted, #8d8d9a)"  # follows Light/Dark (lib/style.py)
 ACCENT = theme.CATEGORICAL[0]
 ACCENT_SOFT = f"{ACCENT}26"  # ~15% opacity, for a selected-state background
 
@@ -30,14 +30,14 @@ def loading_slot():
     with slot.container():
         st.markdown(
             f"""
-            <div style="padding: 4rem 0; text-align: center; color: {theme.TEXT_MUTED};">
+            <div style="padding: 4rem 0; text-align: center; color: var(--denri-muted, #8d8d9a);">
                 <div class="denri-loading-spinner"></div>
                 <div style="margin-top: 0.75rem; font-size: 0.9rem;">Loading…</div>
             </div>
             <style>
             .denri-loading-spinner {{
                 width: 32px; height: 32px; margin: 0 auto;
-                border: 3px solid rgba(255,255,255,0.15);
+                border: 3px solid rgba(var(--denri-ink-rgb, 255,255,255),0.12);
                 border-top-color: {theme.CATEGORICAL[0]};
                 border-radius: 50%;
                 animation: denri-loading-spin 0.8s linear infinite;
