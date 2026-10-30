@@ -463,7 +463,14 @@ _SCRIPT = """
     const app = document.querySelector(".stApp");
     if (app) {
       const mode = lum(getComputedStyle(app).backgroundColor) < 0.5 ? "dark" : "light";
-      if (root.dataset.denriTheme !== mode) root.dataset.denriTheme = mode;
+      const was = root.dataset.denriTheme;
+      if (was !== mode) {
+        root.dataset.denriTheme = mode;
+        // Charts are coloured on the server from the theme it last saw, and
+        // switching themes doesn't rerun the app, so ask for a rerun.
+        const rerun = was && document.querySelector(".st-key-denri_theme_sync button");
+        if (rerun) rerun.click();
+      }
     }
     lens();
     document.querySelectorAll('[data-testid="stSidebarNavLink"]:not([title])').forEach((a) => {
@@ -608,3 +615,6 @@ def inject() -> None:
                      ':root, html[data-denri-theme="dark"] {' if mode != "light" else
                      'html[data-denri-theme="dark"] {', 1))
     st.html(_SCRIPT, unsafe_allow_javascript=True)
+    # Hidden; the script clicks it after a theme switch to redraw the charts.
+    st.html("<style>.st-key-denri_theme_sync { display: none !important; }</style>")
+    st.button("Sync theme", key="denri_theme_sync")
