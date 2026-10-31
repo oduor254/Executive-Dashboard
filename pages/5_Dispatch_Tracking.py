@@ -183,6 +183,57 @@ def _waterfall(row: pd.Series, title: str) -> go.Figure:
     return fig
 
 
+def _bags_dispatched(shops: pd.DataFrame, transits: pd.DataFrame, shop: str, pick) -> None:
+    if transits.empty:
+        st.info("Nothing was dispatched to the shops in this period.")
+        return
+    lines = pick(transits.assign(Shop=transits["Shop ID"].map(dispatch.shop_names(shops))))
+    per_bag, matrix, per_sku = dispatch.dispatched_bags(shops, lines)
+    if per_sku.empty:
+        st.info(f"Nothing was dispatched to {shop} in this period.")
+        return
+    total = per_sku[["Dispatched", "Received", "In Transit"]].sum()
+    top = per_bag.iloc[0]
+    _kpis([
+        ("Bags Dispatched", f"{total['Dispatched']:,.0f}",
+         f"in {lines['Transit'].nunique():,} dispatches to {per_sku['Shop'].nunique():,} shops"),
+        ("Received", f"{total['Received']:,.0f}",
+         f"{total['Received'] / total['Dispatched'] * 100:.0f}% taken into the shops" if total["Dispatched"] else None),
+        ("Still in Transit", f"{total['In Transit']:,.0f}", "bags on the road"),
+        ("Bag Types", f"{len(per_bag):,}", f"{per_sku['SKU'].nunique():,} SKUs (bag + colour)"),
+        ("Most Dispatched", str(top["Bag"]), f"{top['Dispatched']:,.0f} bags · {top['Share %']:.0f}%"),
+    ])
+    st.caption("Every bag that left dispatch for the shops in the period, by dispatch date — whoever "
+               "raised it (the shop, CBD, corporate, marketing, a prepayment or a redistribution). "
+               "Website and Ktda take their stock straight from CBD/Stock, so they only show here "
+               "when something was dispatched to them.")
+
+    with st.container(border=True):
+        b = per_bag.head(20).iloc[::-1]
+        fig = go.Figure()
+        for col, colour in (("Received", theme.CATEGORICAL[1]), ("In Transit", theme.CATEGORICAL[3])):
+            fig.add_bar(y=b["Bag"], x=b[col], orientation="h", name=col, marker=dict(color=colour),
+                        hovertemplate=f"<b>%{{y}}</b><br>{col}: %{{x:,.0f}} bags<extra></extra>")
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(title=f"Bags dispatched{'' if shop == 'All shops' else ' to ' + shop}"
+                                " — top 20, received vs still in transit",
+                          barmode="stack", hovermode="closest", height=max(380, 26 * len(b) + 110))
+        theme.show(fig)
+        grid.filterable_table(per_bag, pinned_columns=("Bag",), height=380)
+
+    if shop == "All shops":
+        st.subheader("Bags by Shop")
+        with st.container(border=True):
+            st.caption("Bags dispatched to each shop, bag by bag — shops with the most on the left.")
+            grid.filterable_table(matrix, pinned_columns=("Bag", "Total"), height=460)
+
+    st.subheader("By Shop, Bag and Colour")
+    with st.container(border=True):
+        st.caption("Each SKU sent to each shop: how many went, how many arrived, what is still in transit, "
+                   "who raised the dispatches and when the first and last left.")
+        grid.filterable_table(per_sku, pinned_columns=("Shop", "Bag"), height=460)
+
+
 def render_shop_requests() -> None:
     c1, c2, c3 = st.columns([3, 1.4, 1])
     with c1:
@@ -204,7 +255,7 @@ def render_shop_requests() -> None:
                "(the nightly snapshots)" + (" — today's closes tonight, so the period runs to last night."
                                              if closed.date() < end else "."))
 
-    views = ["📊 Stock Movement", "📬 Stock Outside Requests", "✅ Request Fulfilment"]
+    views = ["📊 Stock Movement", "🚚 Bags Dispatched", "📬 Stock Outside Requests", "✅ Request Fulfilment"]
     view = st.segmented_control("View", views, default=views[0], key="dispatch_request_view",
                                 label_visibility="collapsed") or views[0]
 
@@ -244,6 +295,9 @@ def render_shop_requests() -> None:
             grid.filterable_table(detail, pinned_columns=("Shop", "SKU"), height=460)
 
     elif view == views[1]:
+        _bags_dispatched(shops, data["transits"], shop, pick)
+
+    elif view == views[2]:
         sent, direct = dispatch.outside_requests(shops, data["transits"], data["moves"])
         sent, direct = pick(sent), pick(direct)
         _kpis([

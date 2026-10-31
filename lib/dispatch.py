@@ -157,6 +157,42 @@ def outside_requests(shops: pd.DataFrame, transits: pd.DataFrame, moves: pd.Data
     return sent, direct
 
 
+# --------------------------------------------------------- bags dispatched ---
+
+def dispatched_bags(shops: pd.DataFrame, transits: pd.DataFrame
+                    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(per bag, bag × shop, per shop / bag / SKU): the bags that left
+    dispatch for the shops in the period, by dispatch date — how many went,
+    how many the shops have taken in and how many are still on the road."""
+    names = shop_names(shops)
+    if transits.empty:
+        return transits, transits, transits
+    t = transits[transits["Shop ID"].isin(names)].copy()
+    t["Shop"] = t["Shop ID"].map(names)
+    t["Bag"] = t["SKU"].map(taxonomy.group_of)
+    t["Raised As"] = [REQUEST_NAMES.get(r, r) if s == "order" else SOURCE_NAMES.get(s, s)
+                      for s, r in zip(t["Source"], t["Request Type"].fillna(""))]
+    sums = dict(Dispatched=("Dispatched", "sum"), Received=("Received", "sum"),
+                **{"In Transit": ("In Transit", "sum")})
+
+    per_bag = t.groupby("Bag", as_index=False).agg(
+        **sums, Shops=("Shop", "nunique"), Dispatches=("Transit", "nunique"), SKUs=("SKU", "nunique"))
+    per_bag["Share %"] = (per_bag["Dispatched"] / per_bag["Dispatched"].sum() * 100).round(1)
+    per_bag = per_bag.sort_values("Dispatched", ascending=False)
+
+    matrix = t.pivot_table(index="Bag", columns="Shop", values="Dispatched", aggfunc="sum", fill_value=0)
+    matrix = matrix[matrix.sum().sort_values(ascending=False).index]
+    matrix.insert(0, "Total", matrix.sum(axis=1))
+    matrix = matrix.sort_values("Total", ascending=False).reset_index()
+
+    per_sku = (t.groupby(["Shop", "Bag", "SKU"], as_index=False)
+               .agg(**sums, Dispatches=("Transit", "nunique"),
+                    **{"Raised As": ("Raised As", lambda v: ", ".join(sorted(set(v)))),
+                       "First Sent": ("Dispatched On", "min"), "Last Sent": ("Dispatched On", "max")})
+               .sort_values(["Shop", "Dispatched"], ascending=[True, False]))
+    return per_bag, matrix, per_sku
+
+
 # ------------------------------------------------------ request fulfilment ---
 
 OPEN_STATES = {"submitted", "approved"}
