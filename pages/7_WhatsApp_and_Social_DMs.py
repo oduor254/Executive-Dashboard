@@ -7,7 +7,8 @@ logged differently and convert through different routes.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from lib import auth, charts, db, filters, grid, queries, stock_planning, theme
+from lib import lead_recycling as lr
 
 st.set_page_config(page_title=auth.page_title("WhatsApp & Social DMs"),
                    page_icon="💬", layout="wide")
@@ -851,13 +853,248 @@ def render_out_of_stock(start_date: date, end_date: date) -> None:
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 
 
-app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads", "📭 Out of Stock"],
-                    "engagement_app")
+# --------------------------------------------------------- Lead Recycling ---
+
+RECYCLE_COLORS = {
+    lr.READY: theme.CATEGORICAL[5],      # orange — needs a call
+    lr.SCHEDULED: theme.CATEGORICAL[0],  # blue
+    lr.FRESH: theme.CATEGORICAL[4],      # aqua
+    lr.NURTURE: theme.CATEGORICAL[6],    # violet
+    lr.RECOVERED: theme.CATEGORICAL[1],  # green
+    lr.DO_NOT: theme.OTHER,
+}
+POOL_WINDOWS = {"Last 30 days": 30, "Last 60 days": 60, "Last 90 days": 90, "Last 180 days": 180}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _recycling_data(start: date, end: date) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
+    """(every touch in the pool, bag purchases by those phones since, bags at
+    the shops now by bag). Cached: matching every phone against the tills
+    takes the better part of a minute."""
+    params = {"start_date": start, "end_date": end}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        jobs = {k: pool.submit(db.run_query, q, params) for k, q in (
+            ("wa", queries.WA_INTERACTIONS), ("follow", queries.WA_FOLLOWUPS),
+            ("wanted", queries.WA_OUT_OF_STOCK), ("dms", queries.SOCIAL_DMS),
+            ("leads", queries.WALKIN_LEADS))}
+        position_f = pool.submit(db.run_query, queries.STOCK_POSITION)
+        d = {k: f.result() for k, f in jobs.items()}
+        position = position_f.result()
+    touches = lr.touches(d["wa"], d["follow"], d["wanted"], d["dms"], d["leads"])
+    keys = sorted(touches.loc[~touches["Converted"], "Phone Key"].dropna().unique()) if not touches.empty else []
+    bought = (db.run_query(queries.PURCHASES_BY_PHONE, {"phone_keys": keys, "from_date": start})
+              if keys else pd.DataFrame(columns=["Phone Key", "Bought On", "Bought At", "Amount"]))
+    shelf = position[position["Bucket"].isin(["Shop", "Transit"])]
+    stock = shelf.assign(Bag=shelf["SKU"].map(stock_planning.family)).groupby("Bag")["Qty"].sum()
+    return touches, bought, stock
+
+
+@st.fragment()
+def render_recycling() -> None:
+    """Unconverted leads from all three apps, one row per customer: who has
+    come back, who is due another go, and the call list to work from."""
+    c1, c2, c3, c4 = st.columns([1.3, 1, 1, 1])
+    window = c1.selectbox("Leads lost in", list(POOL_WINDOWS), index=2, key="recycle_window",
+                          help="The recycling pool runs to today, whatever the date range above.")
+    after = c2.number_input("Recycle after (days)", 1, 60, 7, key="recycle_after",
+                            help="Days since the last touch before a lead goes back into the pool.")
+    attempts = c3.number_input("Max follow-ups", 1, 10, 3, key="recycle_attempts",
+                               help="After this many follow-ups with no sale, offers and broadcasts only.")
+    today = date.today()
+    start = today - timedelta(days=POOL_WINDOWS[window])
+    with st.spinner("Reading three apps' leads and matching every phone against the tills…"):
+        touches, bought, stock = _recycling_data(start, today)
+    if touches.empty:
+        st.info("No leads in this window.")
+        return
+    cust = lr.customers(touches, bought, stock, today=today, recycle_after=int(after),
+                        max_attempts=int(attempts))
+    if cust.empty:
+        st.info("Every customer in this window bought.")
+        return
+    channel = c4.selectbox("Channel", ["All channels"] + lr.CHANNELS, key="recycle_channel")
+    if channel != "All channels":
+        cust = cust[cust["Channel"] == channel]
+    no_phone = int((~touches["Converted"] & touches["Phone Key"].isna()).sum())
+
+    view = _section(["📊 Tracker", "📋 Recycle List", "📖 How It Works"], "recycle_section")
+    status = cust["Status"].value_counts()
+    rec = cust[cust["Recovered"]]
+    n = len(cust)
+
+    if view == "📊 Tracker":
+        _kpis([
+            ("Unconverted Customers", f"{n:,}",
+             f"{cust['Touches'].sum():,} touches · {no_phone:,} more with no phone"),
+            ("Recovered", f"{len(rec):,}", f"{_pct(len(rec), n)} came back and bought"),
+            ("Value Recovered", f"KES {rec['Amount'].sum():,.0f}", "their first purchase, at the tills"),
+            ("After a Follow-up", f"{int(rec['After Follow-up'].sum()):,}",
+             f"{_pct(rec['After Follow-up'].sum(), len(rec))} of recoveries"),
+            ("Days to Recover", f"{rec['Days to Recover'].median():.0f}" if not rec.empty else "—",
+             "median, first lost to bought"),
+        ])
+        never = int(((cust["Attempts"] == 0) & ~cust["Recovered"] & (cust["Status"] != lr.FRESH)).sum())
+        _kpis([
+            (lr.READY, f"{status.get(lr.READY, 0):,}", f"{_pct(status.get(lr.READY, 0), n)} · due a call now"),
+            (lr.SCHEDULED, f"{status.get(lr.SCHEDULED, 0):,}", "call-back date still to come"),
+            (lr.FRESH, f"{status.get(lr.FRESH, 0):,}", f"touched in the last {after} days"),
+            (lr.NURTURE, f"{status.get(lr.NURTURE, 0):,}", f"{attempts}+ follow-ups, no sale"),
+            ("Never Followed Up", f"{never:,}", "past the fresh window, no follow-up recorded"),
+        ])
+        st.caption(f"One row per customer (matched on the last nine digits of the phone) with an "
+                   f"unconverted touch since {start:%d %b %Y} in the WhatsApp Monitor, Social DMs or "
+                   f"Leads. **Recovered** = bought a bag at any shop or online on a later day, or a "
+                   f"later touch converted. {cust.attrs.get('same_day', 0):,} customers who bought the "
+                   "same day they asked were never lost and are left out.")
+
+        with st.container(border=True):
+            weeks = cust.assign(Week=cust["First Unconverted"].dt.to_period("W-SAT").dt.start_time)
+            pivot = weeks.pivot_table(index="Week", columns="Status", values="Phone Key",
+                                      aggfunc="count", fill_value=0)
+            fig = go.Figure()
+            for s in [s for s in lr.STATUSES if s in pivot.columns]:
+                fig.add_bar(x=pivot.index, y=pivot[s], name=s, marker=dict(color=RECYCLE_COLORS[s]),
+                            hovertemplate=f"Week of %{{x|%d %b}}<br>{s}: <b>%{{y:,.0f}}</b><extra></extra>")
+            rate = (pivot.get(lr.RECOVERED, 0) / pivot.sum(axis=1) * 100).round(1)
+            fig.add_scatter(x=pivot.index, y=rate, name="Recovery %", yaxis="y2", mode="lines+markers",
+                            line=dict(color=theme.TEXT_PRIMARY, width=2),
+                            hovertemplate="Recovery: <b>%{y:.1f}%</b><extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Customers lost each week (Sun–Sat) — where they stand now",
+                              barmode="stack", height=420, legend_traceorder="normal",
+                              yaxis2=dict(overlaying="y", side="right", ticksuffix="%", showgrid=False,
+                                          rangemode="tozero", tickfont=dict(color=theme.TEXT_MUTED)))
+            fig.update_xaxes(tickformat="%d %b")
+            theme.show(fig)
+
+        c1, c2 = st.columns(2)
+        with c1, st.container(border=True):
+            reasons = lr.by_group(cust, "Reason")
+            reasons = reasons[reasons["Unconverted Customers"] >= 20].sort_values("Recovery %")
+            fig = go.Figure(go.Bar(
+                y=reasons["Reason"], x=reasons["Recovery %"], orientation="h",
+                marker=dict(color=theme.CATEGORICAL[1], cornerradius=4),
+                text=[f"{v:.1f}%" for v in reasons["Recovery %"]], textposition="outside", cliponaxis=False,
+                customdata=reasons[["Recovered", "Unconverted Customers"]],
+                hovertemplate=("<b>%{y}</b><br>%{customdata[0]:,} of %{customdata[1]:,} recovered"
+                               "<extra></extra>")))
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="Recovery rate by why they didn't buy", hovermode="closest",
+                              height=max(360, 28 * len(reasons) + 90))
+            fig.update_xaxes(ticksuffix="%", showgrid=True, gridcolor=theme.GRIDLINE)
+            theme.show(fig)
+        with c2, st.container(border=True):
+            theme.show(_stacked_by_branch(cust.assign(ID=range(n)), "Status", RECYCLE_COLORS,
+                                          "Recycle status by branch"))
+
+        with st.container(border=True):
+            by = st.segmented_control("Scorecard by", ["Branch", "Channel", "Reason", "Source"],
+                                      default="Branch", key="recycle_by") or "Branch"
+            st.caption("**Never Followed Up** is the gap to close: customers past the fresh window "
+                       "that nobody has followed up yet.")
+            grid.filterable_table(lr.by_group(cust, by), currency_columns=("Value Recovered",),
+                                  pinned_columns=(by,), height=420)
+
+    elif view == "📋 Recycle List":
+        c1, c2, c3, c4 = st.columns(4)
+        branch = c1.selectbox("Branch", ["All branches"] + sorted(cust["Branch"].dropna().unique()),
+                              key="recycle_branch")
+        pick = c2.multiselect("Status", lr.STATUSES, default=[lr.READY], key="recycle_status")
+        action = c3.selectbox("Action", ["All actions"] + sorted(cust["Action"].unique()),
+                              key="recycle_action")
+        per_branch = c4.number_input("Calls per branch", 0, 500, 30, key="recycle_per_branch",
+                                     help="Today's list: the top calls for each branch, by priority. "
+                                          "0 lists everyone.")
+        shown = cust if branch == "All branches" else cust[cust["Branch"] == branch]
+        shown = shown[shown["Status"].isin(pick or lr.STATUSES)]
+        shown = shown if action == "All actions" else shown[shown["Action"] == action]
+        shown = shown.sort_values(["Priority", "Last Touch"], ascending=False)
+        if per_branch:
+            shown = shown.groupby("Branch", dropna=False).head(int(per_branch))
+        if shown.empty:
+            st.info("Nobody matches this choice.")
+            return
+        _kpis([
+            ("On the List", f"{len(shown):,}", f"{shown['Branch'].nunique():,} branches"),
+            ("Stock Is Back", f"{(shown['Action'] == lr.STOCK_PLAY).sum():,}",
+             "asked for a bag that is in now"),
+            ("Said They'd Buy", f"{shown['Action'].str.startswith(('Reminder', 'Invite')).sum():,}",
+             "purchase later or visit the shop"),
+            ("Never Followed Up", f"{(shown['Attempts'] == 0).sum():,}", "first call back"),
+        ])
+        table = shown.assign(**{
+            "Lost On": shown["First Unconverted"].dt.date, "Last Touch": shown["Last Touch"].dt.date,
+            "Bag Wanted": shown["Wanted"]})
+        cols = ["Priority", "Name", "Contact", "Branch", "Channel", "Source", "Reason", "Follow-up",
+                "Bag Wanted", "In Stock Now", "Action", "Status", "Attempts", "Touches",
+                "Lost On", "Last Touch", "Days Since Touch"]
+        with st.container(border=True):
+            st.caption("Highest priority first: why they didn't buy (stock back and said-they'd-buy "
+                       "first), whether the bag they want is in, then the freshest — a lead cools "
+                       "every week it waits. Work it, record the outcome in the app it came from, "
+                       "and the customer moves out of the list.")
+            grid.filterable_table(table[cols], pinned_columns=("Name",), height=520)
+            st.download_button("⬇️ Download the call list (CSV)", table[cols].to_csv(index=False).encode(),
+                               file_name=f"lead_recycling_{today:%Y%m%d}.csv", mime="text/csv",
+                               key="recycle_download")
+
+    else:
+        st.markdown(f"""
+**What gets recycled.** Every customer who got in touch and didn't buy — a WhatsApp chat
+that ended as an enquiry, a promise to visit or not purchased; a social DM that didn't
+convert; a walk-in lead that isn't Purchased — in the window you pick. One row per
+customer, so someone who messaged three times is called once.
+
+**Where each customer stands**, checked in this order:
+
+| Status | Means | Do |
+|---|---|---|
+| 🟢 {lr.RECOVERED} | Bought a bag on a later day (any shop or online), or a later chat converted | Nothing — counted as recovered |
+| ⚪ {lr.DO_NOT} | Lead marked wrong number or not interested | Leave them |
+| 🔵 {lr.FRESH} | Touched in the last {after} days | Still with the team that took it |
+| 🔵 {lr.SCHEDULED} | A call-back date still to come | Call on the date |
+| 🟣 {lr.NURTURE} | {attempts}+ follow-ups and no sale | Offers and broadcasts only, no more calls |
+| 🟠 {lr.READY} | Everyone else | On the call list now |
+
+**What to say** follows why they didn't buy:
+
+| Why | Action |
+|---|---|
+| Out of stock / awaiting stock | If the bag is in now: tell them it's back and where. If not: hold, or offer a similar bag |
+| Purchase later / follow up later | Reminder call, with this week's deal |
+| Visit shop / will visit | Invite them in: the nearest shop and what's in stock for them |
+| Awaiting offer | Send the current Power Deal or Deal of the Week |
+| Not purchased | Ask what stopped them; offer an alternative or a deal |
+| Enquiry | Answer the open question, then send a deal |
+| Not reachable | Try another time, or WhatsApp / SMS instead of a call |
+
+**The weekly routine.**
+1. Each morning, each branch takes its top calls from the **Recycle List** (download it as CSV).
+2. Record every outcome in the app the lead came from — the WhatsApp Monitor follow-up, the
+   Social DMs call status, or the lead's status in Leads. That is what moves the customer
+   on: to Scheduled, Nurture Only, Do Not Recycle, or Recovered when they buy.
+3. On Sunday, read the **Tracker**: the recovery % for each week's lost customers, which
+   reasons recycle best, and **Never Followed Up** by branch, the gap to close.
+
+**How recovery is measured.** A customer is recovered when their phone (last nine digits)
+shows a bag bought at any till or online on a day after they were first lost, or a later
+chat or lead converted. **After a Follow-up** means a follow-up was recorded before they
+bought. Customers who bought the same day they asked were never lost and are left out.
+This page reads the apps; it doesn't write to them.
+""")
+
+    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+
+
+app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads", "📭 Out of Stock",
+                     "♻️ Lead Recycling"], "engagement_app")
 if app_view == "💬 WhatsApp Monitor":
     render_whatsapp(start_date, end_date)
 elif app_view == "📱 Social DMs":
     render_social(start_date, end_date)
 elif app_view == "🚶 Leads":
     render_leads(start_date, end_date)
-else:
+elif app_view == "📭 Out of Stock":
     render_out_of_stock(start_date, end_date)
+else:
+    render_recycling()

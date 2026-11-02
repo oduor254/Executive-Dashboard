@@ -5018,6 +5018,7 @@ WITH buyers AS (
 )
 SELECT b.phone_key AS "Phone Key", po.date_order::DATE AS "Bought On", po.name AS "Receipt",
        pt.name AS "Product",
+       pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1) AS "Amount",
        CASE
            WHEN lower(pconf.name) IN ('website sales', 'website') OR po.session_id IS NULL THEN 'Website'
            WHEN lower(pconf.name) = 'jumia' THEN 'Jumia'
