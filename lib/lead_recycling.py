@@ -65,31 +65,43 @@ STOCK_PLAY = "Stock is back — tell them it's in and where"
 _NO_STOCK_PLAY = "Still out — hold until restocked, or offer a similar bag"
 
 
-def phone_key(value) -> str | None:
-    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    return digits[-9:] if len(digits) >= 9 else None
+def phone_keys(contacts: pd.Series) -> pd.Series:
+    """The last nine digits of each phone, or None when it has fewer."""
+    digits = contacts.fillna("").astype(str).str.replace(r"\D", "", regex=True)
+    return digits.str[-9:].where(digits.str.len() >= 9)
 
 
-def touches(wa: pd.DataFrame, wa_follow: pd.DataFrame, wa_wanted: pd.DataFrame,
+# The WhatsApp Monitor's codes, named as the rest of the page names them.
+_WA_ACTIVITY = {"enquiry": "Enquiry", "purchased": "Purchased", "not_purchased": "Not Purchased",
+                "visit_shop": "Visit Shop", "transferred": "Transferred", "walk_in": "Walk-in"}
+_WA_FOLLOWUP = {"already_purchased": "Already Purchased", "enquiry": "Enquiries",
+                "out_of_stock": "Out of Stock", "purchase_later": "Purchase Later",
+                "purchased": "Purchased", "visit_shop": "Visit the Shop",
+                "not_reachable": "Not Reachable"}
+
+
+def touches(wa: pd.DataFrame, wa_names: pd.DataFrame, wa_wanted: pd.DataFrame,
             dms: pd.DataFrame, leads: pd.DataFrame) -> pd.DataFrame:
-    """Every touch in the window, all three apps in one shape."""
+    """Every touch in the window, all three apps in one shape. `wa` is
+    RECYCLE_WA_TOUCHES; `wa_names` the Odoo contact names by phone, for chats
+    that recorded none."""
     frames = []
     if not wa.empty:
         wanted = (wa_wanted.groupby("ID")["Product Wanted"].first()
                   if not wa_wanted.empty else pd.Series(dtype=object))
-        fu = wa_follow.set_index("ID") if not wa_follow.empty else pd.DataFrame(
-            columns=["Follow-up Outcome", "Followed Up On"])
-        reason = np.where(wa["Out of Stock"], "Out of Stock",
-                          wa["Activity"].replace({"walk_in": "Walk-in"}))
-        # A transfer is judged by what happened where it was sent.
-        converted = wa["Converted"] | wa["Converted at Destination"].fillna(False).astype(bool)
+        names = (wa_names.set_index("Phone Key")["Partner Name"] if not wa_names.empty
+                 else pd.Series(dtype=object))
+        follow = wa["Follow-up Outcome"].map(_WA_FOLLOWUP)
+        activity = wa["Activity"].map(_WA_ACTIVITY).fillna(wa["Activity"]).fillna("Not recorded")
         frames.append(pd.DataFrame({
-            "Channel": WHATSAPP, "Date": wa["Date"], "Name": wa["Name"], "Contact": wa["Contact"],
-            "Branch": wa["Branch"], "Source": wa["Source"], "Converted": converted,
-            "Reason": reason, "Wanted": wa["ID"].map(wanted),
-            "Follow-up": wa["ID"].map(fu["Follow-up Outcome"]),
-            "Followed Up On": wa["ID"].map(fu["Followed Up On"]),
-            "Attempts": wa["ID"].map(fu["Follow-up Outcome"]).notna().astype(int),
+            "Channel": WHATSAPP, "Date": wa["Date"],
+            "Name": wa["Name"].fillna(phone_keys(wa["Contact"]).map(names)),
+            "Contact": wa["Contact"], "Branch": wa["Branch"], "Source": wa["Source"],
+            "Converted": wa["Converted"].fillna(False).astype(bool),
+            "Reason": np.where(wa["Out of Stock"], "Out of Stock", activity),
+            "Wanted": wa["ID"].map(wanted), "Follow-up": follow,
+            "Followed Up On": wa["Followed Up On"].where(follow.notna()),
+            "Attempts": follow.notna().astype(int),
             "Call Due": None, "Lead Status": None}))
     if not dms.empty:
         awaiting = dms["Call Status"].isin(["Awaiting Call 1", "Awaiting Call 2"])
@@ -115,7 +127,7 @@ def touches(wa: pd.DataFrame, wa_follow: pd.DataFrame, wa_wanted: pd.DataFrame,
     t = pd.concat(frames, ignore_index=True)
     t["Date"] = pd.to_datetime(t["Date"])
     t["Converted"] = t["Converted"].fillna(False).astype(bool)
-    t["Phone Key"] = t["Contact"].map(phone_key)
+    t["Phone Key"] = phone_keys(t["Contact"])
     return t
 
 
@@ -123,6 +135,7 @@ def customers(t: pd.DataFrame, purchases: pd.DataFrame, stock: pd.Series, *, tod
               recycle_after: int, max_attempts: int) -> pd.DataFrame:
     """One row per unconverted customer with a phone: where they came from,
     why they didn't buy, what has been tried, and their recycle status."""
+    no_phone = int((~t["Converted"] & t["Phone Key"].isna()).sum())
     t = t[t["Phone Key"].notna()].sort_values("Date")
     lost = t[~t["Converted"]]
     if lost.empty:
@@ -134,10 +147,12 @@ def customers(t: pd.DataFrame, purchases: pd.DataFrame, stock: pd.Series, *, tod
 
     c = pd.DataFrame({"First Unconverted": first})
     c = c.join(last_lost[["Name", "Contact", "Channel", "Branch", "Source", "Reason", "Wanted", "Follow-up"]])
-    c["Name"] = g["Name"].agg(lambda v: v.dropna().iloc[-1] if v.notna().any() else None)
-    c["Wanted"] = lost.groupby("Phone Key")["Wanted"].agg(lambda v: v.dropna().iloc[-1] if v.notna().any() else None)
+    # .last() skips blanks: the latest name / bag anyone recorded.
+    c["Name"] = g["Name"].last().fillna("Unknown")
+    c["Wanted"] = lost.groupby("Phone Key")["Wanted"].last()
     c["Touches"] = g.size()
-    c["Channels"] = g["Channel"].agg(lambda v: ", ".join(ch for ch in CHANNELS if ch in set(v)))
+    seen = pd.crosstab(t["Phone Key"], t["Channel"]).reindex(columns=CHANNELS, fill_value=0) > 0
+    c["Channels"] = seen.apply(lambda col: np.where(col, col.name + ", ", "")).sum(axis=1).str[:-2]
     c["Attempts"] = g["Attempts"].sum()
     follow_on = pd.to_datetime(t["Followed Up On"])
     c["First Follow-up"] = follow_on.groupby(t["Phone Key"]).min()
@@ -163,7 +178,7 @@ def customers(t: pd.DataFrame, purchases: pd.DataFrame, stock: pd.Series, *, tod
                                        axis=1).min(axis=1)
             c["Bought At"] = p.groupby("Phone Key")["Bought At"].first()
             c["Amount"] = p.groupby("Phone Key")["Amount"].sum().reindex(c.index).fillna(0)
-            c["Bags Bought"] = p.groupby("Phone Key").size().reindex(c.index).fillna(0).astype(int)
+            c["Bags Bought"] = p.groupby("Phone Key")["Bags"].sum().reindex(c.index).fillna(0).astype(int)
     c["Days to Recover"] = (c["Bought On"] - c["First Unconverted"]).dt.days
     # Bought the same day they asked — a chat that ended as an enquiry and a
     # sale a few hours later. Never lost, so not in the pool.
@@ -198,6 +213,7 @@ def customers(t: pd.DataFrame, purchases: pd.DataFrame, stock: pd.Series, *, tod
                      - np.minimum(c["Days Since Touch"] // 7, 9)).astype(int)
     out = c.reset_index()
     out.attrs["same_day"] = int(same_day.sum())
+    out.attrs["no_phone"] = no_phone
     return out
 
 

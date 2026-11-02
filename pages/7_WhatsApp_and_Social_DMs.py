@@ -869,24 +869,31 @@ POOL_WINDOWS = {"Last 30 days": 30, "Last 60 days": 60, "Last 90 days": 90, "Las
 @st.cache_data(ttl=1800, show_spinner=False)
 def _recycling_data(start: date, end: date) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
     """(every touch in the pool, bag purchases by those phones since, bags at
-    the shops now by bag). Cached: matching every phone against the tills
-    takes the better part of a minute."""
+    the shops now by bag). All seven queries run at once — the till match
+    included, which is done in the database — and the result is cached."""
     params = {"start_date": start, "end_date": end}
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=7) as pool:
         jobs = {k: pool.submit(db.run_query, q, params) for k, q in (
-            ("wa", queries.WA_INTERACTIONS), ("follow", queries.WA_FOLLOWUPS),
-            ("wanted", queries.WA_OUT_OF_STOCK), ("dms", queries.SOCIAL_DMS),
-            ("leads", queries.WALKIN_LEADS))}
+            ("wa", queries.RECYCLE_WA_TOUCHES), ("names", queries.RECYCLE_WA_NAMES),
+            ("wanted", queries.RECYCLE_WA_WANTED), ("dms", queries.SOCIAL_DMS),
+            ("leads", queries.WALKIN_LEADS), ("bought", queries.RECYCLE_PURCHASES))}
         position_f = pool.submit(db.run_query, queries.STOCK_POSITION)
         d = {k: f.result() for k, f in jobs.items()}
         position = position_f.result()
-    touches = lr.touches(d["wa"], d["follow"], d["wanted"], d["dms"], d["leads"])
-    keys = sorted(touches.loc[~touches["Converted"], "Phone Key"].dropna().unique()) if not touches.empty else []
-    bought = (db.run_query(queries.PURCHASES_BY_PHONE, {"phone_keys": keys, "from_date": start})
-              if keys else pd.DataFrame(columns=["Phone Key", "Bought On", "Bought At", "Amount"]))
+    touches = lr.touches(d["wa"], d["names"], d["wanted"], d["dms"], d["leads"])
     shelf = position[position["Bucket"].isin(["Shop", "Transit"])]
     stock = shelf.assign(Bag=shelf["SKU"].map(stock_planning.family)).groupby("Bag")["Qty"].sum()
-    return touches, bought, stock
+    return touches, d["bought"], stock
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _recycling_customers(start: date, today: date, after: int, attempts: int) -> pd.DataFrame:
+    """One row per unconverted customer, cached apart from the raw data so
+    the list's filters don't rebuild it and a new rule doesn't re-query."""
+    touches, bought, stock = _recycling_data(start, today)
+    if touches.empty:
+        return pd.DataFrame()
+    return lr.customers(touches, bought, stock, today=today, recycle_after=after, max_attempts=attempts)
 
 
 @st.fragment()
@@ -902,20 +909,15 @@ def render_recycling() -> None:
                                help="After this many follow-ups with no sale, offers and broadcasts only.")
     today = date.today()
     start = today - timedelta(days=POOL_WINDOWS[window])
-    with st.spinner("Reading three apps' leads and matching every phone against the tills…"):
-        touches, bought, stock = _recycling_data(start, today)
-    if touches.empty:
-        st.info("No leads in this window.")
-        return
-    cust = lr.customers(touches, bought, stock, today=today, recycle_after=int(after),
-                        max_attempts=int(attempts))
+    with st.spinner("Reading the three apps' leads and their purchases since…"):
+        cust = _recycling_customers(start, today, int(after), int(attempts))
     if cust.empty:
         st.info("Every customer in this window bought.")
         return
+    no_phone, same_day = cust.attrs.get("no_phone", 0), cust.attrs.get("same_day", 0)
     channel = c4.selectbox("Channel", ["All channels"] + lr.CHANNELS, key="recycle_channel")
     if channel != "All channels":
         cust = cust[cust["Channel"] == channel]
-    no_phone = int((~touches["Converted"] & touches["Phone Key"].isna()).sum())
 
     view = _section(["📊 Tracker", "📋 Recycle List", "📖 How It Works"], "recycle_section")
     status = cust["Status"].value_counts()
@@ -944,7 +946,7 @@ def render_recycling() -> None:
         st.caption(f"One row per customer (matched on the last nine digits of the phone) with an "
                    f"unconverted touch since {start:%d %b %Y} in the WhatsApp Monitor, Social DMs or "
                    f"Leads. **Recovered** = bought a bag at any shop or online on a later day, or a "
-                   f"later touch converted. {cust.attrs.get('same_day', 0):,} customers who bought the "
+                   f"later touch converted. {same_day:,} customers who bought the "
                    "same day they asked were never lost and are left out.")
 
         with st.container(border=True):

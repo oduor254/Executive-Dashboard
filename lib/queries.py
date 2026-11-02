@@ -5018,7 +5018,6 @@ WITH buyers AS (
 )
 SELECT b.phone_key AS "Phone Key", po.date_order::DATE AS "Bought On", po.name AS "Receipt",
        pt.name AS "Product",
-       pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1) AS "Amount",
        CASE
            WHEN lower(pconf.name) IN ('website sales', 'website') OR po.session_id IS NULL THEN 'Website'
            WHEN lower(pconf.name) = 'jumia' THEN 'Jumia'
@@ -5513,4 +5512,106 @@ JOIN outlets o ON o.code = p.code
 """ + _FLOW_BAGS.format(alias="p") + r"""
 WHERE NOT COALESCE(pt.is_combo, FALSE)
 GROUP BY 1, 2, 3
+"""
+
+
+# ---------------------------------------------------------- lead recycling ---
+# Inputs for lib.lead_recycling (WhatsApp & Social DMs → Lead Recycling), built
+# to load in parallel in a few seconds rather than reuse the tab queries.
+
+# WhatsApp chats in the window with only what recycling reads, the follow-up
+# outcome included. A transfer counts as converted when the receiving branch
+# sold. Names come from RECYCLE_WA_NAMES, looked up alongside.
+RECYCLE_WA_TOUCHES = """
+SELECT i.id AS "ID", i.date AS "Date",
+       COALESCE(NULLIF(TRIM(i.customer_name), ''), NULLIF(TRIM(i.wa_username), '')) AS "Name",
+       COALESCE(NULLIF(TRIM(i.phone), ''), i.phone_clean) AS "Contact",
+       COALESCE(sh.name, 'Not recorded') AS "Branch", COALESCE(src.name, 'Not recorded') AS "Source",
+       i.activity AS "Activity",
+       (i.activity = 'purchased' OR COALESCE(i.is_purchased, FALSE)
+        OR dest.activity = 'purchased' OR COALESCE(dest.is_purchased, FALSE)) AS "Converted",
+       (COALESCE(rsn.is_out_of_stock, FALSE) OR i.oos_bag_id IS NOT NULL OR i.oos_product_id IS NOT NULL) AS "Out of Stock",
+       i.followup_outcome AS "Follow-up Outcome", i.followup_recorded_on::DATE AS "Followed Up On"
+FROM denri_monitor_interaction i
+LEFT JOIN denri_monitor_shop sh ON sh.id = i.shop_id
+LEFT JOIN denri_monitor_source src ON src.id = i.source_id
+LEFT JOIN denri_monitor_reason rsn ON rsn.id = i.reason_id
+LEFT JOIN denri_monitor_interaction dest ON dest.id = i.transferred_to_id
+WHERE i.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""
+
+# The contact's name in Odoo for each WhatsApp phone in the window, for chats
+# that recorded no name.
+RECYCLE_WA_NAMES = "WITH " + _WA_PARTNER_BY_PHONE.format(date_col="date") + """
+SELECT key AS "Phone Key", name AS "Partner Name" FROM partner_by_phone
+"""
+
+# The bags each WhatsApp chat in the window asked for that were out of stock —
+# WA_OUT_OF_STOCK's products without its customer details.
+RECYCLE_WA_WANTED = """
+SELECT w.interaction_id AS "ID", w.product AS "Product Wanted"
+FROM (
+    SELECT r.interaction_id, pt.name AS product
+    FROM denri_monitor_interaction_oos_product_rel r
+    JOIN product_template pt ON pt.id = r.product_id
+    UNION
+    SELECT i.id, pt.name FROM denri_monitor_interaction i
+    JOIN product_template pt ON pt.id = i.oos_product_id
+    UNION
+    SELECT i.id, b.name FROM denri_monitor_interaction i
+    JOIN denri_monitor_bag b ON b.id = i.oos_bag_id
+) w
+JOIN denri_monitor_interaction i ON i.id = w.interaction_id
+WHERE i.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+"""
+
+# Bag purchases since the window opened by any customer whose phone appears in
+# one of the three apps in it — one row per phone and day. Matched in the
+# database: only partners who bought in the window have their phone read,
+# instead of sending every lead's phone to be compared with every partner.
+RECYCLE_PURCHASES = r"""
+WITH lead_keys AS (
+    SELECT phone_key AS key FROM denri_monitor_interaction
+    WHERE date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+    UNION
+    SELECT RIGHT(REGEXP_REPLACE(COALESCE(NULLIF(TRIM(phone), ''), alt_phone, ''), '[^0-9]', '', 'g'), 9)
+    FROM denri_social_dm WHERE date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+    UNION
+    SELECT RIGHT(REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9]', '', 'g'), 9)
+    FROM denri_lead WHERE active AND capture_date - 1 BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+), orders AS (
+    SELECT po.id, po.partner_id, po.date_order::DATE AS day, po.session_id,
+           COALESCE(NULLIF(po.currency_rate, 0), 1) AS rate
+    FROM pos_order po
+    WHERE po.state IN ('done', 'paid', 'invoiced') AND po.partner_id IS NOT NULL
+      AND po.date_order >= CAST(:start_date AS DATE)
+), buyers AS (
+    SELECT p.id, p.key FROM (
+        SELECT rp.id, RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9) AS key
+        FROM res_partner rp WHERE rp.id IN (SELECT partner_id FROM orders)) p
+    JOIN lead_keys k ON k.key = p.key
+    WHERE length(p.key) = 9
+)
+SELECT b.key AS "Phone Key", o.day AS "Bought On",
+       MIN(CASE
+           WHEN lower(pconf.name) IN ('website sales', 'website') OR o.session_id IS NULL THEN 'Website'
+           WHEN lower(pconf.name) = 'jumia' THEN 'Jumia'
+           WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%' THEN 'Sinza'
+           ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                   COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'), '\s*Shop\s*', '', 'gi')))
+       END) AS "Bought At",
+       SUM(pol.price_subtotal_incl / o.rate) AS "Amount", SUM(pol.qty) AS "Bags"
+FROM orders o
+JOIN buyers b                  ON b.id = o.partner_id
+JOIN pos_order_line pol        ON pol.order_id = o.id
+JOIN product_product pp        ON pp.id = pol.product_id
+JOIN product_template pt       ON pt.id = pp.product_tmpl_id
+JOIN product_category pc       ON pc.id = pt.categ_id
+LEFT JOIN pos_session ps       ON ps.id = o.session_id
+LEFT JOIN pos_config pconf     ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type spt ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse sw   ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location sl    ON sl.id = spt.default_location_src_id
+WHERE pol.qty > 0 AND pc.complete_name ILIKE 'Bags%' AND NOT COALESCE(pol.is_combo_line, FALSE)
+GROUP BY 1, 2
 """
