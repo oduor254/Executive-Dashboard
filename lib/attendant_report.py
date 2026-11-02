@@ -31,7 +31,10 @@ def achievement(sessions: pd.DataFrame, served_by: pd.Series,
     if df.empty:
         return pd.DataFrame()
     worked = scorecards.person_days(everyone, day_targets)
-    target = worked.groupby("Served By")["Person Target"].sum(min_count=1)
+    # Numeric even when no day has a target yet (a new month before its
+    # targets are set), so the blanks read as no target rather than None.
+    target = pd.to_numeric(worked["Person Target"], errors="coerce") \
+        .groupby(worked["Served By"]).sum(min_count=1)
     g = df.groupby("Served By")
     out = pd.DataFrame({
         "Locations": g["Location"].agg(lambda v: ", ".join(sorted(set(v)))),

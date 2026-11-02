@@ -217,6 +217,86 @@ def customers(t: pd.DataFrame, purchases: pd.DataFrame, stock: pd.Series, *, tod
     return out
 
 
+# ------------------------------------------------------ hybrid conversion ---
+# Customers who got in touch one way and bought the other:
+#
+#   Online → Walk-in   messaged on WhatsApp or a social DM, then bought a bag
+#                      at a shop till in person
+#   Walk-in → Online   captured as a walk-in lead at a shop, then bought on
+#                      the website, on Jumia or as a delivery
+#
+# A till that isn't a shop floor — the website, Jumia, the accessories store
+# behind the Staff POS — is not a walk-in, and nor is a shop order with a
+# delivery fee on it: that was sent out to the customer, so it is online.
+ONLINE = [WHATSAPP, SOCIAL]
+ONLINE_TO_SHOP, SHOP_TO_ONLINE = "Online → Walk-in", "Walk-in → Online"
+DIRECTIONS = [ONLINE_TO_SHOP, SHOP_TO_ONLINE]
+NOT_A_SHOP = {"Website", "Jumia", "Accessories & Materials Store", "N/A"}
+ONLINE_TILLS = {"Website", "Jumia"}
+
+
+def _origin(direction: str) -> list[str]:
+    return ONLINE if direction == ONLINE_TO_SHOP else [WALKIN]
+
+
+def first_contacts(t: pd.DataFrame, start: date, end: date, direction: str) -> pd.DataFrame:
+    """One row per customer (phone) who got in touch between `start` and
+    `end` the way `direction` starts — their first touch: Channel, Source,
+    Branch."""
+    t = t[t["Channel"].isin(_origin(direction)) & t["Phone Key"].notna()]
+    t = t[(t["Date"].dt.date >= start) & (t["Date"].dt.date <= end)]
+    return t.sort_values("Date").groupby("Phone Key").head(1)
+
+
+def _bought_other_way(purchases: pd.DataFrame, direction: str) -> pd.DataFrame:
+    delivered = purchases["Delivered"].fillna(False).astype(bool)
+    if direction == ONLINE_TO_SHOP:
+        p = purchases[~purchases["Bought At"].isin(NOT_A_SHOP) & ~delivered]
+        return p.assign(**{"Bought Via": "In shop"})
+    online = purchases["Bought At"].isin(ONLINE_TILLS)
+    p = purchases[online | delivered]
+    via = np.where(p["Bought At"].isin(ONLINE_TILLS), p["Bought At"], "Delivery from " + p["Bought At"])
+    return p.assign(**{"Bought Via": via})
+
+
+def hybrid(t: pd.DataFrame, purchases: pd.DataFrame, *, start: date, end: date,
+           within: int, direction: str) -> pd.DataFrame:
+    """One row per customer whose first touch the `direction` starts with fell
+    between `start` and `end`, and who bought a bag the other way within
+    `within` days of it (the same day counts). Only their first such day."""
+    t = t[t["Channel"].isin(_origin(direction)) & t["Phone Key"].notna()]
+    t = t[(t["Date"].dt.date >= start) & (t["Date"].dt.date <= end)].sort_values("Date")
+    if t.empty or purchases.empty:
+        return pd.DataFrame()
+    g = t.groupby("Phone Key")
+    first = g.head(1).set_index("Phone Key")
+    c = pd.DataFrame({"First Contact": first["Date"], "Name": g["Name"].last().fillna("Unknown"),
+                      "Contact": first["Contact"], "Channel": first["Channel"],
+                      "Source": first["Source"], "Contact Branch": first["Branch"],
+                      "Touches": g.size(), "Bag Asked For": g["Wanted"].last(),
+                      "Outcome Recorded": g["Reason"].last(),
+                      "Credited in App": g["Converted"].any()})
+
+    p = _bought_other_way(purchases, direction)
+    p = p.assign(**{"Bought On": pd.to_datetime(p["Bought On"])})
+    p = p.merge(c["First Contact"], left_on="Phone Key", right_index=True)
+    days = (p["Bought On"] - p["First Contact"].dt.normalize()).dt.days
+    p = p[(days >= 0) & (days <= within)]
+    if p.empty:
+        return pd.DataFrame()
+    p = p[p["Bought On"] == p.groupby("Phone Key")["Bought On"].transform("min")]
+    bought = p.groupby("Phone Key").agg(**{"Bought On": ("Bought On", "min"),
+                                           "Bought At": ("Bought At", "first"),
+                                           "Bought Via": ("Bought Via", "first"),
+                                           "Bags": ("Bags", "sum"), "Amount": ("Amount", "sum")})
+    out = c.join(bought, how="inner")
+    out["Days to Buy"] = (out["Bought On"] - out["First Contact"].dt.normalize()).dt.days
+    out["Bags"] = out["Bags"].astype(int)
+    # Bought at (or delivered from) the branch that took the contact.
+    out["Same Branch"] = out["Contact Branch"] == out["Bought At"]
+    return out.reset_index().sort_values("Bought On", ascending=False)
+
+
 def by_group(c: pd.DataFrame, by: str) -> pd.DataFrame:
     """Recycling scorecard per branch, channel or reason."""
     g = c.groupby(by)

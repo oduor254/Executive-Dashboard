@@ -1088,8 +1088,208 @@ This page reads the apps; it doesn't write to them.
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 
 
+# ----------------------------------------------------- Hybrid Conversion ---
+
+HYBRID_WINDOWS = {"Same day": 0, "Within 3 days": 3, "Within 7 days": 7, "Within 14 days": 14,
+                  "Within 30 days": 30}
+BUY_BANDS = [(0, "Same day"), (1, "Next day"), (3, "2–3 days"), (7, "4–7 days"),
+             (14, "8–14 days"), (30, "15–30 days")]
+CHANNEL_COLORS = {lr.WHATSAPP: theme.CATEGORICAL[1], lr.SOCIAL: theme.CATEGORICAL[2],
+                  lr.WALKIN: theme.CATEGORICAL[3]}
+# Each direction in its own words: who the customers are, what they did.
+HYBRID_WORDS = {
+    lr.ONLINE_TO_SHOP: {"who": "Online Customers", "how": "messaged on WhatsApp or a social DM",
+                        "did": "Walked In & Bought", "where": "Shop they walked into",
+                        "split": "Channel", "credit": "the chat or DM was never marked as converted"},
+    lr.SHOP_TO_ONLINE: {"who": "Walk-in Leads", "how": "captured as a walk-in lead at a shop",
+                        "did": "Bought Online", "where": "Shop that took the lead, by how they bought",
+                        "split": "Bought Via", "credit": "the lead was never marked Purchased"},
+}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _hybrid_data(start: date, end: date, within: int,
+                 direction: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(one row per customer who bought the other way, one row per customer
+    who got in touch this way in the range) — read from the recycling data,
+    so the two share one set of queries."""
+    touches, bought, _ = _recycling_data(start, date.today())
+    if touches.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    return (lr.hybrid(touches, bought, start=start, end=end, within=within, direction=direction),
+            lr.first_contacts(touches, start, end, direction))
+
+
+def _hybrid_scorecard(conv: pd.DataFrame, base: pd.DataFrame, by: str, did: str) -> pd.DataFrame:
+    g = conv.groupby(by)
+    t = pd.DataFrame({
+        did: g.size(),
+        "Value": g["Amount"].sum().round(0),
+        "Bags": g["Bags"].sum(),
+        "Same Day": g["Days to Buy"].apply(lambda d: int((d == 0).sum())),
+        "Median Days": g["Days to Buy"].median(),
+        "Same Branch": g["Same Branch"].sum(),
+        "Not Credited in App": g["Credited in App"].apply(lambda s: int((~s).sum())),
+    })
+    # The rate needs everyone who got in touch in that group, so only for what
+    # the contact itself recorded (not for where they ended up buying).
+    base_col = {"Channel": "Channel", "Source": "Source", "Contact Branch": "Branch"}.get(by)
+    if base_col:
+        contacts = base.groupby(base_col).size().rename_axis(by)
+        t = t.join(contacts.rename("Customers"), how="outer").fillna(0)
+        t.insert(0, "Customers", t.pop("Customers").astype(int))
+        t["Conversion %"] = (t[did] / t["Customers"].where(t["Customers"] > 0) * 100).round(1)
+    return t.reset_index().sort_values(did, ascending=False)
+
+
+@st.fragment()
+def render_hybrid(start_date: date, end_date: date) -> None:
+    """Customers who got in touch one way and bought the other: online chats
+    that ended in a shop, and shop walk-ins that ended online."""
+    c1, c2, c3 = st.columns([1.2, 1, 1])
+    with c1:
+        direction = st.segmented_control("Direction", lr.DIRECTIONS, default=lr.ONLINE_TO_SHOP,
+                                         key="hybrid_direction") or lr.ONLINE_TO_SHOP
+    words = HYBRID_WORDS[direction]
+    window = c2.selectbox("Bought", list(HYBRID_WINDOWS), index=3, key="hybrid_window",
+                          help="How long after their first contact a purchase the other way still "
+                               "counts as coming from it.")
+    within = HYBRID_WINDOWS[window]
+    with st.spinner("Matching customers to their purchases…"):
+        conv, base = _hybrid_data(start_date, end_date, within, direction)
+    if direction == lr.ONLINE_TO_SHOP:
+        channel = c3.selectbox("Channel", ["All channels"] + lr.ONLINE, key="hybrid_channel")
+        if channel != "All channels":
+            conv = conv[conv["Channel"] == channel] if not conv.empty else conv
+            base = base[base["Channel"] == channel] if not base.empty else base
+    if base.empty:
+        st.info(f"Nobody {words['how']} with a phone number in this date range.")
+        return
+    if conv.empty:
+        st.info(f"None of the {len(base):,} customers {words['how']} in this range bought the "
+                f"other way ({window.lower()}).")
+        return
+
+    n, total = len(conv), len(base)
+    same_day = int((conv["Days to Buy"] == 0).sum())
+    uncredited = conv[~conv["Credited in App"]]
+    _kpis([
+        (words["who"], f"{total:,}", words["how"]),
+        (words["did"], f"{n:,}", f"{_pct(n, total)} of them"),
+        ("Value", f"KES {conv['Amount'].sum():,.0f}",
+         f"{int(conv['Bags'].sum()):,} bags · KES {conv['Amount'].mean():,.0f} each"),
+        ("Same Day", f"{same_day:,}", f"{_pct(same_day, n)} · median "
+                                      f"{conv['Days to Buy'].median():.0f} days to buy"),
+        ("Not Credited in App", f"{len(uncredited):,}",
+         f"KES {uncredited['Amount'].sum():,.0f} the app didn't record as a sale"),
+    ])
+    if direction == lr.ONLINE_TO_SHOP:
+        rule = ("then bought a bag at a shop till in person. The website, Jumia, the Staff POS and "
+                "shop orders with a delivery fee (sent out, not walked in) don't count.")
+    else:
+        rule = ("then bought a bag on the website, on Jumia, or as a shop order with a delivery fee "
+                "(sent out to them).")
+    st.caption(f"Customers (matched on the last nine digits of the phone) first {words['how']} "
+               f"between {start_date:%d %b} and {end_date:%d %b %Y}, {rule} Counted "
+               f"{window.lower()} of that first contact; only their first such purchase. "
+               f"**Not Credited in App** = {words['credit']}, though the customer did buy.")
+
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        split = words["split"]
+        rows = "Bought At" if direction == lr.ONLINE_TO_SHOP else "Contact Branch"
+        pivot = conv.pivot_table(index=rows, columns=split, values="Phone Key",
+                                 aggfunc="count", fill_value=0)
+        pivot = pivot.loc[pivot.sum(axis=1).sort_values().index]
+        keys = list(pivot.columns)
+        others = [k for k in keys if k not in CHANNEL_COLORS]
+        palette = {**CHANNEL_COLORS, **dict(zip(others, charts.colors_for(others)))}
+        fig = go.Figure()
+        for k in keys:
+            fig.add_bar(y=pivot.index, x=pivot[k], orientation="h", name=k,
+                        marker=dict(color=palette[k]),
+                        hovertemplate=f"<b>%{{y}}</b><br>{k}: <b>%{{x:,.0f}}</b><extra></extra>")
+        for shop, count in pivot.sum(axis=1).items():
+            fig.add_annotation(x=count, y=shop, text=f"<b>{count:,.0f}</b>", showarrow=False,
+                               xanchor="left", xshift=6, font=dict(color=theme.TEXT_PRIMARY, size=11))
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(title=words["where"], barmode="stack", hovermode="closest",
+                          legend_traceorder="normal", height=max(380, 28 * len(pivot) + 100))
+        fig.update_xaxes(showgrid=True, gridcolor=theme.GRIDLINE)
+        theme.show(fig)
+    with c2, st.container(border=True):
+        bands = [(d, label) for d, label in BUY_BANDS if d <= max(within, 0)]
+        band = pd.cut(conv["Days to Buy"], [-1] + [d for d, _ in bands],
+                      labels=[label for _, label in bands])
+        counts = band.value_counts().reindex([label for _, label in bands], fill_value=0)
+        fig = go.Figure(go.Bar(
+            x=counts.index.astype(str), y=counts.values,
+            marker=dict(color=theme.CATEGORICAL[0], cornerradius=4),
+            text=[f"{v:,}" for v in counts.values], textposition="outside", cliponaxis=False,
+            customdata=(counts / n * 100).round(1),
+            hovertemplate="%{x}: <b>%{y:,}</b> (%{customdata:.1f}%)<extra></extra>"))
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Time from first contact to purchase", height=380)
+        fig.update_yaxes(showgrid=True, gridcolor=theme.GRIDLINE)
+        theme.show(fig)
+
+    with st.container(border=True):
+        weeks = (base.assign(Week=base["Date"].dt.to_period("W-SAT").dt.start_time)
+                 .groupby("Week").size().rename("Contacts"))
+        came = (conv.assign(Week=conv["First Contact"].dt.to_period("W-SAT").dt.start_time)
+                .groupby("Week").agg(Converted=("Phone Key", "size"), Value=("Amount", "sum")))
+        weekly = pd.concat([weeks, came], axis=1).fillna(0)
+        fig = go.Figure()
+        fig.add_bar(x=weekly.index, y=weekly["Converted"], name=words["did"],
+                    marker=dict(color=theme.CATEGORICAL[1], cornerradius=4),
+                    customdata=weekly[["Contacts", "Value"]],
+                    hovertemplate=("Week of %{x|%d %b}<br><b>%{y:,.0f}</b> of %{customdata[0]:,.0f} "
+                                   "customers<br>KES %{customdata[1]:,.0f}<extra></extra>"))
+        fig.add_scatter(x=weekly.index,
+                        y=(weekly["Converted"] / weekly["Contacts"].where(weekly["Contacts"] > 0)
+                           * 100).round(1),
+                        name="Conversion %", yaxis="y2", mode="lines+markers",
+                        line=dict(color=theme.TEXT_PRIMARY, width=2),
+                        hovertemplate="Conversion: <b>%{y:.1f}%</b><extra></extra>")
+        theme.apply_layout(fig, show_legend=True)
+        fig.update_layout(title=f"{direction}, by the week of first contact (Sun–Sat)", height=380,
+                          yaxis2=dict(overlaying="y", side="right", ticksuffix="%", showgrid=False,
+                                      rangemode="tozero", tickfont=dict(color=theme.TEXT_MUTED)))
+        fig.update_xaxes(tickformat="%d %b")
+        theme.show(fig)
+
+    with st.container(border=True):
+        options = ["Contact Branch", "Bought At", "Bought Via", "Channel", "Source"]
+        by = st.segmented_control("Scorecard by", options, default="Contact Branch",
+                                  key="hybrid_by") or "Contact Branch"
+        st.caption("**Contact Branch** is the branch that took the chat, DM or lead; **Bought At** "
+                   "where the sale was rung. **Same Branch** = bought at (or delivered from) the "
+                   "branch that took the contact. Conversion % is only shown for what the contact "
+                   "recorded, against everyone who got in touch.")
+        grid.filterable_table(_hybrid_scorecard(conv, base, by, words["did"]),
+                              currency_columns=("Value",), pinned_columns=(by,), height=420)
+
+    with st.container(border=True):
+        only = st.toggle("Only those not credited in the app", key="hybrid_uncredited")
+        shown = uncredited if only else conv
+        table = shown.assign(**{"First Contact": shown["First Contact"].dt.date,
+                                "Bought On": shown["Bought On"].dt.date,
+                                "Credited in App": shown["Credited in App"].map({True: "Yes", False: "No"})})
+        cols = ["Name", "Contact", "Channel", "Source", "Contact Branch", "First Contact", "Touches",
+                "Outcome Recorded", "Bag Asked For", "Credited in App", "Bought On", "Bought At",
+                "Bought Via", "Days to Buy", "Bags", "Amount"]
+        st.caption(f"{len(table):,} customers, latest purchase first.")
+        grid.filterable_table(table[cols], currency_columns=("Amount",), pinned_columns=("Name",),
+                              height=480)
+        slug = "online_to_walkin" if direction == lr.ONLINE_TO_SHOP else "walkin_to_online"
+        st.download_button("⬇️ Download (CSV)", table[cols].to_csv(index=False).encode(),
+                           file_name=f"{slug}_{start_date:%Y%m%d}_{end_date:%Y%m%d}.csv",
+                           mime="text/csv", key="hybrid_download")
+    st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
+
+
 app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads", "📭 Out of Stock",
-                     "♻️ Lead Recycling"], "engagement_app")
+                     "🔀 Hybrid Conversion", "♻️ Lead Recycling"], "engagement_app")
 if app_view == "💬 WhatsApp Monitor":
     render_whatsapp(start_date, end_date)
 elif app_view == "📱 Social DMs":
@@ -1098,5 +1298,7 @@ elif app_view == "🚶 Leads":
     render_leads(start_date, end_date)
 elif app_view == "📭 Out of Stock":
     render_out_of_stock(start_date, end_date)
+elif app_view == "🔀 Hybrid Conversion":
+    render_hybrid(start_date, end_date)
 else:
     render_recycling()

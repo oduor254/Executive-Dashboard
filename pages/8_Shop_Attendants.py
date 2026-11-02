@@ -107,6 +107,8 @@ def render_attendants(start_date: date, end_date: date) -> None:
     sections = ["Sessions", "Score Cards", "Sales Training", "Customer Feedback"]
     if person != ALL_PEOPLE:
         sections.insert(1, "Sales Breakdown")
+    elif not unrecorded.empty:
+        sections.insert(1, "Nobody Recorded")
     section = st.segmented_control("Section", sections, default=sections[0],
                                    key="attendants_section", label_visibility="collapsed")
     section = section if section in sections else sections[0]
@@ -141,8 +143,37 @@ def render_attendants(start_date: date, end_date: date) -> None:
         _score_cards(start_date, end_date, location, person)
     elif section == "Sales Breakdown":
         _person_sales(person, start_date, end_date, location)
+    elif section == "Nobody Recorded":
+        _unrecorded_orders(start_date, end_date, location)
     else:
         _feedback_table(start_date, end_date, location, person)
+
+
+def _unrecorded_orders(start_date: date, end_date: date, location: str) -> None:
+    """Every order behind the Nobody Recorded tile: no attendant and no BA."""
+    orders = db.run_query(queries.UNRECORDED_ORDERS,
+                          {"start_date": start_date, "end_date": end_date})
+    if location != "All Locations":
+        orders = orders[orders["Location"] == location]
+    if orders.empty:
+        st.info("Every order in this range has a shop attendant or BA.")
+        return
+    with st.container(border=True):
+        by_shop = (orders.groupby("Location")
+                   .agg(Orders=("Order", "size"), **{"Sales Made": ("Sales Made", "sum")})
+                   .sort_values("Sales Made", ascending=False).reset_index())
+        st.caption("By location — where to ask who served.")
+        grid.filterable_table(by_shop, currency_columns=("Sales Made",), height=220)
+    with st.container(border=True):
+        st.caption(f"{len(orders):,} orders with no shop attendant or BA on them, latest first · "
+                   "the cashier is who opened the session, so the first person to ask. The last "
+                   "row is the total.")
+        total = {c: "" for c in orders.columns}
+        total.update({"Date": "TOTAL", "Order": f"{len(orders):,} orders",
+                      "Sales Made": round(orders["Sales Made"].sum(), 2)})
+        grid.filterable_table(pd.concat([orders, pd.DataFrame([total])], ignore_index=True),
+                              currency_columns=("Sales Made",), pinned_columns=("Order",),
+                              height=440)
 
 
 PACE_COLORS = [(1.00, theme.STATUS["good"]), (0.90, theme.STATUS["warning"]),

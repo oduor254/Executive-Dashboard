@@ -4112,6 +4112,60 @@ ORDER BY "Date" DESC, "Location", "Session", "Sales Made" DESC
 """
 
 
+# The orders behind SHOP_ATTENDANT_SESSIONS' "Not recorded": no shop attendant
+# and no brand ambassador on the order. One row per order, same location
+# names and the same Sales Made, with what was sold so it can be traced.
+UNRECORDED_ORDERS = """
+SELECT
+    po.date_order::DATE                                              AS "Date",
+    TO_CHAR(po.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi', 'HH24:MI') AS "Time",
+    CASE
+        WHEN lower(pconf.name) IN ('website sales', 'website', 'jumia') OR po.session_id IS NULL
+            THEN 'Website'
+        WHEN lower(pconf.name) = 'staff pos'
+            THEN 'Staff POS'
+        WHEN COALESCE(sw.name, sl.complete_name) ILIKE '%Dar-Es-Alam%'
+            THEN 'Sinza'
+        ELSE INITCAP(TRIM(REGEXP_REPLACE(
+                COALESCE(sw.name, sl.complete_name, pconf.name, 'N/A'),
+                '\\s*Shop\\s*', '', 'gi')))
+    END                                                              AS "Location",
+    po.name                                                          AS "Order",
+    ps.name                                                          AS "Session",
+    COALESCE(NULLIF(TRIM(open_p.name), ''), 'Not recorded')          AS "Cashier",
+    COALESCE(NULLIF(TRIM(cust.name), ''), 'Walk-in (no name)')       AS "Customer",
+    NULLIF(TRIM(COALESCE(cust.phone, cust.mobile, '')), '')          AS "Phone",
+    STRING_AGG(DISTINCT pt.name, ', ')
+        FILTER (WHERE pt.name NOT ILIKE '%Delivery Fee%')            AS "Items",
+    ROUND(SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%'
+                   THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+                   ELSE 0 END)::NUMERIC, 2)                          AS "Sales Made"
+FROM pos_order po
+JOIN pos_order_line            pol    ON pol.order_id = po.id
+JOIN product_product           pp     ON pp.id = pol.product_id
+JOIN product_template          pt     ON pt.id = pp.product_tmpl_id
+LEFT JOIN pos_session          ps     ON ps.id = po.session_id
+LEFT JOIN pos_config           pconf  ON pconf.id = ps.config_id
+LEFT JOIN stock_picking_type   spt    ON spt.id = pconf.picking_type_id
+LEFT JOIN stock_warehouse      sw     ON sw.id = spt.warehouse_id
+LEFT JOIN stock_location       sl     ON sl.id = spt.default_location_src_id
+LEFT JOIN res_users            att    ON att.id = po.attendant_id
+LEFT JOIN res_partner          att_p  ON att_p.id = att.partner_id
+LEFT JOIN pos_shop_ba          ba     ON ba.id = po.ba_id
+LEFT JOIN res_users            opener ON opener.id = ps.user_id
+LEFT JOIN res_partner          open_p ON open_p.id = opener.partner_id
+LEFT JOIN res_partner          cust   ON cust.id = po.partner_id
+WHERE po.state IN ('done', 'paid', 'invoiced')
+  AND po.date_order >= CAST(:start_date AS TIMESTAMP)
+  AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '1 day'
+  AND NULLIF(TRIM(att_p.name), '') IS NULL
+  AND NULLIF(TRIM(ba.name), '') IS NULL
+GROUP BY po.id, ps.name, pconf.name, sw.name, sl.complete_name, open_p.name,
+         cust.name, cust.phone, cust.mobile
+ORDER BY po.date_order DESC
+"""
+
+
 # Everything one shop attendant or brand ambassador sold: one line per customer
 # and product for each day, units bundled together (two Kai Black on the same
 # day read as one line of 2). Refunds are folded into the sale they reverse —
@@ -5591,8 +5645,16 @@ WITH lead_keys AS (
         FROM res_partner rp WHERE rp.id IN (SELECT partner_id FROM orders)) p
     JOIN lead_keys k ON k.key = p.key
     WHERE length(p.key) = 9
+), delivered AS (
+    -- Orders that carry a delivery fee: sent out from the shop, not a walk-in.
+    SELECT DISTINCT dl.order_id
+    FROM pos_order_line dl
+    JOIN product_product dpp ON dpp.id = dl.product_id
+    JOIN product_template dpt ON dpt.id = dpp.product_tmpl_id
+    WHERE dpt.name ILIKE '%Delivery Fee%'
+      AND dl.order_id IN (SELECT o.id FROM orders o JOIN buyers b ON b.id = o.partner_id)
 )
-SELECT b.key AS "Phone Key", o.day AS "Bought On",
+SELECT b.key AS "Phone Key", o.day AS "Bought On", (dv.order_id IS NOT NULL) AS "Delivered",
        MIN(CASE
            WHEN lower(pconf.name) IN ('website sales', 'website') OR o.session_id IS NULL THEN 'Website'
            WHEN lower(pconf.name) = 'jumia' THEN 'Jumia'
@@ -5603,6 +5665,7 @@ SELECT b.key AS "Phone Key", o.day AS "Bought On",
        SUM(pol.price_subtotal_incl / o.rate) AS "Amount", SUM(pol.qty) AS "Bags"
 FROM orders o
 JOIN buyers b                  ON b.id = o.partner_id
+LEFT JOIN delivered dv         ON dv.order_id = o.id
 JOIN pos_order_line pol        ON pol.order_id = o.id
 JOIN product_product pp        ON pp.id = pol.product_id
 JOIN product_template pt       ON pt.id = pp.product_tmpl_id
@@ -5613,5 +5676,5 @@ LEFT JOIN stock_picking_type spt ON spt.id = pconf.picking_type_id
 LEFT JOIN stock_warehouse sw   ON sw.id = spt.warehouse_id
 LEFT JOIN stock_location sl    ON sl.id = spt.default_location_src_id
 WHERE pol.qty > 0 AND pc.complete_name ILIKE 'Bags%' AND NOT COALESCE(pol.is_combo_line, FALSE)
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 """
