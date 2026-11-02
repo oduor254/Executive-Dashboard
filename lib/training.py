@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from lib import feedback, sheets_sync
+from lib import feedback, sheets_sync, staff_numbers
 
 # One sheet per month; add each new month's sheet here.
 SPREADSHEETS = [
@@ -198,6 +198,12 @@ def load() -> dict:
         responses["On List"] = responses["Email"].isin(team.index)
         responses["Name"] = responses["Email"].map(team["Name"]).fillna(
             responses["Typed Name"].str.title())
+    # People who have left: off the team list, and their answers out of
+    # every training figure.
+    gone = set(roster.loc[staff_numbers.former(roster["Name"]), "Email"])
+    roster = roster[~roster["Email"].isin(gone)]
+    if not responses.empty:
+        responses = responses[~responses["Email"].isin(gone) & ~staff_numbers.former(responses["Name"])]
         responses["Location"] = responses["Email"].map(team["Location"]).fillna(
             responses["Typed Location"])
     return {"responses": responses, "roster": roster, "days": sorted(days),

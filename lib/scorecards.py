@@ -354,6 +354,11 @@ def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.Da
     table = table.join(_customer_rates(staffed, keys).drop(columns="Repeat %"))
     table["Training %"] = (training.reindex(table.index).round(1) if training is not None
                            else np.nan)
+    # People who have left drop out before scoring, so the ranked measures
+    # rank only the current team. Their days still set the team size that
+    # split each day's target.
+    from lib import staff_numbers
+    table = table[~staff_numbers.former(table.index.get_level_values("Served By").to_series()).to_numpy()]
     table = _score(table, columns=ATTENDANT_SCORE_COLUMNS)
     table = table.reset_index().rename(columns={"Served By": "Attendant / BA"})
     return table.sort_values("Score", ascending=False)
