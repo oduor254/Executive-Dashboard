@@ -31,7 +31,8 @@ col_picker, col_refresh = st.columns([3, 1])
 with col_picker:
     start_date, end_date = filters.date_range_control("attendants", default="Yesterday")
 with col_refresh:
-    db.refresh_button(key="attendants_refresh")
+    if db.refresh_button(key="attendants_refresh"):
+        training.load.clear()
 
 # The headers asked for, in the order asked, with the brand ambassador beside the
 # attendant; Session and Orders follow so a row can be traced back in Odoo.
@@ -512,6 +513,60 @@ def _training_ranking(rows: pd.DataFrame) -> None:
         grid.filterable_table(table[cols], pinned_columns=(cols[0],), height=420)
 
 
+@st.fragment(run_every=training.LIVE_SECONDS)
+def _training_today(location: str) -> None:
+    """Today's questionnaire as it is answered: redrawn on its own every
+    LIVE_SECONDS, so the rest of the section (and its table filters) stays put."""
+    try:
+        data = training.load()
+    except training.TrainingUnavailable:
+        return
+    today = date.today()
+    if today not in data["days"]:
+        return
+    roster, responses = data["roster"], data["responses"]
+    team = roster if location == "All Locations" else roster[roster["Location"] == location]
+    got = responses[responses["Day"] == today] if not responses.empty else responses
+    if location != "All Locations" and not got.empty:
+        got = got[got["Location"] == location]
+    got = got.sort_values("Submitted", ascending=False) if not got.empty else got
+    on_team = got[got["Email"].isin(team["Email"])] if not got.empty else got
+    waiting = team[~team["Email"].isin(on_team["Email"] if not got.empty else [])]
+
+    with st.container(border=True):
+        st.markdown(f"**🟢 Live — today's questionnaire ({today:%a %d %b})**")
+        latest = got.iloc[0] if not got.empty else None
+        _kpis_row([
+            ("Answered So Far", f"{len(on_team):,} of {len(team):,}",
+             f"{len(on_team) / len(team) * 100:.0f}% of the team list" if len(team) else None),
+            ("Average Score So Far", f"{got['Score %'].mean():.1f}%" if not got.empty else "—",
+             f"{len(got):,} answer{'s' if len(got) != 1 else ''}"),
+            ("Latest Answer", f"{latest['Submitted']:%H:%M}" if latest is not None
+             and pd.notna(latest["Submitted"]) else "—",
+             f"{latest['Name']}, {latest['Location']}" if latest is not None else "none yet"),
+            ("Still to Answer", f"{len(waiting):,}", "open until the end of the day"),
+        ])
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            st.caption("Answers as they come in, latest first.")
+            if got.empty:
+                st.info("No answers yet today.")
+            else:
+                st.dataframe(got.assign(Time=got["Submitted"].dt.strftime("%H:%M"))[
+                    ["Time", "Name", "Location", "Score %", "Completion %"]],
+                    hide_index=True, width="stretch", height=300)
+        with c2:
+            st.caption("Still to answer, by shop.")
+            if waiting.empty:
+                st.success("Everyone on the team list has answered.")
+            else:
+                st.dataframe(waiting.sort_values(["Location", "Name"])[["Location", "Name"]],
+                             hide_index=True, width="stretch", height=300)
+        st.caption(f"Reads the sheet every {training.LIVE_SECONDS} seconds and updates on its own · "
+                   f"last read {datetime.now():%H:%M:%S}. Today's answers join the figures below "
+                   "once the day closes.")
+
+
 def _training(start_date: date, end_date: date, location: str) -> None:
     """Daily sales training: who answered the questionnaire, how fully and how well."""
     try:
@@ -519,6 +574,7 @@ def _training(start_date: date, end_date: date, location: str) -> None:
     except training.TrainingUnavailable as exc:
         st.warning(str(exc), icon="🔒")
         return
+    _training_today(location)
     roster, responses = data["roster"], data["responses"]
     today = date.today()
     days = [d for d in data["days"] if start_date <= d <= end_date]
