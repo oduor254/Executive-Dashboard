@@ -552,16 +552,16 @@ def _training_today(location: str) -> None:
             if got.empty:
                 st.info("No answers yet today.")
             else:
-                st.dataframe(got.assign(Time=got["Submitted"].dt.strftime("%H:%M"))[
+                grid.filterable_table(got.assign(Time=got["Submitted"].dt.strftime("%H:%M"))[
                     ["Time", "Name", "Location", "Score %", "Completion %"]],
-                    hide_index=True, width="stretch", height=300)
+                    height=300, total=False)
         with c2:
             st.caption("Still to answer, by shop.")
             if waiting.empty:
                 st.success("Everyone on the team list has answered.")
             else:
-                st.dataframe(waiting.sort_values(["Location", "Name"])[["Location", "Name"]],
-                             hide_index=True, width="stretch", height=300)
+                grid.filterable_table(waiting.sort_values(["Location", "Name"])[["Location", "Name"]],
+                                      height=300, total=False)
         st.caption(f"Reads the sheet every {training.LIVE_SECONDS} seconds and updates on its own · "
                    f"last read {datetime.now():%H:%M:%S}. Today's answers join the figures below "
                    "once the day closes.")
