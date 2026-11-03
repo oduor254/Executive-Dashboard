@@ -30,6 +30,7 @@ from lib import feedback, sheets_sync, staff_numbers
 # One sheet per month; add each new month's sheet here.
 SPREADSHEETS = [
     "1PWv6NoxgCF0bBaJZZUql0eoBiBK5E3_6nvNvzIkwJ30",   # October 2026
+    "1mNx9gtxJ_nwW1-ixr6d4CLixvrjSrqLhUJanNe0CMKQ",   # November 2026
 ]
 ROSTER_TAB = "Sheet1"
 # Team-list and form locations, named as the rest of the dashboard names them.
@@ -127,23 +128,43 @@ def _read_responses(title: str, values: list[list[str]], day: date) -> pd.DataFr
     return out[out["Email"].ne("")]
 
 
-@st.cache_data(ttl=600, show_spinner="Reading the sales training sheet…")
+# How often the current month's sheet is read again, so answers show up
+# while the day's questionnaire is still open.
+LIVE_SECONDS = 30
+
+
+def _read_sheet(sheet_id: str) -> tuple[str, dict[str, list[list[str]]]]:
+    """(the sheet's title, every tab's rows)."""
+    try:
+        sheet = _with_retries(lambda: sheets_sync._client().open_by_key(sheet_id))
+        # Every tab in one request — a month has 30 questionnaire tabs, and
+        # reading them one by one took most of the load time.
+        return sheet.title, _with_retries(lambda: sheets_sync.read_tabs(sheet))
+    except Exception as exc:
+        raise TrainingUnavailable(
+            f"Could not read the sales training sheet ({exc}). Share it with "
+            f"{feedback.service_account_email()} as a Viewer.") from exc
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _past_sheet(sheet_id: str) -> tuple[str, dict[str, list[list[str]]]]:
+    """A past month's sheet: its answers are in, so it is kept for hours."""
+    return _read_sheet(sheet_id)
+
+
+@st.cache_data(ttl=LIVE_SECONDS, show_spinner="Reading the sales training sheet…")
 def load() -> dict:
     """{"responses": one row per answer, "roster": the team list,
-    "days": every questionnaire day, "skipped": copied tabs left out}."""
-    client = sheets_sync._client()
+    "days": every questionnaire day, "skipped": copied tabs left out}.
+
+    The latest sheet in SPREADSHEETS (this month's) is read again every
+    LIVE_SECONDS, so a questionnaire's answers appear as they are sent; the
+    earlier months come from their own longer cache."""
     frames, roster_rows, days, skipped = [], [], set(), []
     for sheet_id in SPREADSHEETS:
-        try:
-            sheet = _with_retries(lambda: client.open_by_key(sheet_id))
-            # Every tab in one request — a month has 30 questionnaire tabs,
-            # and reading them one by one took most of the load time.
-            tabs = _with_retries(lambda: sheets_sync.read_tabs(sheet))
-        except Exception as exc:
-            raise TrainingUnavailable(
-                f"Could not read the sales training sheet ({exc}). Share it with "
-                f"{feedback.service_account_email()} as a Viewer.") from exc
-        year_match = re.search(r"(20\d\d)", sheet.title)
+        title, tabs = (_read_sheet(sheet_id) if sheet_id == SPREADSHEETS[-1]
+                       else _past_sheet(sheet_id))
+        year_match = re.search(r"(20\d\d)", title)
         year = int(year_match.group(1)) if year_match else date.today().year
         seen: dict[frozenset, str] = {}
         for title, values in tabs.items():
