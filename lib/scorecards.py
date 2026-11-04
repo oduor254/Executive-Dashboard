@@ -320,17 +320,58 @@ def shop_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.DataFra
     return table.sort_values("Score", ascending=False)
 
 
+BA_SUFFIX = " (BA)"   # how the tills name a brand ambassador's sales
+
+
+def ba_card_shops(df: pd.DataFrame, served_by: str = "Served By") -> pd.Series:
+    """Brand ambassador → the shop their card is under: where they served the
+    most orders in the period.
+
+    A BA has one record on one till but is sent where the demand is — the
+    Nairobi CBD shops (Hilton, KTDA, Hazina, Starmall) and the website swap
+    BAs often, and a branch BA is sometimes lent out — so they get one card
+    for every shop they worked, not one per shop."""
+    bas = df[df[served_by].astype(str).str.endswith(BA_SUFFIX)]
+    if bas.empty:
+        return pd.Series(dtype=object)
+    counts = bas.groupby([served_by, "Location"]).size().reset_index(name="n")
+    return counts.sort_values("n", ascending=False).drop_duplicates(served_by).set_index(served_by)["Location"]
+
+
+def on_card_shop(frame: pd.DataFrame, shops: pd.Series, served_by: str = "Served By") -> pd.DataFrame:
+    """`frame` with each BA's rows moved to their card's shop (Location)."""
+    if shops.empty:
+        return frame
+    home = frame[served_by].map(shops)
+    return frame.assign(Location=home.fillna(frame["Location"]))
+
+
+def shops_worked(df: pd.DataFrame, served_by: str = "Served By") -> pd.Series:
+    """(person, card shop) → the shops they served at, with days: "Hazina 3d, Ktda 1d"."""
+    staffed = df[df[served_by] != NOT_RECORDED].assign(Day=_dates(df["Date"]))
+    days = staffed.groupby([served_by, "Location"])["Day"].nunique()
+    text = days.reset_index().sort_values("Day", ascending=False).groupby(served_by).apply(
+        lambda d: ", ".join(f"{loc} {n}d" for loc, n in zip(d["Location"], d["Day"])),
+        include_groups=False)
+    return text
+
+
 def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.DataFrame,
                     training: pd.Series | None = None) -> pd.DataFrame:
-    """One row per attendant or BA (per shop they served at).
+    """One row per attendant (per shop they served at) or brand ambassador
+    (one card for all the shops they were sent to, under ba_card_shops).
 
     For every day a person was on the floor, their target is the shop's
     daily target split equally between everyone who served there that day;
     their revenue is what they generated (the orders they served), so the
-    score is that against the sum of their daily shares.
+    score is that against the sum of their daily shares. A BA's shares are
+    worked out at the shop they were at each day, then added up on one card.
     """
-    staffed = df[df["Served By"] != NOT_RECORDED]
     worked = person_days(df, day_targets)
+    shops = ba_card_shops(df)
+    df_cards = on_card_shop(df, shops)
+    worked = on_card_shop(worked, shops)
+    staffed = df_cards[df_cards["Served By"] != NOT_RECORDED]
     keys = ["Served By", "Location"]
     g = staffed.groupby(keys)
     table = pd.DataFrame({
@@ -354,6 +395,8 @@ def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.Da
     table = table.join(_customer_rates(staffed, keys).drop(columns="Repeat %"))
     table["Training %"] = (training.reindex(table.index).round(1) if training is not None
                            else np.nan)
+    worked_at = shops_worked(df)
+    table["Shops Worked"] = [worked_at.get(p) for p, _ in table.index]
     # People who have left drop out before scoring, so the ranked measures
     # rank only the current team. Their days still set the team size that
     # split each day's target.

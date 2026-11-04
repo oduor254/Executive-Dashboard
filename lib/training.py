@@ -130,7 +130,7 @@ def _read_responses(title: str, values: list[list[str]], day: date) -> pd.DataFr
 
 # How often the current month's sheet is read again, so answers show up
 # while the day's questionnaire is still open.
-LIVE_SECONDS = 30
+LIVE_SECONDS = 60
 
 
 def _read_sheet(sheet_id: str) -> tuple[str, dict[str, list[list[str]]]]:

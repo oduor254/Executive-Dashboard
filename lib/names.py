@@ -102,10 +102,13 @@ _REAL_NAMES = {"gary", "merry", "marty", "marg", "mara", "maria", "marie", "mari
                "elis", "even", "elosi", "sherah", "mathia", "lorren", "alica", "magrine",
                "belly", "jessa", "nanny", "loiza", "valessa"}
 
+# Each distinct customer name and how many customers carry it: 120k rows
+# instead of 310k, which took most of the Customers page's first load.
 _CUSTOMER_NAMES = """
-SELECT rp.name
+SELECT rp.name, COUNT(*) AS n
 FROM res_partner rp
 WHERE EXISTS (SELECT 1 FROM pos_order po WHERE po.partner_id = rp.id)
+GROUP BY rp.name
 """
 
 
@@ -132,15 +135,17 @@ def spelling_suggestions() -> dict[str, str]:
     if rows.empty:
         return {}
     first = rows["name"].map(clean).str.split().str[0].str.lower()
-    freq = first[first.notna() & (first != "n/a")].value_counts()
-    common = freq[freq >= _COMMON_MIN]
+    keep = first.notna() & (first != "n/a")
+    freq = rows.loc[keep, "n"].groupby(first[keep]).sum().sort_values(ascending=False)
+    # A plain dict: looking candidates up in a pandas index was most of the loop.
+    common = freq[freq >= _COMMON_MIN].to_dict()
     lookup = gender._load_lookup()
 
     out = {}
     for typed, times in freq[freq <= _RARE_MAX].items():
         if len(typed) < 4 or not typed.isalpha() or typed in _REAL_NAMES:
             continue
-        near = sorted((c for c in _one_slip(typed) if c in common.index),
+        near = sorted((c for c in _one_slip(typed) if c in common),
                       key=lambda c: common[c], reverse=True)
         if not near or common[near[0]] < _COMMON_RATIO * times:
             continue
@@ -156,6 +161,55 @@ def spelling_suggestions() -> dict[str, str]:
     return out
 
 
+# First names someone has checked and marked as correct on the Customers page
+# ("Morene" is that customer's real name, not a slip of Moreen). Kept in a tab
+# of the deals tracker spreadsheet — the dashboard's service account can edit
+# it, and it outlives app restarts — and never corrected again. To undo one,
+# delete its row in the tab.
+VERIFIED_TAB = "Verified Names"
+_VERIFIED_HEADER = ["First Name", "Suggested", "Name as Typed", "Phone", "Marked On"]
+
+
+def _tracker():
+    from lib import config, sheets_sync
+    sheet_id = config.get("DEALS_TRACKER_SHEET_ID")
+    if not sheet_id:
+        raise RuntimeError("DEALS_TRACKER_SHEET_ID is not set, so verified names can't be saved.")
+    return sheets_sync._client().open_by_key(sheet_id)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def verified_names() -> frozenset[str]:
+    """First names (lower case) marked as correct. Empty if the tab can't be
+    read yet — it is created the first time a name is marked."""
+    try:
+        rows = _tracker().worksheet(VERIFIED_TAB).col_values(1)[1:]
+    except Exception:
+        return frozenset()
+    return frozenset(r.strip().lower() for r in rows if r.strip())
+
+
+def mark_verified(rows: pd.DataFrame) -> int:
+    """Record these suggestions (Typed, Corrected To, Name as Typed, Phone) as
+    real names, so they stop being corrected. Returns how many were added."""
+    from datetime import date
+    import gspread
+    sheet = _tracker()
+    try:
+        ws = sheet.worksheet(VERIFIED_TAB)
+    except gspread.WorksheetNotFound:
+        ws = sheet.add_worksheet(VERIFIED_TAB, rows=1000, cols=len(_VERIFIED_HEADER))
+        ws.append_row(_VERIFIED_HEADER)
+    known = verified_names()
+    new = rows[~rows["Typed"].str.lower().isin(known)].drop_duplicates("Typed")
+    if not new.empty:
+        ws.append_rows([[r["Typed"], r["Corrected To"], r["Name as Typed"], str(r["Phone"]),
+                         date.today().isoformat()] for _, r in new.iterrows()],
+                       value_input_option="RAW")
+    verified_names.clear()
+    return len(new)
+
+
 def fix_spelling(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Correct misspelt first names in Name / First Name.
 
@@ -163,7 +217,8 @@ def fix_spelling(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     Phone, Typed, Corrected To, Orders) to put right in Odoo.
     """
     from lib import gender
-    suggestions = spelling_suggestions()
+    verified = verified_names()
+    suggestions = {typed: to for typed, to in spelling_suggestions().items() if typed not in verified}
     lookup, learned = gender._load_lookup(), gender._learned()
     df = df.copy()
     typed = df["First Name"].str.lower()

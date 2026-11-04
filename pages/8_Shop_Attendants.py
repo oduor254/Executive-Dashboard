@@ -153,7 +153,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
         _feedback_table(start_date, end_date, location, person)
 
 
-ATTENDANCE_LIVE_SECONDS = 60
+ATTENDANCE_LIVE_SECONDS = 120
 EAT = timezone(timedelta(hours=3))   # Kenya, Uganda and Tanzania: no daylight saving
 OFF_STATUSES = {"leave", "off", "ooo"}
 
@@ -176,7 +176,6 @@ def _attendance_rows(start_date: date, end_date: date, location: str) -> pd.Data
     return a
 
 
-@st.fragment(run_every=ATTENDANCE_LIVE_SECONDS)
 def _attendance_today(location: str) -> None:
     """Who is in today and who is yet to clock in, redrawn on its own."""
     now = datetime.now(EAT)
@@ -237,14 +236,28 @@ def _attendance_today(location: str) -> None:
         st.caption("By shop.")
         grid.filterable_table(by_shop.rename(columns={"index": "Location"}), height=260)
         st.caption(f"From the Attendance app, where the shop manager clocks the team in and out and "
-                   f"enters the brand ambassadors. Updates on its own every {ATTENDANCE_LIVE_SECONDS} "
-                   f"seconds · last read {now:%H:%M:%S}. BAs aren't expected every day, so they "
+                   f"enters the brand ambassadors. Updates every {ATTENDANCE_LIVE_SECONDS // 60} minutes while Auto-refresh is on "
+                   f"· last read {now:%H:%M:%S}. BAs aren't expected every day, so they "
                    "are only counted once clocked in.")
+
+
+# Each live panel in two forms: redrawing itself on a timer, or only when
+# the page reruns. A tab left open on the timed one keeps the server busy
+# for as long as it stays open, so it can be switched off.
+_attendance_today_live = st.fragment(run_every=ATTENDANCE_LIVE_SECONDS)(_attendance_today)
+_attendance_today_static = st.fragment()(_attendance_today)
+
+
+def _live_panel(key: str, live, static, *args, default: bool = True) -> None:
+    """Draw a live panel, timed or not as its Auto-refresh switch says."""
+    auto = st.toggle("Auto-refresh", value=default, key=key,
+                     help="Updates the panel on its own. Switch off when leaving the tab open.")
+    (live if auto else static)(*args)
 
 
 def _attendance(start_date: date, end_date: date, location: str) -> None:
     """Attendance: live for today, then each person over the range."""
-    _attendance_today(location)
+    _live_panel("attendance_auto", _attendance_today_live, _attendance_today_static, location)
     since = max(start_date, weighted_scores.ATTENDANCE_SINCE)
     today = datetime.now(EAT).date()
     if end_date < since:
@@ -638,7 +651,6 @@ def _training_ranking(rows: pd.DataFrame) -> None:
         grid.filterable_table(table[cols], pinned_columns=(cols[0],), height=420)
 
 
-@st.fragment(run_every=training.LIVE_SECONDS)
 def _training_today(location: str) -> None:
     """Today's questionnaire as it is answered: redrawn on its own every
     LIVE_SECONDS, so the rest of the section (and its table filters) stays put."""
@@ -687,9 +699,13 @@ def _training_today(location: str) -> None:
             else:
                 grid.filterable_table(waiting.sort_values(["Location", "Name"])[["Location", "Name"]],
                                       height=300, total=False)
-        st.caption(f"Reads the sheet every {training.LIVE_SECONDS} seconds and updates on its own · "
+        st.caption(f"Reads the sheet every {training.LIVE_SECONDS} seconds while Auto-refresh is on · "
                    f"last read {datetime.now():%H:%M:%S}. Today's answers join the figures below "
                    "once the day closes.")
+
+
+_training_today_live = st.fragment(run_every=training.LIVE_SECONDS)(_training_today)
+_training_today_static = st.fragment()(_training_today)
 
 
 def _training(start_date: date, end_date: date, location: str) -> None:
@@ -699,7 +715,8 @@ def _training(start_date: date, end_date: date, location: str) -> None:
     except training.TrainingUnavailable as exc:
         st.warning(str(exc), icon="🔒")
         return
-    _training_today(location)
+    _live_panel("training_auto", _training_today_live, _training_today_static, location,
+                default=end_date >= date.today())
     roster, responses = data["roster"], data["responses"]
     today = date.today()
     days = [d for d in data["days"] if start_date <= d <= end_date]
@@ -1230,6 +1247,7 @@ def _attendant_help(r: pd.Series) -> dict[str, list[str]]:
     days = _n(r.get("Days Worked"))
     return {
         "Personal Target": [f"Target: {_money(r['Target'])} — their share of the shop's daily target on the {days} days they were on the floor",
+                            f"Shops worked: {r.get('Shops Worked') or '—'}",
                             f"Achieved: {_money(r['Revenue'])} ({_pct(r['Target %'])}) from {_n(r['Orders'])} sales",
                             f"Gap: {_gap(r['Revenue'], r['Target'])}",
                             f"Shop's sales split equally among the floor team: {_money(r.get('Shop Share'))}"],
@@ -1466,7 +1484,11 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str, role: str
                    "weighted up (Personal Target 35%, Customer Target 20%), and Punctuality counts "
                    "only the days they clocked in. On the attendants' card the measures that never "
                    "apply to a BA would hand their weight to easy-to-max ones and lift BAs above "
-                   "attendants measured on more.")
+                   "attendants measured on more. A BA is sent where the demand is — the Nairobi "
+                   "CBD shops (Hilton, KTDA, Hazina, Starmall) and the website swap them often — so "
+                   "each BA has **one card for every shop they worked**, under the shop where they "
+                   "served most: each day's target share is worked out at the shop they were at that "
+                   "day, then added up, and **Shops Worked** lists where they were.")
     cards = cards.assign(Name=cards["Attendant / BA"] + " — " + cards["Location"])
     chosen = cards if person == ALL_PEOPLE else cards[cards["Attendant / BA"] == person]
     if chosen.empty:
@@ -1500,7 +1522,7 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str, role: str
         st.caption(f"The 12 best weighted scores are shown as cards; all {len(cards)} are in the "
                    "table. Pick a person at the top to see their card.")
     with st.container(border=True):
-        cols = (["Role Rank", "Attendant / BA", "Location", "Weighted Score", "Weight Counted %"]
+        cols = (["Role Rank", "Attendant / BA", "Location", "Shops Worked", "Weighted Score", "Weight Counted %"]
                 + [f"{m} Score" for m, _, _ in measures] + [f"{m} Points" for m, _, _ in measures]
                 + ["Target", "Revenue", "Target %", "Days Worked", "Shop Share", "Orders",
                    "Bulk Sales", "Bulk % of Target", "Basket Value", "New Products %",

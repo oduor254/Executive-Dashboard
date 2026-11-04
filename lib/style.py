@@ -348,6 +348,16 @@ section[data-testid="stSidebar"][aria-expanded="true"] [data-testid="stSidebarNa
   transition: transform 220ms cubic-bezier(.2, .8, .2, 1), box-shadow 220ms ease;
 }
 [data-testid="stMetric"]:hover { transform: translateY(-3px); box-shadow: var(--denri-shadow-hover); }
+/* A tile's explanation (lib/kpi_help.py) shows on hovering the tile itself:
+   the help icon's hover area is stretched invisibly over the whole tile. */
+[data-testid="stMetric"] { position: relative; }
+[data-testid="stMetric"] [data-testid="stTooltipIcon"] {
+  position: absolute; inset: 0; z-index: 2; margin: 0; cursor: help;
+}
+[data-testid="stMetric"] [data-testid="stTooltipIcon"] > div,
+[data-testid="stMetric"] [data-testid="stTooltipHoverTarget"] {
+  width: 100%; height: 100%; opacity: 0;
+}
 /* KPI rows take the pastel tints in turn, like the reference's cards */
 [data-testid="stColumn"]:nth-child(4n+1) [data-testid="stElementContainer"] > [data-testid="stMetric"],
 [data-testid="stColumn"]:nth-child(4n+1) [data-denri-card]:has(> [data-testid="stElementContainer"] > [data-testid="stMetric"]) { background: var(--denri-tint-1); }

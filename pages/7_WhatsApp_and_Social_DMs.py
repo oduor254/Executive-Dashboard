@@ -1113,7 +1113,12 @@ def _hybrid_data(start: date, end: date, within: int,
     """(one row per customer who bought the other way, one row per customer
     who got in touch this way in the range) — read from the recycling data,
     so the two share one set of queries."""
-    touches, bought, _ = _recycling_data(start, date.today())
+    # The Lead Recycling tab's default 90-day load covers most ranges asked
+    # for here; reading the same window shares its cache instead of moving
+    # the same 40k chats across the network a second time.
+    today = date.today()
+    pool_start = today - timedelta(days=POOL_WINDOWS["Last 90 days"])
+    touches, bought, _ = _recycling_data(min(start, pool_start), today)
     if touches.empty:
         return pd.DataFrame(), pd.DataFrame()
     return (lr.hybrid(touches, bought, start=start, end=end, within=within, direction=direction),

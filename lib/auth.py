@@ -11,7 +11,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from lib import config, style
+from lib import config, kpi_help, style
 
 LOGO_PATH = Path(__file__).parent.parent / "assets" / "logo.png"
 
@@ -180,9 +180,11 @@ def require_login() -> None:
     """Block the rest of the page until the correct password is entered.
 
     Every page calls this first, so it is also where the app-wide styling
-    (lib/style.py) goes in.
+    (lib/style.py) and the KPI tiles' hover explanations (lib/kpi_help.py)
+    go in.
     """
     style.inject()
+    kpi_help.install()
     if st.session_state.get("authenticated") or st.session_state.get("login_disabled"):
         return
 
