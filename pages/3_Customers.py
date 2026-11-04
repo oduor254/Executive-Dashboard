@@ -236,10 +236,30 @@ def _spelling_to_fix(rows) -> None:
         "(missing, extra, swapped or mistyped — \"Meercy\" for Mercy, \"Briyan\" for Brian). "
         "The dashboard already shows the corrected name. Only rare spellings close to exactly "
         "one common name are corrected, and never a real name in its own right (Gary, Merry) "
-        "or against the recorded gender (Alfreda stays Alfreda)."
+        "or against the recorded gender (Alfreda stays Alfreda). Checked one and it is the "
+        "person's real name? Tick **Name Is Correct** and save: that spelling is never "
+        "corrected again."
     )
     with st.container(border=True):
-        grid.filterable_table(rows, pinned_columns=("Name as Typed",), height=320)
+        edited = st.data_editor(
+            rows.assign(**{"Name Is Correct": False}),
+            column_config={"Name Is Correct": st.column_config.CheckboxColumn(
+                "Name Is Correct", help="Tick after checking that this is the customer's real name.")},
+            disabled=[c for c in rows.columns], hide_index=True, width="stretch",
+            height=min(420, 38 * len(rows) + 40), key="spelling_verified_editor")
+        picked = edited[edited["Name Is Correct"]]
+        if st.button(f"✅ Save {len(picked)} as correct" if len(picked) else "✅ Save as correct",
+                     disabled=picked.empty, key="spelling_verified_save"):
+            try:
+                added = names.mark_verified(picked)
+            except Exception as exc:
+                st.error(f"Couldn't save to the deals tracker sheet ({exc}).")
+            else:
+                st.toast(f"Saved {added} name{'s' if added != 1 else ''} as correct — "
+                         "they won't be corrected again.", icon="✅")
+                st.rerun()
+        st.caption(f"Saved in the **{names.VERIFIED_TAB}** tab of the deals tracker spreadsheet; "
+                   "delete a row there to start correcting that spelling again.")
 
 
 
