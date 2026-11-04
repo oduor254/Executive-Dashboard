@@ -5333,6 +5333,9 @@ SELECT d.date                                                    AS "Date",
        COALESCE(d.rostered, FALSE)                               AS "Rostered",
        d.shift_label                                             AS "Shift",
        d.rostered_start                                          AS "Shift Start",
+       -- Minutes after the shift start before a clock-in counts as late
+       -- (15 on every shop shift); Late Minutes are counted after it.
+       COALESCE(d.grace_minutes, 0)                              AS "Grace",
        d.status                                                  AS "Status",
        COALESCE(d.late_minutes, 0)                               AS "Late Minutes",
        NULLIF(d.first_in_local, '')                              AS "First In",

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import (attendant_report, auth, db, feedback, filters, footfall, grid, queries, runway,
+from lib import (attendant_report, auth, charts, db, feedback, filters, footfall, grid, queries, runway,
                  scorecards, staff_numbers, targets, theme, training, weighted_scores)
 
 st.set_page_config(page_title=auth.page_title("Shop Attendants"),
@@ -171,9 +171,17 @@ def _attendance_rows(start_date: date, end_date: date, location: str) -> pd.Data
     a["Status"] = a["Status"].fillna("").str.lower()
     a["Name"] = np.where(a["Is BA"], a["Employee"] + weighted_scores.BA_SUFFIX, a["Person"])
     a["Role"] = np.where(a["Is BA"], "Brand Ambassador", "Attendant")
-    start = pd.to_numeric(a["Shift Start"], errors="coerce")
-    a["Shift Starts"] = [f"{int(h):02d}:{round(h % 1 * 60):02d}" if pd.notna(h) else "—" for h in start]
+    start = pd.to_numeric(a["Shift Start"], errors="coerce") * 60          # minutes after midnight
+    grace = pd.to_numeric(a["Grace"], errors="coerce").fillna(0)
+    a["Shift Starts"] = [_hhmm(m) for m in start]
+    a["Late After"] = [_hhmm(m) for m in start + grace]
+    first_in = a["First In"].str.slice(0, 2).astype(float) * 60 + a["First In"].str.slice(3, 5).astype(float)
+    a["Minutes After Start"] = (first_in - start).round(0)
     return a
+
+
+def _hhmm(minutes) -> str:
+    return f"{int(minutes // 60):02d}:{int(round(minutes % 60)):02d}" if pd.notna(minutes) else "—"
 
 
 def _attendance_today(location: str) -> None:
@@ -217,14 +225,14 @@ def _attendance_today(location: str) -> None:
                         ["Location", "Name", "Shift", "Shift Starts", "Minutes Past Start"]],
                     height=320, total=False)
         with c2:
-            st.caption("**Clocked in** — latest first; BAs included.")
+            st.caption("**Clocked in** — latest first; BAs included. Late after = shift start + 15-minute grace.")
             if clocked.empty:
                 st.info("Nobody has clocked in yet today.")
             else:
                 grid.filterable_table(
                     clocked.sort_values("First In", ascending=False).assign(
                         Status=clocked["Status"].str.title())[
-                        ["Location", "Name", "Role", "First In", "Status", "Late Minutes", "Last Out"]],
+                        ["Location", "Name", "Role", "Shift Starts", "Late After", "First In", "Status", "Late Minutes", "Last Out"]],
                     height=320, total=False)
         by_shop = pd.DataFrame({
             "Rostered": due.groupby("Location").size(),
@@ -270,22 +278,178 @@ def _attendance(start_date: date, end_date: date, location: str) -> None:
     a = a[a["Status"].isin(weighted_scores.ATTENDANCE_POINTS)] if not a.empty else a
     if a.empty:
         return
-    a = a.assign(Point=a["Status"].map(weighted_scores.ATTENDANCE_POINTS))
-    g = a.groupby(["Name", "Role", "Location"])
-    people = pd.DataFrame({
-        "Days Due": g.size(),
-        "Days In": g["Status"].apply(lambda s: int(s.isin(["present", "late"]).sum())),
-        "On Time": g["Status"].apply(lambda s: int((s == "present").sum())),
-        "Late": g["Status"].apply(lambda s: int((s == "late").sum())),
-        "Absent": g["Status"].apply(lambda s: int((s == "absent").sum())),
-        "Attendance %": (g["Point"].mean() * 100).round(1),
-        "Avg Late (min)": a[a["Status"] == "late"].groupby(["Name", "Role", "Location"])["Late Minutes"].mean().round(0),
-    }).reset_index().sort_values(["Attendance %", "Absent"], ascending=[True, False])
-    with st.container(border=True):
-        st.caption(f"**{since:%d %b} – {min(end_date, today):%d %b %Y}, each person** — lowest attendance "
-                   "first. On time 1, late ½, absent 0 (the score cards' Attendance); a BA counts only "
-                   "the days they clocked in, and today counts once someone has clocked in.")
-        grid.filterable_table(people, pinned_columns=("Name",), height=440)
+    a = a.assign(Point=a["Status"].map(weighted_scores.ATTENDANCE_POINTS),
+                 On_Time=a["Status"].eq("present"), Late=a["Status"].eq("late"),
+                 Absent=a["Status"].eq("absent"))
+    end = min(end_date, today)
+    team, bas = a[~a["Is BA"]], a[a["Is BA"]]
+    late = a[a["Late"]]
+    in_team = int((team["On_Time"] | team["Late"]).sum())
+    _kpis_row([
+        ("Attendance", f"{team['Point'].mean() * 100:.1f}%" if not team.empty else "—",
+         f"{len(team):,} rostered attendant-days"),
+        ("On Time", f"{team['On_Time'].sum() / in_team * 100:.1f}%" if in_team else "—",
+         f"{int(team['On_Time'].sum()):,} of {in_team:,} days in"),
+        ("Late Arrivals", f"{len(late):,}",
+         f"average {late['Late Minutes'].mean():.0f} min after the grace" if not late.empty else "nobody late"),
+        ("Absences", f"{int(team['Absent'].sum()):,}", "rostered, never clocked in"),
+        ("BA Days Worked", f"{len(bas):,}", f"{bas['Name'].nunique():,} brand ambassadors"),
+    ])
+    st.caption(f"{since:%d %b} – {end:%d %b %Y}, from the Attendance app. A clock-in counts as **late** "
+               "only after the shift start **plus a 15-minute grace** (07:20 start: late from 07:36); "
+               "**late minutes** are counted after the grace. Attendance scores on time 1, late ½, absent 0, "
+               "as on the score cards. Brand ambassadors don't work every day, so they count only on the "
+               "days they clocked in; today counts once someone has clocked in.")
+
+    view = st.segmented_control("Attendance view", ["📈 Summary & Trends", "⏰ Late Arrivals",
+                                                    "🌟 Brand Ambassadors", "🧑‍💼 Each Person"],
+                                default="📈 Summary & Trends", key="attendance_view",
+                                label_visibility="collapsed") or "📈 Summary & Trends"
+
+    if view == "📈 Summary & Trends":
+        grain = st.radio("Summary by", ["Daily", "Weekly (Sun–Sat)", "Monthly"], horizontal=True,
+                         key="attendance_grain")
+        day = pd.to_datetime(a["Date"])
+        if grain == "Daily":
+            a = a.assign(Period=day, Label=day.dt.strftime("%a %d %b"))
+        elif grain == "Monthly":
+            a = a.assign(Period=day.dt.to_period("M").dt.start_time, Label=day.dt.strftime("%B %Y"))
+        else:
+            sunday = day.dt.to_period("W-SAT").dt.start_time
+            a = a.assign(Period=sunday, Label="Week of " + sunday.dt.strftime("%d %b"))
+
+        def summary(frame: pd.DataFrame, by: list[str]) -> pd.DataFrame:
+            t_ = frame[~frame["Is BA"]].groupby(by)
+            b_ = frame[frame["Is BA"]].groupby(by)
+            out = pd.DataFrame({
+                "Rostered": t_.size(),
+                "On Time": t_["On_Time"].sum(),
+                "Late": t_["Late"].sum(),
+                "Absent": t_["Absent"].sum(),
+                "Attendance %": (t_["Point"].mean() * 100).round(1),
+                "Avg Late (min)": frame[frame["Late"] & ~frame["Is BA"]].groupby(by)["Late Minutes"].mean().round(0),
+                "BA Days": b_.size(),
+                "BAs Late": b_["Late"].sum(),
+            })
+            for c in ("Rostered", "On Time", "Late", "Absent", "BA Days", "BAs Late"):
+                out[c] = out[c].fillna(0).astype(int)
+            out.insert(4, "On Time %", (out["On Time"] / (out["On Time"] + out["Late"]).where(
+                lambda s: s > 0) * 100).round(1))
+            return out
+
+        per = summary(a, ["Period", "Label"]).reset_index().sort_values("Period")
+        with st.container(border=True):
+            fig = go.Figure()
+            for col, color in (("On Time", theme.STATUS["good"]), ("Late", theme.STATUS["warning"]),
+                               ("Absent", theme.STATUS["critical"])):
+                fig.add_bar(x=per["Label"], y=per[col], name=col, marker=dict(color=color),
+                            hovertemplate=f"%{{x}}<br>{col}: <b>%{{y:,.0f}}</b><extra></extra>")
+            fig.add_scatter(x=per["Label"], y=per["Attendance %"], name="Attendance %", yaxis="y2",
+                            mode="lines+markers", line=dict(color=theme.TEXT_PRIMARY, width=2),
+                            hovertemplate="Attendance: <b>%{y:.1f}%</b><extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title=f"Attendants — {grain.split(' ')[0].lower()} attendance", barmode="stack",
+                              height=400, legend_traceorder="normal",
+                              yaxis2=dict(overlaying="y", side="right", ticksuffix="%", range=[0, 105],
+                                          showgrid=False, tickfont=dict(color=theme.TEXT_MUTED)))
+            theme.show(fig)
+        with st.container(border=True):
+            st.caption(f"**{grain} summary** — attendants' rostered days, with the brand ambassadors' "
+                       "days worked beside them.")
+            grid.filterable_table(per.drop(columns="Period").rename(columns={"Label": grain.split(' ')[0]}),
+                                  height=340)
+        with st.container(border=True):
+            shops = summary(a, ["Location"]).reset_index().sort_values("Attendance %")
+            st.caption("**By shop** over the whole range, lowest attendance first.")
+            grid.filterable_table(shops, pinned_columns=("Location",), height=360)
+
+    elif view == "⏰ Late Arrivals":
+        if late.empty:
+            st.success("Nobody clocked in late in this range.", icon="✅")
+            return
+        c1, c2 = st.columns(2)
+        with c1, st.container(border=True):
+            often = (late.groupby(["Name", "Location"])
+                     .agg(Times=("Date", "size"), Minutes=("Late Minutes", "mean"))
+                     .reset_index().sort_values("Times").tail(20))
+            fig = go.Figure(go.Bar(
+                y=often["Name"] + " — " + often["Location"], x=often["Times"], orientation="h",
+                marker=dict(color=theme.STATUS["warning"], cornerradius=4),
+                text=[f"{t} · avg {m:.0f} min" for t, m in zip(often["Times"], often["Minutes"])],
+                textposition="outside", cliponaxis=False,
+                hovertemplate="<b>%{y}</b><br>Late <b>%{x}</b> times<extra></extra>"))
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="Late most often", hovermode="closest",
+                              height=max(360, 28 * len(often) + 90))
+            theme.show(fig)
+        with c2, st.container(border=True):
+            band = pd.cut(late["Late Minutes"], [0, 15, 30, 60, 120, 10_000],
+                          labels=["Up to 15 min", "16–30 min", "31–60 min", "1–2 hours", "Over 2 hours"],
+                          include_lowest=True)
+            counts = band.value_counts().sort_index()
+            fig = go.Figure(go.Bar(x=counts.index.astype(str), y=counts.values,
+                                   marker=dict(color=theme.STATUS["serious"], cornerradius=4),
+                                   text=[f"{v:,}" for v in counts.values], textposition="outside",
+                                   cliponaxis=False,
+                                   hovertemplate="%{x} late: <b>%{y:,}</b><extra></extra>"))
+            theme.apply_layout(fig, show_legend=False)
+            fig.update_layout(title="How late (after the 15-minute grace)", height=360)
+            theme.show(fig)
+        with st.container(border=True):
+            st.caption(f"**Every late arrival**, latest first — {len(late):,} in the range. *Late after* is the "
+                       "shift start plus the 15-minute grace.")
+            rows = late.sort_values(["Date", "Late Minutes"], ascending=[False, False])
+            grid.filterable_table(rows[["Date", "Location", "Name", "Role", "Shift", "Shift Starts", "Late After",
+                                        "First In", "Minutes After Start", "Late Minutes"]],
+                                  pinned_columns=("Name",), height=440)
+
+    elif view == "🌟 Brand Ambassadors":
+        if bas.empty:
+            st.info("No brand ambassador clocked in in this range.")
+            return
+        g = bas.groupby("Name")
+        ba = pd.DataFrame({
+            "Days Worked": g.size(),
+            "Shops": g["Location"].agg(lambda v: ", ".join(f"{s} {n}d" for s, n in v.value_counts().items())),
+            "On Time": g["On_Time"].sum().astype(int),
+            "Late": g["Late"].sum().astype(int),
+            "Punctuality %": (g["Point"].mean() * 100).round(1),
+            "Avg Late (min)": bas[bas["Late"]].groupby("Name")["Late Minutes"].mean().round(0),
+            "First Day": g["Date"].min(), "Last Day": g["Date"].max(),
+        }).reset_index().sort_values("Days Worked", ascending=False)
+        with st.container(border=True):
+            daily = bas.groupby(["Date", "Location"]).size().unstack(fill_value=0).sort_index()
+            fig = go.Figure()
+            for shop, color in zip(daily.columns, charts.colors_for(daily.columns)):
+                fig.add_bar(x=pd.to_datetime(daily.index), y=daily[shop], name=shop, marker=dict(color=color),
+                            hovertemplate=f"%{{x|%a %d %b}}<br>{shop}: <b>%{{y}}</b> BAs<extra></extra>")
+            theme.apply_layout(fig, show_legend=True)
+            fig.update_layout(title="Brand ambassadors in each day, by shop", barmode="stack", height=360,
+                              legend_traceorder="normal")
+            fig.update_xaxes(tickformat="%d %b")
+            theme.show(fig)
+        with st.container(border=True):
+            st.caption("**Each brand ambassador** — the days they clocked in and where. They are sent "
+                       "where the demand is (the Nairobi CBD shops and the website swap them often), so "
+                       "a day without a clock-in is a day they weren't working, not an absence. "
+                       "Punctuality: on time 1, late ½.")
+            grid.filterable_table(ba, pinned_columns=("Name",), height=380)
+
+    else:
+        g = a.groupby(["Name", "Role", "Location"])
+        people = pd.DataFrame({
+            "Days Due": g.size(),
+            "Days In": g["Status"].apply(lambda s: int(s.isin(["present", "late"]).sum())),
+            "On Time": g["On_Time"].sum().astype(int),
+            "Late": g["Late"].sum().astype(int),
+            "Absent": g["Absent"].sum().astype(int),
+            "Attendance %": (g["Point"].mean() * 100).round(1),
+            "Avg Late (min)": late.groupby(["Name", "Role", "Location"])["Late Minutes"].mean().round(0),
+        }).reset_index().sort_values(["Attendance %", "Absent"], ascending=[True, False])
+        with st.container(border=True):
+            st.caption("**Each person** — lowest attendance first. On time 1, late ½, absent 0 "
+                       "(the score cards' Attendance); a BA counts only the days they clocked in.")
+            grid.filterable_table(people, pinned_columns=("Name",), height=440)
 
 
 def _unrecorded_orders(start_date: date, end_date: date, location: str) -> None:

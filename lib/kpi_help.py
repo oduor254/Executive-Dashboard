@@ -218,6 +218,11 @@ GLOSSARY = {
     "Late": "Clocked in after their shift start plus the grace minutes.",
     "BAs In Today": "Brand ambassadors clocked in today (they don't work every day).",
     "Leave / Off": "Attendants on leave, off or out of office today.",
+    "Attendance": "Attendants' rostered days scored on time 1, late ½, absent 0, averaged (leave and days off don't count).",
+    "On Time": "Of the days attendants came in, the share they clocked in within the shift start + 15-minute grace.",
+    "Late Arrivals": "Clock-ins after the shift start + 15-minute grace (BAs included); late minutes are counted after the grace.",
+    "Absences": "Rostered attendant-days with no clock-in (not leave or a day off).",
+    "BA Days Worked": "Days brand ambassadors clocked in — they don't work every day, so only these count.",
 }
 
 _PATTERNS = [
