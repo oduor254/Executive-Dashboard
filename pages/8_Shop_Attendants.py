@@ -1,8 +1,9 @@
 """Shop Attendants — who served and who ran the till, for every POS session."""
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from lib import (attendant_report, auth, db, feedback, filters, footfall, grid, queries, runway,
-                 scorecards, targets, theme, training, weighted_scores)
+                 scorecards, staff_numbers, targets, theme, training, weighted_scores)
 
 st.set_page_config(page_title=auth.page_title("Shop Attendants"),
                    page_icon="🧑‍💼", layout="wide")
@@ -105,7 +106,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     # One section at a time: the feedback section reads the Google Sheet and
     # every converted customer, which is slow, so it only runs when opened.
-    sections = ["Sessions", "Score Cards", "Sales Training", "Customer Feedback"]
+    sections = ["Sessions", "Score Cards", "Sales Training", "Customer Feedback", "Attendance"]
     if person != ALL_PEOPLE:
         sections.insert(1, "Sales Breakdown")
     elif not unrecorded.empty:
@@ -146,8 +147,132 @@ def render_attendants(start_date: date, end_date: date) -> None:
         _person_sales(person, start_date, end_date, location)
     elif section == "Nobody Recorded":
         _unrecorded_orders(start_date, end_date, location)
+    elif section == "Attendance":
+        _attendance(start_date, end_date, location)
     else:
         _feedback_table(start_date, end_date, location, person)
+
+
+ATTENDANCE_LIVE_SECONDS = 60
+EAT = timezone(timedelta(hours=3))   # Kenya, Uganda and Tanzania: no daylight saving
+OFF_STATUSES = {"leave", "off", "ooo"}
+
+
+def _attendance_rows(start_date: date, end_date: date, location: str) -> pd.DataFrame:
+    """The Attendance app's days at the shops, named as the tills name people
+    (a brand ambassador with " (BA)") and the shop as the dashboard names it."""
+    a = db.run_query(queries.SHOP_ATTENDANCE, {"start_date": start_date, "end_date": end_date})
+    if a.empty:
+        return a
+    a = a[a["Place Type"] == "shop"].copy()
+    a["Location"] = a["Shop"].map(staff_numbers.shop_name)
+    if location != "All Locations":
+        a = a[a["Location"] == location]
+    a["Status"] = a["Status"].fillna("").str.lower()
+    a["Name"] = np.where(a["Is BA"], a["Employee"] + weighted_scores.BA_SUFFIX, a["Person"])
+    a["Role"] = np.where(a["Is BA"], "Brand Ambassador", "Attendant")
+    start = pd.to_numeric(a["Shift Start"], errors="coerce")
+    a["Shift Starts"] = [f"{int(h):02d}:{round(h % 1 * 60):02d}" if pd.notna(h) else "—" for h in start]
+    return a
+
+
+@st.fragment(run_every=ATTENDANCE_LIVE_SECONDS)
+def _attendance_today(location: str) -> None:
+    """Who is in today and who is yet to clock in, redrawn on its own."""
+    now = datetime.now(EAT)
+    a = _attendance_rows(now.date(), now.date(), location)
+    with st.container(border=True):
+        st.markdown(f"**🟢 Live — today's attendance ({now:%a %d %b}, {now:%H:%M})**")
+        if a.empty:
+            st.info("Nobody is on today's roster in the Attendance app"
+                    + ("" if location == "All Locations" else f" at {location}") + ".")
+            return
+        team = a[~a["Is BA"]]
+        due = team[team["Rostered"] & ~team["Status"].isin(OFF_STATUSES)]
+        clocked = a[a["First In"].notna()]
+        waiting = due[due["First In"].isna()].copy()
+        late = clocked[clocked["Status"] == "late"]
+        bas_in = clocked[clocked["Is BA"]]
+        away = team[team["Status"].isin(OFF_STATUSES)]
+        in_team = due["First In"].notna().sum()
+        _kpis_row([
+            ("Clocked In", f"{in_team:,} of {len(due):,}",
+             f"{in_team / len(due) * 100:.0f}% of the attendants rostered" if len(due) else "none rostered"),
+            ("Yet to Clock In", f"{len(waiting):,}", "rostered today, no clock-in yet"),
+            ("Late", f"{len(late):,}",
+             f"average {late['Late Minutes'].mean():.0f} min" if not late.empty else "nobody late"),
+            ("BAs In Today", f"{len(bas_in):,}", "brand ambassadors clocked in"),
+            ("Leave / Off", f"{len(away):,}", "not due in today"),
+        ])
+        minutes_now = now.hour * 60 + now.minute
+        start = pd.to_numeric(waiting["Shift Start"], errors="coerce") * 60
+        waiting["Minutes Past Start"] = (minutes_now - start).clip(lower=0).round(0)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("**Yet to clock in** — rostered today, longest overdue first.")
+            if waiting.empty:
+                st.success("Everyone rostered today has clocked in.")
+            else:
+                grid.filterable_table(
+                    waiting.sort_values("Minutes Past Start", ascending=False)[
+                        ["Location", "Name", "Shift", "Shift Starts", "Minutes Past Start"]],
+                    height=320, total=False)
+        with c2:
+            st.caption("**Clocked in** — latest first; BAs included.")
+            if clocked.empty:
+                st.info("Nobody has clocked in yet today.")
+            else:
+                grid.filterable_table(
+                    clocked.sort_values("First In", ascending=False).assign(
+                        Status=clocked["Status"].str.title())[
+                        ["Location", "Name", "Role", "First In", "Status", "Late Minutes", "Last Out"]],
+                    height=320, total=False)
+        by_shop = pd.DataFrame({
+            "Rostered": due.groupby("Location").size(),
+            "Clocked In": due[due["First In"].notna()].groupby("Location").size(),
+            "Late": late[~late["Is BA"]].groupby("Location").size(),
+            "Yet to Clock In": waiting.groupby("Location").size(),
+            "BAs In": bas_in.groupby("Location").size(),
+        }).fillna(0).astype(int).sort_values("Yet to Clock In", ascending=False).reset_index()
+        st.caption("By shop.")
+        grid.filterable_table(by_shop.rename(columns={"index": "Location"}), height=260)
+        st.caption(f"From the Attendance app, where the shop manager clocks the team in and out and "
+                   f"enters the brand ambassadors. Updates on its own every {ATTENDANCE_LIVE_SECONDS} "
+                   f"seconds · last read {now:%H:%M:%S}. BAs aren't expected every day, so they "
+                   "are only counted once clocked in.")
+
+
+def _attendance(start_date: date, end_date: date, location: str) -> None:
+    """Attendance: live for today, then each person over the range."""
+    _attendance_today(location)
+    since = max(start_date, weighted_scores.ATTENDANCE_SINCE)
+    today = datetime.now(EAT).date()
+    if end_date < since:
+        st.info(f"The Attendance app's shop records start on {weighted_scores.ATTENDANCE_SINCE:%d %b %Y}.")
+        return
+    a = _attendance_rows(since, min(end_date, today), location)
+    # Today only once clocked in; a BA only on the days they came in.
+    a = a[(a["Date"] < today) | a["First In"].notna()] if not a.empty else a
+    a = a[~(a["Is BA"] & (a["Status"] == "absent"))] if not a.empty else a
+    a = a[a["Status"].isin(weighted_scores.ATTENDANCE_POINTS)] if not a.empty else a
+    if a.empty:
+        return
+    a = a.assign(Point=a["Status"].map(weighted_scores.ATTENDANCE_POINTS))
+    g = a.groupby(["Name", "Role", "Location"])
+    people = pd.DataFrame({
+        "Days Due": g.size(),
+        "Days In": g["Status"].apply(lambda s: int(s.isin(["present", "late"]).sum())),
+        "On Time": g["Status"].apply(lambda s: int((s == "present").sum())),
+        "Late": g["Status"].apply(lambda s: int((s == "late").sum())),
+        "Absent": g["Status"].apply(lambda s: int((s == "absent").sum())),
+        "Attendance %": (g["Point"].mean() * 100).round(1),
+        "Avg Late (min)": a[a["Status"] == "late"].groupby(["Name", "Role", "Location"])["Late Minutes"].mean().round(0),
+    }).reset_index().sort_values(["Attendance %", "Absent"], ascending=[True, False])
+    with st.container(border=True):
+        st.caption(f"**{since:%d %b} – {min(end_date, today):%d %b %Y}, each person** — lowest attendance "
+                   "first. On time 1, late ½, absent 0 (the score cards' Attendance); a BA counts only "
+                   "the days they clocked in, and today counts once someone has clocked in.")
+        grid.filterable_table(people, pinned_columns=("Name",), height=440)
 
 
 def _unrecorded_orders(start_date: date, end_date: date, location: str) -> None:
@@ -1136,6 +1261,9 @@ def _attendant_help(r: pd.Series) -> dict[str, list[str]]:
                              "Shop, attendant and shared numbers don't count"],
         "Training": [f"Training score: {_pct(r['Training %'])} — every questionnaire due at its score, a missed one at 0",
                      f"Average score: {_pct(r.get('Training Avg Score %'))} — on the questionnaires they answered"],
+        "Punctuality": [f"Days clocked in: {_n(r.get('Days Marked'))} · late: {_n(r.get('Days Late'))}",
+                        "A day without a clock-in is a day they weren't working, so it doesn't count",
+                        f"Score: {_pct(r['Attendance %'])} (on time 1, late ½)"],
         "Attendance": [(f"Rostered days in the Attendance app: {_n(r.get('Days Marked'))} · in: "
                         f"{_n(r.get('Days Present'))} (late {_n(r.get('Days Late'))}) · absent: "
                         f"{_n(r.get('Days Absent'))}"),
@@ -1305,7 +1433,7 @@ def _manager_view(inputs: dict, w: dict, location: str, start_date: date, end_da
                               currency_columns=("Revenue", "Target", "Basket Value"), height=460)
 
 
-def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
+def _attendant_view(inputs: dict, w: dict, location: str, person: str, role: str) -> None:
     df = inputs["df"]
     people = scorecards.attendant_cards(df, inputs["previous"], inputs["day_targets"],
                                         inputs["person_training"])
@@ -1320,14 +1448,33 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
     cards["Training Avg Score %"] = ([avg.get((p, l)) for p, l in zip(cards["Attendant / BA"], cards["Location"])]
                                      if avg is not None else None)
     cards["Training Avg Score %"] = pd.to_numeric(cards["Training Avg Score %"], errors="coerce").round(1)
+    cards = cards[cards["Role"] == role]
     if location != "All Locations":
         cards = cards[cards["Location"] == location]
-    measures = weighted_scores.ATTENDANT_MEASURES
+    is_ba = role == weighted_scores.BA
+    who = "brand ambassadors" if is_ba else "attendants"
+    if cards.empty:
+        st.info(f"No {who} served in this range"
+                + ("" if location == "All Locations" else f" at {location}") + ".")
+        return
+    measures = weighted_scores.BA_MEASURES if is_ba else weighted_scores.ATTENDANT_MEASURES
     _weights_note(measures)
+    if is_ba:
+        st.caption("Brand ambassadors have their own card and are ranked among themselves. They "
+                   "come in on some days only, have no login, aren't on WhatsApp duty or the "
+                   "training list — so their card is built from what a BA does, with selling "
+                   "weighted up (Personal Target 35%, Customer Target 20%), and Punctuality counts "
+                   "only the days they clocked in. On the attendants' card the measures that never "
+                   "apply to a BA would hand their weight to easy-to-max ones and lift BAs above "
+                   "attendants measured on more.")
     cards = cards.assign(Name=cards["Attendant / BA"] + " — " + cards["Location"])
     chosen = cards if person == ALL_PEOPLE else cards[cards["Attendant / BA"] == person]
-    _overall_card(chosen, "Name", measures, "attendants & BAs")
-    _weighted_chart(chosen, "Name", measures, "Weighted Score Card — Attendants & BAs")
+    if chosen.empty:
+        st.info(f"{person} isn't one of the {who}; their card is in the other view.")
+        return
+    _overall_card(chosen, "Name", measures, who)
+    _weighted_chart(chosen, "Name", measures,
+                    f"Weighted Score Card — {'Brand Ambassadors' if is_ba else 'Shop Attendants'}")
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     for _, r in chosen.head(12).iterrows():
         _weighted_card(r["Name"], r, measures, notes=_attendant_help(r), values={
@@ -1346,12 +1493,14 @@ def _attendant_view(inputs: dict, w: dict, location: str, person: str) -> None:
             "Customer Capture": (_pct(r["Captured %"]), "sales with customer details"),
             "Training": (_pct(r["Training %"]), f"avg score {_pct(r.get('Training Avg Score %'))}"),
             "Attendance": (_pct(r["Attendance %"]), "on the days marked"),
+            "Punctuality": (_pct(r["Attendance %"]),
+                            f"{_n(r.get('Days Marked'))} days clocked in · late {_n(r.get('Days Late'))}"),
         })
     if person == ALL_PEOPLE and len(cards) > 12:
         st.caption(f"The 12 best weighted scores are shown as cards; all {len(cards)} are in the "
                    "table. Pick a person at the top to see their card.")
     with st.container(border=True):
-        cols = (["Attendant / BA", "Location", "Weighted Score", "Weight Counted %"]
+        cols = (["Role Rank", "Attendant / BA", "Location", "Weighted Score", "Weight Counted %"]
                 + [f"{m} Score" for m, _, _ in measures] + [f"{m} Points" for m, _, _ in measures]
                 + ["Target", "Revenue", "Target %", "Days Worked", "Shop Share", "Orders",
                    "Bulk Sales", "Bulk % of Target", "Basket Value", "New Products %",
@@ -1376,7 +1525,8 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     basket = f"KES {scorecards.BASKET_TARGET:,}"
     on_today = end_date >= date.today()
 
-    views = ["🏪 Shop Score Cards", "👔 Shop Manager Score Cards", "🧑‍💼 Attendant Score Cards"]
+    views = ["🏪 Shop Score Cards", "👔 Shop Manager Score Cards", "🧑‍💼 Attendant Score Cards",
+             "🌟 BA Score Cards"]
     view = st.segmented_control("Score cards", views, default=views[0], key="score_view",
                                 label_visibility="collapsed") or views[0]
     st.caption(
@@ -1465,8 +1615,10 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
     w = _weighted_inputs(start_date, end_date)
     if view == "👔 Shop Manager Score Cards":
         _manager_view(inputs, w, location, start_date, end_date)
+    elif view == "🌟 BA Score Cards":
+        _attendant_view(inputs, w, location, person, role=weighted_scores.BA)
     else:
-        _attendant_view(inputs, w, location, person)
+        _attendant_view(inputs, w, location, person, role=weighted_scores.ATTENDANT)
 
 
 render_attendants(start_date, end_date)

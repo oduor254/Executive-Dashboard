@@ -54,7 +54,7 @@ ATTENDANT_MEASURES = [
     ("Personal Target", 30, "own sales against their share of the daily targets"),
     ("Bulk Orders", 5, "bulk sales against 10% of their own target"),
     ("Basket Value", 10, f"average transaction value against KES {scorecards.BASKET_TARGET:,}"),
-    ("New Products", 4, "share of their bags that are new styles, against the best"),
+    ("New Products", 4, "share of their bags that are new styles, against the best attendant"),
     ("Customer Target", 15, "customers served ÷ expected (their target ÷ the shop's average spend per customer)"),
     ("Respond Fast", 10, "WhatsApp chats answered within 3 min, on their online days "
                          "(every working day for a shop's designated responder)"),
@@ -64,6 +64,26 @@ ATTENDANT_MEASURES = [
     ("Training", 5, "sales training scores"),
     ("Attendance", 5, "on time on their rostered days in the Attendance app (late counts half, absent 0)"),
 ]
+# Brand ambassadors have their own card. They sell on the floor on the days
+# they come in, with no login: never on WhatsApp duty, not on the training
+# list, not due in every day. On the attendants' card those measures would
+# drop out and their 15% go to the rest — mostly Customer Service and
+# Capture, where nearly everyone scores 100 — lifting BAs above attendants
+# who are measured on more. So a BA is scored only on what a BA does, with
+# selling weighted up, and ranked among BAs.
+BA_MEASURES = [
+    ("Personal Target", 35, "own sales against their share of the daily targets, on the days they worked"),
+    ("Customer Target", 20, "customers served ÷ expected (their target ÷ the shop's average spend per customer)"),
+    ("Basket Value", 10, f"average transaction value against KES {scorecards.BASKET_TARGET:,}"),
+    ("Bulk Orders", 5, "bulk sales against 10% of their own target"),
+    ("New Products", 5, "share of their bags that are new styles, against the best BA"),
+    ("Customer Capture", 10, "sales with the customer's own details captured in Odoo"),
+    ("Customer Service", 5, "average staff-assistance rating from their customers (of 5)"),
+    ("Customer Feedback", 5, f"feedback received ÷ customers served, against {scorecards.FEEDBACK_TARGET}%"),
+    ("Punctuality", 5, "on time on the days they clocked in (late counts half)"),
+]
+ATTENDANT, BA = "Attendant", "Brand Ambassador"
+
 BULK_MIN_BAGS = 5        # an order of this many bags or more, or a corporate one, is bulk
 BULK_SHARE = 10.0        # bulk sales are expected to be this % of a person's own target
 FEEDBACK_WINDOW_DAYS = 14
@@ -224,7 +244,7 @@ def attendance_days(attendance: pd.DataFrame | None, cards: pd.Index,
 
     def card(row):
         tries = [row["Person"]]
-        if not row["Has Login"]:
+        if row["Is BA"] or not row["Has Login"]:
             tries = [f"{row['Employee']}{BA_SUFFIX}", row["Employee"]]
         for name in tries:
             hit = by_place.get((_key(name), row["Location"]))
@@ -366,8 +386,22 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     att = (ag["Point"].mean() * 100).reindex(t.index)
     t["Attendance %"] = att.round(1)
     t["Attendance Score"] = t["Attendance %"]
+    t["Punctuality Score"] = t["Attendance %"]
 
-    t = weighted(t, ATTENDANT_MEASURES)
+    # Each role on its own card, and ranked within it.
+    is_ba = pd.Series([p.endswith(BA_SUFFIX) for p, _ in t.index], index=t.index)
+    t["Role"] = np.where(is_ba, BA, ATTENDANT)
+    parts = []
+    for role, measures in ((ATTENDANT, ATTENDANT_MEASURES), (BA, BA_MEASURES)):
+        part = t[t["Role"] == role]
+        if part.empty:
+            continue
+        # New Products against the best in the same role.
+        part = part.assign(**{"New Products Score": _best(part["New Products %"])})
+        part = weighted(part, measures)
+        part["Role Rank"] = part["Weighted Score"].rank(ascending=False, method="min").astype("Int64")
+        parts.append(part)
+    t = pd.concat(parts)
     return t.reset_index().sort_values("Weighted Score", ascending=False)
 
 

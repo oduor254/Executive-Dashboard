@@ -5326,10 +5326,18 @@ SELECT d.date                                                    AS "Date",
        COALESCE(NULLIF(TRIM(up.name), ''), TRIM(e.name))         AS "Person",
        TRIM(e.name)                                              AS "Employee",
        (e.user_id IS NOT NULL)                                   AS "Has Login",
+       -- A brand ambassador is on a till's BA list (no login of their own).
+       EXISTS (SELECT 1 FROM pos_shop_ba b WHERE b.employee_id = e.id) AS "Is BA",
        COALESCE(pc.name, l.name)                                 AS "Shop",
+       l.type                                                    AS "Place Type",
+       COALESCE(d.rostered, FALSE)                               AS "Rostered",
+       d.shift_label                                             AS "Shift",
+       d.rostered_start                                          AS "Shift Start",
        d.status                                                  AS "Status",
        COALESCE(d.late_minutes, 0)                               AS "Late Minutes",
-       NULLIF(d.first_in_local, '')                              AS "First In"
+       NULLIF(d.first_in_local, '')                              AS "First In",
+       NULLIF(d.last_out_local, '')                              AS "Last Out",
+       COALESCE(d.worked_minutes, 0)                             AS "Worked Minutes"
 FROM denri_att_day d
 JOIN hr_employee e             ON e.id = d.employee_id
 LEFT JOIN res_users u          ON u.id = e.user_id
