@@ -16,8 +16,13 @@ shop manager plans who does what each morning. So:
     the desk serving nobody takes no share that day.
   * Respond Fast — counted only on the days a person held the online role.
     The role tags (floor / online / admin) hold the current day's role, so
-    past days are only known from the day each tag was set.
-  * Attendance — only for days marked in the shop's attendance.
+    past days are only known from the day each tag was set. A shop's
+    designated responder (DESIGNATED_RESPONDERS — Liz Charo at KTDA) holds
+    it every day they are at work.
+  * Attendance — from the Attendance app (the shop manager clocks the team in
+    and out), on the days each person was rostered, from ATTENDANCE_SINCE.
+    Brand ambassadors count only on the days they were clocked in: a day
+    without one is a day they weren't working.
 
 Scoring: a measure with a target is scored against it (capped at 100); a
 natural rate (the customer target, customers captured, chats answered within three
@@ -51,17 +56,32 @@ ATTENDANT_MEASURES = [
     ("Basket Value", 10, f"average transaction value against KES {scorecards.BASKET_TARGET:,}"),
     ("New Products", 4, "share of their bags that are new styles, against the best"),
     ("Customer Target", 15, "customers served ÷ expected (their target ÷ the shop's average spend per customer)"),
-    ("Respond Fast", 10, "WhatsApp chats answered within 3 min, on their online days"),
+    ("Respond Fast", 10, "WhatsApp chats answered within 3 min, on their online days "
+                         "(every working day for a shop's designated responder)"),
     ("Customer Service", 7, "average staff-assistance rating from their customers (of 5)"),
     ("Customer Feedback", 4, f"feedback received ÷ customers served, against {scorecards.FEEDBACK_TARGET}%"),
     ("Customer Capture", 5, "sales with the customer's own details captured in Odoo"),
     ("Training", 5, "sales training scores"),
-    ("Attendance", 5, "present and on time on the days marked (late counts half)"),
+    ("Attendance", 5, "on time on their rostered days in the Attendance app (late counts half, absent 0)"),
 ]
 BULK_MIN_BAGS = 5        # an order of this many bags or more, or a corporate one, is bulk
 BULK_SHARE = 10.0        # bulk sales are expected to be this % of a person's own target
 FEEDBACK_WINDOW_DAYS = 14
 FAST_REPLY_MIN = scorecards.RESPONSE_TARGET_MIN
+
+# The person stationed on WhatsApp at a shop: every chat the shop handles is
+# theirs on each day they are at work, whether or not the day's online tag
+# was set. Shop as the dashboard names it → their name as the tills know it.
+DESIGNATED_RESPONDERS = {"Ktda": "Elizabeth Charo"}
+
+# Attendance comes from the Attendance app, which the shops started clocking
+# in on from this day; its earlier rows mark everyone absent.
+ATTENDANCE_SINCE = date(2026, 11, 2)
+# The app's day statuses and what each is worth; the others (leave, off, out
+# of office, unrostered) are days nobody was due in, so they don't count.
+ATTENDANCE_POINTS = {"present": 1.0, "late": 0.5, "absent": 0.0}
+NOT_AT_WORK = {"absent", "leave", "off", "ooo"}
+BA_SUFFIX = " (BA)"   # how the tills name a brand ambassador's sales
 
 
 def weighted(table: pd.DataFrame, measures: list[tuple]) -> pd.DataFrame:
@@ -173,6 +193,57 @@ def _roles_by_day(roles: pd.DataFrame | None) -> pd.DataFrame:
     return r
 
 
+def _key(name) -> str:
+    return " ".join(str(name).lower().split())
+
+
+def attendance_days(attendance: pd.DataFrame | None, cards: pd.Index,
+                    today: date | None = None) -> pd.DataFrame:
+    """The Attendance app's days for the people on the cards, keyed to the
+    card each belongs to: columns Attendant / BA, Location, Date, Status.
+
+    Matched on the name and shop: the login's name, or for someone without
+    a login (a BA) their name with " (BA)" as the tills show it. A name with
+    one card is matched whatever shop they clocked in at. Today counts only
+    once they have clocked in — until then the app shows them absent."""
+    cols = ["Attendant / BA", "Location", "Date", "Status"]
+    if attendance is None or attendance.empty:
+        return pd.DataFrame(columns=cols)
+    today = today or date.today()
+    a = attendance.copy()
+    a["Date"] = pd.to_datetime(a["Date"]).dt.date
+    a["Status"] = a["Status"].fillna("").str.lower()
+    a = a[(a["Date"] >= ATTENDANCE_SINCE) & (a["Date"] <= today)]
+    a = a[(a["Date"] < today) | a["First In"].notna()]
+    a["Location"] = a["Shop"].map(staff_numbers.shop_name)
+
+    by_place = {(_key(p), loc): (p, loc) for p, loc in cards}
+    names: dict[str, list] = {}
+    for p, loc in cards:
+        names.setdefault(_key(p), []).append((p, loc))
+
+    def card(row):
+        tries = [row["Person"]]
+        if not row["Has Login"]:
+            tries = [f"{row['Employee']}{BA_SUFFIX}", row["Employee"]]
+        for name in tries:
+            hit = by_place.get((_key(name), row["Location"]))
+            if hit:
+                return hit
+        for name in tries:
+            if len(names.get(_key(name), [])) == 1:
+                return names[_key(name)][0]
+        return None
+
+    a["Card"] = [card(r) for _, r in a.iterrows()]
+    a = a.dropna(subset=["Card"])
+    if a.empty:
+        return pd.DataFrame(columns=cols)
+    a["Attendant / BA"] = a["Card"].str[0]
+    a["Location"] = a["Card"].str[1]
+    return a[cols].drop_duplicates(["Attendant / BA", "Location", "Date"])
+
+
 def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.DataFrame | None,
                     new_families: set[str], chats: pd.DataFrame | None,
                     roles: pd.DataFrame | None, responses: pd.DataFrame | None,
@@ -225,23 +296,32 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
                               * 100).round(1)
     t["Customer Target Score"] = t["Customer Target %"]
 
-    # Respond fast: the shop's chats on the days the person held the online role.
+    days_marked = attendance_days(attendance, t.index)
+
+    # Respond fast: the shop's chats on the days the person held the online
+    # role — every day at work, for the shop's designated responder.
     online = _roles_by_day(roles)
     online = online[online["Role"] == "online"]
     fast = pd.Series(np.nan, index=t.index)
     t["Online Days"] = 0
     t["Online Chats"] = np.nan
     t["Fast Replies"] = np.nan
-    if chats is not None and not chats.empty and not online.empty:
+    t["Designated Responder"] = [DESIGNATED_RESPONDERS.get(loc) == person for person, loc in t.index]
+    if chats is not None and not chats.empty and (not online.empty or t["Designated Responder"].any()):
         c = chats.assign(Date=pd.to_datetime(chats["Date"]).dt.date,
                          Minutes=pd.to_numeric(chats["First Response (min)"], errors="coerce"))
         c = c.dropna(subset=["Minutes"])
         per_day = c.groupby(["Branch", "Date"]).agg(Chats=("Minutes", "size"),
                                                     Fast=("Minutes", lambda m: (m <= FAST_REPLY_MIN).sum()))
         for (person, loc) in t.index:
-            days = online.loc[online["Person"] == person, "Date"]
+            days = set(online.loc[online["Person"] == person, "Date"])
+            if t.loc[(person, loc), "Designated Responder"]:
+                mine = days_marked[(days_marked["Attendant / BA"] == person)
+                                   & (days_marked["Location"] == loc)]
+                away = set(mine.loc[mine["Status"].isin(NOT_AT_WORK), "Date"])
+                days |= {d for b, d in per_day.index if b == loc and d not in away}
             rows = per_day[per_day.index.isin([(loc, d) for d in days])]
-            t.loc[(person, loc), "Online Days"] = len(set(days))
+            t.loc[(person, loc), "Online Days"] = len(days)
             if rows["Chats"].sum():
                 fast[(person, loc)] = rows["Fast"].sum() / rows["Chats"].sum() * 100
                 t.loc[(person, loc), "Online Chats"] = rows["Chats"].sum()
@@ -270,24 +350,20 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
 
     t["Training Score"] = t["Training %"]
 
-    att = pd.Series(np.nan, index=t.index)
-    if attendance is not None and not attendance.empty:
-        a = attendance.copy()
-        present = a["State"].str.lower().eq("present")
-        check_in = pd.to_datetime(a["Check In"])
-        hours = check_in.dt.hour + check_in.dt.minute / 60
-        due = pd.to_numeric(a["Shift Start"], errors="coerce") + pd.to_numeric(a["Grace"], errors="coerce").fillna(0) / 60
-        late = present & due.notna() & (hours > due)
-        a["Point"] = np.where(present & ~late, 1.0, np.where(late, 0.5, 0.0))
-        per_person = a.groupby("Person")["Point"].mean() * 100
-        att = pd.Series([per_person.get(p) for p, _ in t.index], index=t.index, dtype=float)
-        a = a.assign(Present=present, Late=late)
-        counts = a.groupby("Person").agg(Marked=("State", "size"), Present=("Present", "sum"),
-                                         Late=("Late", "sum"))
-        for col in ("Marked", "Present", "Late"):
-            t[f"Days {col}"] = [counts[col].get(p) for p, _ in t.index]
-    else:
-        t["Days Marked"] = t["Days Present"] = t["Days Late"] = np.nan
+    # Attendance: the Attendance app's days they were due in — on time 1,
+    # late ½, absent 0. Brand ambassadors don't work every day: a day they
+    # weren't clocked in is a day off, not an absence, so only the days they
+    # came in count (on time or late).
+    ba_absent = (days_marked["Attendant / BA"].str.endswith(BA_SUFFIX)
+                 & (days_marked["Status"] == "absent"))
+    due = days_marked[days_marked["Status"].isin(ATTENDANCE_POINTS) & ~ba_absent]
+    due = due.assign(Point=due["Status"].map(ATTENDANCE_POINTS))
+    ag = due.groupby(keys)
+    t["Days Marked"] = ag.size().reindex(t.index)
+    t["Days Present"] = ag["Status"].apply(lambda s: int(s.isin(["present", "late"]).sum())).reindex(t.index)
+    t["Days Late"] = ag["Status"].apply(lambda s: int((s == "late").sum())).reindex(t.index)
+    t["Days Absent"] = ag["Status"].apply(lambda s: int((s == "absent").sum())).reindex(t.index)
+    att = (ag["Point"].mean() * 100).reindex(t.index)
     t["Attendance %"] = att.round(1)
     t["Attendance Score"] = t["Attendance %"]
 

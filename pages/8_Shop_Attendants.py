@@ -1121,7 +1121,10 @@ def _attendant_help(r: pd.Series) -> dict[str, list[str]]:
                             f"shop's average spend {_money(r['Shop Avg Spend'])}",
                             f"Served: {_n(r['Customers Served'])} ({_pct(r['Customer Target %'])})",
                             f"Gap: {_gap(r['Customers Served'], r['Expected Customers'], money=False).replace('target', 'expected')}"],
-        "Respond Fast": [f"Online days on record: {_n(r.get('Online Days'))}",
+        "Respond Fast": [("Designated WhatsApp responder — every chat at the shop on the days they "
+                          f"were at work: {_n(r.get('Online Days'))} days")
+                         if r.get("Designated Responder") else
+                         f"Online days on record: {_n(r.get('Online Days'))}",
                          f"Chats on those days: {_n(r.get('Online Chats'))} · answered within 3 min: {_n(r.get('Fast Replies'))}",
                          f"Share: {_pct(r['Answered in 3 min %'])}"],
         "Customer Service": [f"Forms with a staff rating: {_n(r.get('Rated Forms'))}",
@@ -1133,8 +1136,11 @@ def _attendant_help(r: pd.Series) -> dict[str, list[str]]:
                              "Shop, attendant and shared numbers don't count"],
         "Training": [f"Training score: {_pct(r['Training %'])} — every questionnaire due at its score, a missed one at 0",
                      f"Average score: {_pct(r.get('Training Avg Score %'))} — on the questionnaires they answered"],
-        "Attendance": [f"Days marked: {_n(r.get('Days Marked'))} · present: {_n(r.get('Days Present'))} · late: {_n(r.get('Days Late'))}",
-                       f"Score: {_pct(r['Attendance %'])} (on time 1, late ½, absent 0)"],
+        "Attendance": [(f"Rostered days in the Attendance app: {_n(r.get('Days Marked'))} · in: "
+                        f"{_n(r.get('Days Present'))} (late {_n(r.get('Days Late'))}) · absent: "
+                        f"{_n(r.get('Days Absent'))}"),
+                       (f"Score: {_pct(r['Attendance %'])} (on time 1, late ½, absent 0) · counted from "
+                        f"{weighted_scores.ATTENDANCE_SINCE:%d %b %Y}; today once clocked in")],
     }
 
 
@@ -1247,7 +1253,12 @@ def _weights_note(measures: list[tuple]) -> None:
             "and the rest are on the floor, only those who served customers share the day's "
             "target. **Respond Fast** counts only on the days the person held the *online* "
             "role; the role tags keep the current day's role, so past days are known only from "
-            "the day each tag was set.")
+            "the day each tag was set. A shop's designated WhatsApp responder ("
+            + ", ".join(f"{p} at {s}" for s, p in weighted_scores.DESIGNATED_RESPONDERS.items())
+            + ") holds it every day they are at work. **Attendance** comes from the Attendance "
+            "app, where the shop manager clocks the team in and out: each rostered day on time "
+            "scores 1, late ½, absent 0; leave and days off don't count. Brand ambassadors "
+            "don't work every day, so only the days they were clocked in count for them.")
         grid.filterable_table(weighted_scores.measure_table(measures), total=False, height=330)
 
 

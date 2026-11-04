@@ -5315,23 +5315,28 @@ JOIN res_users   u ON u.id = t.user_id
 JOIN res_partner p ON p.id = u.partner_id
 """
 
-# Attendance marked at the shop (Shop Attendants app), with the rostered
-# start and grace minutes where a roster covers the day.
+# Attendance from the Attendance app: one row per person per day, as the app
+# works it out from the clock-ins against the roster (the shop manager clocks
+# in and out, and enters the brand ambassadors, who have no login). Person is
+# the name the tills know them by — their login's — so it matches Served By;
+# someone without a login (a BA) is known by their employee name. Status is
+# the app's: present, late, absent, leave, off, ooo or unrostered.
 SHOP_ATTENDANCE = """
-SELECT a.date AS "Date", p.name AS "Person", pc.name AS "Shop", a.state AS "State",
-       (a.check_in AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi') AS "Check In",
-       rl.start AS "Shift Start", rl.grace_minutes AS "Grace"
-FROM pos_attendant_attendance a
-JOIN res_users   u ON u.id = a.user_id
-JOIN res_partner p ON p.id = u.partner_id
-LEFT JOIN pos_config pc ON pc.id = a.config_id
-LEFT JOIN LATERAL (
-    SELECT MIN(l.start) AS start, MAX(l.grace_minutes) AS grace_minutes
-    FROM denri_att_roster_line l
-    JOIN hr_employee e ON e.id = l.employee_id
-    WHERE e.user_id = a.user_id AND l.date = a.date AND NOT COALESCE(l.day_off, FALSE)
-) rl ON TRUE
-WHERE a.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+SELECT d.date                                                    AS "Date",
+       COALESCE(NULLIF(TRIM(up.name), ''), TRIM(e.name))         AS "Person",
+       TRIM(e.name)                                              AS "Employee",
+       (e.user_id IS NOT NULL)                                   AS "Has Login",
+       COALESCE(pc.name, l.name)                                 AS "Shop",
+       d.status                                                  AS "Status",
+       COALESCE(d.late_minutes, 0)                               AS "Late Minutes",
+       NULLIF(d.first_in_local, '')                              AS "First In"
+FROM denri_att_day d
+JOIN hr_employee e             ON e.id = d.employee_id
+LEFT JOIN res_users u          ON u.id = e.user_id
+LEFT JOIN res_partner up       ON up.id = u.partner_id
+LEFT JOIN denri_att_location l ON l.id = d.location_id
+LEFT JOIN pos_config pc        ON pc.id = l.pos_config_id
+WHERE d.date BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
 """
 
 # Stock counts submitted from the scan-count app, per shop: how far the
