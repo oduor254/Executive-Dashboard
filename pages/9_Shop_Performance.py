@@ -373,32 +373,40 @@ def render_product_positioning(location: str) -> None:
         st.info("Not enough sales in the last 90 days to profile any product here.")
         return
     st.caption(
-        f"Every bag with at least {product_positioning.MIN_UNITS} sold in the last {POSITIONING_DAYS} days"
-        + ("" if location == ALL else f" at {location}") + f" — {len(t):,} products. **Target customer** "
+        f"Every bag sold in the last {POSITIONING_DAYS} days"
+        + ("" if location == ALL else f" at {location}") + f" — {len(t):,} products, grouped by how many "
+        "sold; a bag with 10 or fewer sales is an early read. **Target customer** "
         "comes from who actually bought it (women, men or corporate, as recorded at the till), its price "
         "against the typical bag of its kind and where it sells. **Problem it solves** is what the bag type "
         "does for its buyer, sharpened by its name. **Why they'd buy** is the evidence: its rank, value, "
         "this month's Power Deal, the combos it's paired in and whether demand is rising.")
-    c1, c2 = st.columns([1, 2])
+    c1, c2, c3 = st.columns([1, 1, 2])
     cats = ["All categories"] + sorted(t["Category"].unique())
     cat = c1.selectbox("Category", cats, key="positioning_category")
     shown = t if cat == "All categories" else t[t["Category"] == cat]
-    pick = c2.multiselect("Products", sorted(shown["Product"]), key="positioning_products",
-                          placeholder="All products in the category, best sellers first")
+    present = [r for r in product_positioning.SALES_RANGE_ORDER if r in set(shown["Sales Range"])]
+    counts = shown["Sales Range"].value_counts()
+    ranges = c2.multiselect("Sales range", present, key="positioning_ranges",
+                            format_func=lambda r: f"{r} ({counts.get(r, 0)})",
+                            placeholder="All sales ranges")
+    shown = shown[shown["Sales Range"].isin(ranges)] if ranges else shown
+    pick = c3.multiselect("Products", sorted(shown["Product"]), key="positioning_products",
+                          placeholder="All products, best sellers first")
     shown = shown[shown["Product"].isin(pick)] if pick else shown
     shown = shown.sort_values("Revenue", ascending=False)
 
     for _, r in shown.iterrows():
         with st.container(border=True):
             st.markdown(f"**{r['Product']}** · {r['Category']} &nbsp; <span style='opacity:.65'>"
-                        f"{r['Units']:,.0f} sold · KES {r['Revenue']:,.0f} · #{r['Rank']} in its category"
+                        f"{r['Units']:,.0f} sold ({r['Sales Range']}) · KES {r['Revenue']:,.0f} · "
+                        f"#{r['Rank']} in its category"
                         "</span>", unsafe_allow_html=True)
             why = r["Why They'd Buy"]
             st.markdown(f"🎯 **Target customer** — {r['Target Customer']}\n\n"
                         f"🧩 **Problem it solves** — {r['Problem It Solves']}\n\n"
                         f"🛍️ **Why they'd buy it** — {why}")
 
-    cols = ["Category", "Product", "Units", "Revenue", "Price", "Rank", "Female %", "Male %",
+    cols = ["Category", "Product", "Sales Range", "Units", "Revenue", "Price", "Rank", "Female %", "Male %",
             "Corporate %", "CBD %", "Online %", "Top Shops", "Trend %", "Power Deal", "Combos",
             "Target Customer", "Problem It Solves", "Why They'd Buy"]
     with st.expander(f"All {len(shown):,} as a table"):

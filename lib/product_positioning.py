@@ -25,7 +25,20 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-MIN_UNITS = 20                      # fewer sales than this in the period: too few to read
+# Units sold in the period, banded so the slow sellers can be looked at too.
+SALES_RANGES = [(1, 10), (11, 20), (21, 50), (51, 100), (101, 250), (251, 500), (501, 1000)]
+EARLY_READ = 10      # this many sold or fewer: who buys it is an early read, not a pattern
+MIN_TREND = 20       # fewer than this: rising / cooling is noise, so not stated
+
+
+def sales_range(units: float) -> str:
+    for low, high in SALES_RANGES:
+        if units <= high:
+            return f"{low:,}–{high:,} sold"
+    return f"Over {SALES_RANGES[-1][1]:,} sold"
+
+
+SALES_RANGE_ORDER = [f"{lo:,}–{hi:,} sold" for lo, hi in SALES_RANGES] + [f"Over {SALES_RANGES[-1][1]:,} sold"]
 NOT_PRODUCTS = {"Combos", "Combo", "Accessories", "Saleable", "Ankara Set"}
 CBD = {"Hilton", "Ktda", "Hazina", "Starmall"}
 
@@ -96,6 +109,8 @@ def _who(row) -> str:
 
 
 def _price_band(row) -> str:
+    if pd.isna(row["Price"]):
+        return "sold only inside combos (no price of its own)"
     ratio = row["Price"] / row["Category Price"] if row["Category Price"] else 1
     typical = f"KES {row['Category Price']:,.0f}"
     if ratio <= 0.85:
@@ -141,7 +156,7 @@ def _why(row) -> str:
         reasons.append(f"on this month's Power Deal ({row['Power Deal']})")
     if row["Combos"]:
         reasons.append(f"customers pair it — sold in {row['Combos']} combo{'s' if row['Combos'] != 1 else ''}")
-    if pd.notna(row["Trend %"]):
+    if pd.notna(row["Trend %"]) and row["Units"] >= MIN_TREND:
         if row["Trend %"] >= 100:
             reasons.append(f"demand up sharply: last 30 days selling {row['Trend %'] / 100 + 1:.1f}× the earlier rate")
         elif row["Trend %"] >= 20:
@@ -150,6 +165,9 @@ def _why(row) -> str:
             reasons.append(f"demand cooling: last 30 days selling {abs(row['Trend %']):.0f}% slower than before")
     if row["Corporate %"] >= 0.3:
         reasons.append("a safe choice for company orders — bought in bulk for staff and gifts")
+    if row["Units"] <= EARLY_READ:
+        reasons.append("too few sales to know yet — give it a push (display, a deal or a combo) to see "
+                       "whether it finds buyers")
     text = "; ".join(reasons)
     return text[0].upper() + text[1:] + "." if text else "Steady seller in its category."
 
@@ -187,9 +205,8 @@ def profiles(sales: pd.DataFrame, power_deals: pd.DataFrame | None = None,
     e = s[~recent].groupby(keys)["Quantity"].sum().reindex(t.index).fillna(0) / early_days
     t["Trend %"] = ((r / e.where(e > 0) - 1) * 100).round(0) if early_days >= 14 else np.nan
 
-    t = t[t["Units"] >= MIN_UNITS].reset_index()
-    if t.empty:
-        return t
+    t = t.reset_index()
+    t["Sales Range"] = t["Units"].map(sales_range)
     t["Category Price"] = t.groupby("Category")["Price"].transform("median")
     t["Rank"] = t.groupby("Category")["Units"].rank(ascending=False, method="min").astype(int)
     combos = sales[sales["Category"].isin({"Combos", "Combo"})]["Product"].dropna().unique()
@@ -205,7 +222,9 @@ def profiles(sales: pd.DataFrame, power_deals: pd.DataFrame | None = None,
 
     t["Target Customer"] = [
         f"{CATEGORY_NEEDS.get(r['Category'], _DEFAULT_NEED)[1].capitalize()}: {_who(r)}; "
-        f"{_price_band(r)}; {_where(r)}." for _, r in t.iterrows()]
+        f"{_price_band(r)}; {_where(r)}."
+        + (f" Early read — only {r['Units']:,.0f} sold, so who buys it isn't a pattern yet."
+           if r["Units"] <= EARLY_READ else "") for _, r in t.iterrows()]
     t["Problem It Solves"] = [_problem(r) for _, r in t.iterrows()]
     t["Why They'd Buy"] = [_why(r) for _, r in t.iterrows()]
     for col in ("Female %", "Male %", "Corporate %", "CBD %", "Online %"):
