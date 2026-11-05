@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, db, grid, queries, theme
+from lib import auth, db, deals, grid, product_positioning, queries, theme
 from lib import shop_performance as sp
 
 st.set_page_config(page_title=auth.page_title("Shop Performance"),
@@ -35,8 +35,8 @@ PRIORITY_ICONS = {"High": "🔴", "Medium": "🟠", "Low": "🟡", "Note": "ℹ�
 
 col_view, col_loc, col_refresh = st.columns([2, 2, 1])
 with col_view:
-    view = st.radio("View", ["Weekly", "Monthly", "Year on Year"], horizontal=True,
-                    key="shopperf_view")
+    view = st.radio("View", ["Weekly", "Monthly", "Year on Year", "Product Positioning"],
+                    horizontal=True, key="shopperf_view")
 with col_refresh:
     db.refresh_button(key="shopperf_refresh")
 grain = "week" if view == "Weekly" else "month"
@@ -352,7 +352,66 @@ def calendar_months():
     return [calendar.month_abbr[i] for i in range(1, 13)]
 
 
-if view == "Year on Year":
+POSITIONING_DAYS = 90
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _positioning(location: str) -> pd.DataFrame:
+    sales = db.run_query(queries.CUSTOMER_SALES, {"start_date": TODAY - timedelta(days=POSITIONING_DAYS),
+                                                  "end_date": TODAY})
+    if location != ALL:
+        sales = sales[sales["Location"] == location]
+    return product_positioning.profiles(sales, pd.read_csv(deals._DATA_DIR / "power_deals.csv"), TODAY)
+
+
+def render_product_positioning(location: str) -> None:
+    """Each bag: its target customer, the problem it solves for them and why
+    they'd buy it — written from the last 90 days' sales."""
+    with st.spinner("Reading the last 90 days' sales…"):
+        t = _positioning(location)
+    if t.empty:
+        st.info("Not enough sales in the last 90 days to profile any product here.")
+        return
+    st.caption(
+        f"Every bag with at least {product_positioning.MIN_UNITS} sold in the last {POSITIONING_DAYS} days"
+        + ("" if location == ALL else f" at {location}") + f" — {len(t):,} products. **Target customer** "
+        "comes from who actually bought it (women, men or corporate, as recorded at the till), its price "
+        "against the typical bag of its kind and where it sells. **Problem it solves** is what the bag type "
+        "does for its buyer, sharpened by its name. **Why they'd buy** is the evidence: its rank, value, "
+        "this month's Power Deal, the combos it's paired in and whether demand is rising.")
+    c1, c2 = st.columns([1, 2])
+    cats = ["All categories"] + sorted(t["Category"].unique())
+    cat = c1.selectbox("Category", cats, key="positioning_category")
+    shown = t if cat == "All categories" else t[t["Category"] == cat]
+    pick = c2.multiselect("Products", sorted(shown["Product"]), key="positioning_products",
+                          placeholder="All products in the category, best sellers first")
+    shown = shown[shown["Product"].isin(pick)] if pick else shown
+    shown = shown.sort_values("Revenue", ascending=False)
+
+    for _, r in shown.iterrows():
+        with st.container(border=True):
+            st.markdown(f"**{r['Product']}** · {r['Category']} &nbsp; <span style='opacity:.65'>"
+                        f"{r['Units']:,.0f} sold · KES {r['Revenue']:,.0f} · #{r['Rank']} in its category"
+                        "</span>", unsafe_allow_html=True)
+            why = r["Why They'd Buy"]
+            st.markdown(f"🎯 **Target customer** — {r['Target Customer']}\n\n"
+                        f"🧩 **Problem it solves** — {r['Problem It Solves']}\n\n"
+                        f"🛍️ **Why they'd buy it** — {why}")
+
+    cols = ["Category", "Product", "Units", "Revenue", "Price", "Rank", "Female %", "Male %",
+            "Corporate %", "CBD %", "Online %", "Top Shops", "Trend %", "Power Deal", "Combos",
+            "Target Customer", "Problem It Solves", "Why They'd Buy"]
+    with st.expander(f"All {len(shown):,} as a table"):
+        grid.filterable_table(shown[cols], currency_columns=("Revenue", "Price"),
+                              pinned_columns=("Product",), height=440)
+        st.download_button("⬇️ Download (CSV)", shown[cols].to_csv(index=False).encode(),
+                           file_name=f"product_positioning_{TODAY:%Y%m%d}.csv", mime="text/csv",
+                           key="positioning_download")
+
+
+if view == "Product Positioning":
+    render_product_positioning(location)
+elif view == "Year on Year":
     if grain != "month":
         st.stop()
     render_year_on_year(location)
