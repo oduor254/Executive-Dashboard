@@ -53,7 +53,7 @@ RECEIPT_COLORS = {
 # Combined Distribution — received-basis columns.
 SHOP_COLUMNS = [
     "MOMBASA", "NAKURU", "ELDORET", "KISUMU", "MERU", "THIKA",
-    "KITENGELA", "WEBSITE", "NANYUKI", "KAKAMEGA", "JUMIA", "MRKT", "SINZA", "UGANDA",
+    "KITENGELA", "WEBSITE", "NANYUKI", "NYERI", "KAKAMEGA", "JUMIA", "MRKT", "SINZA", "UGANDA",
     "KISII", "BUSIA", "RONGAI",
 ]
 # On the hub-redistribution basis instead.
@@ -61,7 +61,7 @@ V2_COLUMNS = ["STARMALL", "HAZINA", "KTDA", "HILTON"]
 
 DEST_COLUMNS = [
     "STARMALL", "MOMBASA", "NAKURU", "ELDORET", "KISUMU", "MERU", "THIKA", "HAZINA",
-    "KITENGELA", "WEBSITE", "NANYUKI", "KAKAMEGA", "HILTON", "SINZA", "UGANDA",
+    "KITENGELA", "WEBSITE", "NANYUKI", "NYERI", "KAKAMEGA", "HILTON", "SINZA", "UGANDA",
     "KISII", "KTDA", "KTDA NEW", "BUSIA", "RONGAI",
 ]
 

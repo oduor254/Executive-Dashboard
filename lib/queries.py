@@ -144,6 +144,7 @@ branch_mapping AS (
     UNION ALL SELECT 'Uganda', 'UGANDA'
     UNION ALL SELECT 'Starmall', 'STARMALL'
     UNION ALL SELECT 'Nanyuki', 'NANYUKI'
+    UNION ALL SELECT 'Nyeri', 'NYERI'
     UNION ALL SELECT 'Nakuru', 'NAKURU'
     UNION ALL SELECT 'Eldoret', 'ELDORET'
     UNION ALL SELECT 'Rongai', 'RONGAI'
@@ -1182,6 +1183,7 @@ raw_sales AS (
     SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('website sales','website') OR session_id IS NULL) AS website,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'jumia')        AS jumia,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'nanyuki')      AS nanyuki,
+    SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'nyeri')      AS nyeri,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'kakamega')     AS kakamega,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) = 'hilton')       AS hilton,
     SUM(bag_qty) FILTER (WHERE lower(shop_name) IN ('sinza','dar-es-alam')) AS sinza,
@@ -1201,7 +1203,7 @@ product_details AS (
   SELECT
     product_name AS bag_name,
     starmall, mombasa, nakuru, eldoret, kisumu, meru, thika,
-    hazina, kitengela, website, jumia, nanyuki, kakamega, hilton, sinza,
+    hazina, kitengela, website, jumia, nanyuki, nyeri, kakamega, hilton, sinza,
     uganda, kisii, ktda, busia, rongai, mrkt, staff_pos, total,
     category,
     0 AS sort_priority
@@ -1224,6 +1226,7 @@ category_totals AS (
     SUM(website) AS website,
     SUM(jumia) AS jumia,
     SUM(nanyuki) AS nanyuki,
+    SUM(nyeri) AS nyeri,
     SUM(kakamega) AS kakamega,
     SUM(hilton) AS hilton,
     SUM(sinza) AS sinza,
@@ -1257,6 +1260,7 @@ grand_total AS (
     SUM(website) AS website,
     SUM(jumia) AS jumia,
     SUM(nanyuki) AS nanyuki,
+    SUM(nyeri) AS nyeri,
     SUM(kakamega) AS kakamega,
     SUM(hilton) AS hilton,
     SUM(sinza) AS sinza,
@@ -1287,6 +1291,7 @@ SELECT
   COALESCE(website, 0)  AS "WEBSITE",
   COALESCE(jumia, 0)    AS "JUMIA",
   COALESCE(nanyuki, 0)  AS "NANYUKI",
+  COALESCE(nyeri, 0)  AS "NYERI",
   COALESCE(kakamega, 0) AS "KAKAMEGA",
   COALESCE(hilton, 0)   AS "HILTON",
   COALESCE(sinza, 0)    AS "SINZA",
@@ -1863,6 +1868,7 @@ code_mapping AS (
   UNION ALL SELECT 'RONGAI', 'RONGAI'
   UNION ALL SELECT 'NAN', 'NANYUKI'
   UNION ALL SELECT 'NANYUKI', 'NANYUKI'
+  UNION ALL SELECT 'NYERI', 'NYERI'
   UNION ALL SELECT 'KAK', 'KAKAMEGA'
   UNION ALL SELECT 'KAKAMEGA', 'KAKAMEGA'
   UNION ALL SELECT 'HTN', 'HILTON'
@@ -1900,6 +1906,7 @@ receipts_raw AS (
       WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -1988,6 +1995,7 @@ cbd_out_to_shops_raw AS (
       WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2137,6 +2145,7 @@ v2_hilton_forward AS (
       WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2283,6 +2292,7 @@ pivoted_detail AS (
     SUM(CASE WHEN dest_name = 'KITENGELA' THEN qty ELSE 0 END)  AS "KITENGELA",
     SUM(CASE WHEN dest_name = 'WEBSITE' THEN qty ELSE 0 END)    AS "WEBSITE",
     SUM(CASE WHEN dest_name = 'NANYUKI' THEN qty ELSE 0 END)    AS "NANYUKI",
+    SUM(CASE WHEN dest_name = 'NYERI' THEN qty ELSE 0 END)    AS "NYERI",
     SUM(CASE WHEN dest_name = 'KAKAMEGA' THEN qty ELSE 0 END)   AS "KAKAMEGA",
     SUM(CASE WHEN dest_name = 'HILTON' THEN qty ELSE 0 END)     AS "HILTON",
     SUM(CASE WHEN dest_name = 'JUMIA' THEN qty ELSE 0 END)      AS "JUMIA",
@@ -2307,7 +2317,7 @@ pivoted_valued AS (
   FROM pivoted_detail
   WHERE ("STARMALL" <> 0 OR "MOMBASA" <> 0 OR "NAKURU" <> 0 OR "ELDORET" <> 0
       OR "KISUMU" <> 0 OR "MERU" <> 0 OR "THIKA" <> 0 OR "HAZINA" <> 0
-      OR "KITENGELA" <> 0 OR "NANYUKI" <> 0 OR "KAKAMEGA" <> 0 OR "HILTON" <> 0
+      OR "KITENGELA" <> 0 OR "NANYUKI" <> 0 OR "NYERI" <> 0 OR "KAKAMEGA" <> 0 OR "HILTON" <> 0
       OR "JUMIA" <> 0 OR "MRKT" <> 0 OR "SINZA" <> 0 OR "UGANDA" <> 0
       OR "KISII" <> 0 OR "KTDA" <> 0 OR "KTDA NEW" <> 0 OR "BUSIA" <> 0
       OR "RONGAI" <> 0 OR "CORPORATE" <> 0 OR "DENRI SHOPS" <> 0)
@@ -2325,7 +2335,7 @@ family_subtotals AS (
     SUM(p."KISUMU")     AS "KISUMU",   SUM(p."MERU")     AS "MERU",
     SUM(p."THIKA")      AS "THIKA",    SUM(p."HAZINA")   AS "HAZINA",
     SUM(p."KITENGELA")  AS "KITENGELA",SUM(p."WEBSITE")  AS "WEBSITE",
-    SUM(p."NANYUKI")    AS "NANYUKI",  SUM(p."KAKAMEGA") AS "KAKAMEGA",
+    SUM(p."NANYUKI")    AS "NANYUKI", SUM(p."NYERI") AS "NYERI",  SUM(p."KAKAMEGA") AS "KAKAMEGA",
     SUM(p."HILTON")     AS "HILTON",   SUM(p."JUMIA")    AS "JUMIA",
     SUM(p."MRKT")       AS "MRKT",     SUM(p."SINZA")    AS "SINZA",
     SUM(p."UGANDA")     AS "UGANDA",   SUM(p."KISII")    AS "KISII",
@@ -2345,7 +2355,7 @@ grand_total AS (
     SUM("KISUMU")     AS "KISUMU",   SUM("MERU")     AS "MERU",
     SUM("THIKA")      AS "THIKA",    SUM("HAZINA")   AS "HAZINA",
     SUM("KITENGELA")  AS "KITENGELA",SUM("WEBSITE")  AS "WEBSITE",
-    SUM("NANYUKI")    AS "NANYUKI",  SUM("KAKAMEGA") AS "KAKAMEGA",
+    SUM("NANYUKI")    AS "NANYUKI", SUM("NYERI") AS "NYERI",  SUM("KAKAMEGA") AS "KAKAMEGA",
     SUM("HILTON")     AS "HILTON",   SUM("JUMIA")    AS "JUMIA",
     SUM("MRKT")       AS "MRKT",     SUM("SINZA")    AS "SINZA",
     SUM("UGANDA")     AS "UGANDA",   SUM("KISII")    AS "KISII",
@@ -2358,7 +2368,7 @@ grand_total AS (
 combined AS (
   SELECT p.bag_name,
     "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+    "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
     "KISII","KTDA","KTDA NEW","BUSIA","RONGAI","CORPORATE","DENRI SHOPS",
     js.src_txt AS jumia_src_txt, ms.src_txt AS mrkt_src_txt,
     SPLIT_PART(p.bag_name, ' ', 1) AS family, 0 AS sort_order
@@ -2368,7 +2378,7 @@ combined AS (
   UNION ALL
   SELECT bag_name,
     "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+    "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
     "KISII","KTDA","KTDA NEW","BUSIA","RONGAI","CORPORATE","DENRI SHOPS",
     NULL, NULL,
     bag_name AS family, 1 AS sort_order
@@ -2376,7 +2386,7 @@ combined AS (
   UNION ALL
   SELECT bag_name,
     "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+    "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
     "KISII","KTDA","KTDA NEW","BUSIA","RONGAI","CORPORATE","DENRI SHOPS",
     NULL, NULL,
     '~~~~' AS family, 2 AS sort_order
@@ -2386,10 +2396,10 @@ combined AS (
 SELECT
   bag_name AS "Product",
   "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-  "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
+  "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","JUMIA","MRKT","SINZA","UGANDA",
   "KISII","KTDA","KTDA NEW","BUSIA","RONGAI",
   ("STARMALL"+"MOMBASA"+"NAKURU"+"ELDORET"+"KISUMU"+"MERU"+"THIKA"+"HAZINA"+
-   "KITENGELA"+"WEBSITE"+"NANYUKI"+"KAKAMEGA"+"HILTON"+"JUMIA"+"MRKT"+"SINZA"+"UGANDA"+
+   "KITENGELA"+"WEBSITE"+"NANYUKI"+"NYERI"+"KAKAMEGA"+"HILTON"+"JUMIA"+"MRKT"+"SINZA"+"UGANDA"+
    "KISII"+"KTDA"+"KTDA NEW"+"BUSIA"+"RONGAI") AS "TOTAL",
   "CORPORATE",
   "DENRI SHOPS",
@@ -2442,6 +2452,7 @@ receipts_raw AS (
       WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2478,6 +2489,7 @@ cbd_out_to_shops_raw AS (
       WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2507,6 +2519,7 @@ v2_hilton_forward AS (
       WHEN m.dest_path ILIKE '%THK/Stock%'    THEN 'THIKA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2579,6 +2592,7 @@ cbd_out_to_shops_raw AS (
       WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2612,6 +2626,7 @@ v2_hilton_forward AS (
       WHEN m.dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN m.dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN m.dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN m.dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN m.dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN m.dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN m.dest_path ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -2685,6 +2700,7 @@ code_mapping AS (
   UNION ALL SELECT 'RONGAI', 'RONGAI'
   UNION ALL SELECT 'NAN', 'NANYUKI'
   UNION ALL SELECT 'NANYUKI', 'NANYUKI'
+  UNION ALL SELECT 'NYERI', 'NYERI'
   UNION ALL SELECT 'KAK', 'KAKAMEGA'
   UNION ALL SELECT 'KAKAMEGA', 'KAKAMEGA'
   UNION ALL SELECT 'HTN', 'HILTON'
@@ -2719,6 +2735,7 @@ finwh_inventory AS (
         WHEN UPPER(dest."name") = 'HAZINA' THEN 'HAZINA'
         WHEN UPPER(dest."name") = 'KITENGELA' THEN 'KITENGELA'
         WHEN UPPER(dest."name") = 'NANYUKI' THEN 'NANYUKI'
+        WHEN UPPER(dest."name") = 'NYERI' THEN 'NYERI'
         WHEN UPPER(dest."name") = 'KAKAMEGA' THEN 'KAKAMEGA'
         WHEN UPPER(dest."name") = 'HILTON' THEN 'HILTON'
         WHEN UPPER(dest."name") = 'SINZA' THEN 'SINZA'
@@ -2743,7 +2760,7 @@ finwh_inventory AS (
     AND (
       UPPER(dest."name") IN (
         'STARMALL','MOMBASA','NAKURU','ELDORET','KISUMU','MERU','THIKA','HAZINA',
-        'KITENGELA','WEBSITE','NANYUKI','KAKAMEGA','HILTON','SINZA','UGANDA',
+        'KITENGELA','WEBSITE','NANYUKI','NYERI','KAKAMEGA','HILTON','SINZA','UGANDA',
         'KISII','CBD','CBD/STOCK','BUSIA','RONGAI'
       )
       OR dest.complete_name ILIKE '%CBD%'
@@ -2752,7 +2769,7 @@ finwh_inventory AS (
         'STAR','MSA','NAKS','ELD','KSM','MERU','THK','HAZ','KITE','RONG','NAN',
         'KAK','HTN','DAR','UG','KSI','KTDA','BUSIA','CBD','STARMALL','MOMBASA',
         'NAKURU','ELDORET','KISUMU','THIKA','HAZINA','KITENGELA','RONGAI',
-        'NANYUKI','KAKAMEGA','HILTON','SINZA','UGANDA','KISII'
+        'NANYUKI','NYERI','KAKAMEGA','HILTON','SINZA','UGANDA','KISII'
       )
     )
     AND DATE(m."date") BETWEEN p.start_date AND p.end_date
@@ -2782,6 +2799,7 @@ transit_moves AS (
       WHEN UPPER(s."name") = 'HAZINA' THEN 'HAZINA'
       WHEN UPPER(s."name") = 'KITENGELA' THEN 'KITENGELA'
       WHEN UPPER(s."name") = 'NANYUKI' THEN 'NANYUKI'
+      WHEN UPPER(s."name") = 'NYERI' THEN 'NYERI'
       WHEN UPPER(s."name") = 'KAKAMEGA' THEN 'KAKAMEGA'
       WHEN UPPER(s."name") = 'HILTON' THEN 'HILTON'
       WHEN UPPER(s."name") = 'SINZA' THEN 'SINZA'
@@ -2802,7 +2820,7 @@ transit_moves AS (
   WHERE (
       UPPER(s."name") IN (
         'STARMALL','MOMBASA','NAKURU','ELDORET','KISUMU','MERU','THIKA','HAZINA',
-        'KITENGELA','WEBSITE','NANYUKI','KAKAMEGA','HILTON','SINZA','UGANDA',
+        'KITENGELA','WEBSITE','NANYUKI','NYERI','KAKAMEGA','HILTON','SINZA','UGANDA',
         'KISII','KTDA SHOP','BUSIA','RONGAI'
       )
       OR s."name" ILIKE '%CBD%'
@@ -2836,6 +2854,7 @@ cbd_sends AS (
       WHEN dest.complete_name ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN dest.complete_name ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN dest.complete_name ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN dest.complete_name ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN dest.complete_name ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN dest.complete_name ILIKE '%KSI/Stock%'    THEN 'KISII'
       WHEN dest.complete_name ILIKE '%BUSIA/Stock%'  THEN 'BUSIA'
@@ -3068,6 +3087,7 @@ pivoted_detail AS (
     SUM(CASE WHEN dest_name = 'KITENGELA' THEN qty ELSE 0 END)  AS "KITENGELA",
     SUM(CASE WHEN dest_name = 'WEBSITE' THEN qty ELSE 0 END)    AS "WEBSITE",
     SUM(CASE WHEN dest_name = 'NANYUKI' THEN qty ELSE 0 END)    AS "NANYUKI",
+    SUM(CASE WHEN dest_name = 'NYERI' THEN qty ELSE 0 END)    AS "NYERI",
     SUM(CASE WHEN dest_name = 'KAKAMEGA' THEN qty ELSE 0 END)   AS "KAKAMEGA",
     SUM(CASE WHEN dest_name = 'HILTON' THEN qty ELSE 0 END)     AS "HILTON",
     SUM(CASE WHEN dest_name = 'SINZA' THEN qty ELSE 0 END)      AS "SINZA",
@@ -3099,6 +3119,7 @@ family_subtotals AS (
     SUM(p."KITENGELA")  AS "KITENGELA",
     SUM(p."WEBSITE")    AS "WEBSITE",
     SUM(p."NANYUKI")    AS "NANYUKI",
+    SUM(p."NYERI")    AS "NYERI",
     SUM(p."KAKAMEGA")   AS "KAKAMEGA",
     SUM(p."HILTON")     AS "HILTON",
     SUM(p."SINZA")      AS "SINZA",
@@ -3126,6 +3147,7 @@ grand_total AS (
     SUM("KITENGELA")  AS "KITENGELA",
     SUM("WEBSITE")    AS "WEBSITE",
     SUM("NANYUKI")    AS "NANYUKI",
+    SUM("NYERI")    AS "NYERI",
     SUM("KAKAMEGA")   AS "KAKAMEGA",
     SUM("HILTON")     AS "HILTON",
     SUM("SINZA")      AS "SINZA",
@@ -3141,7 +3163,7 @@ combined AS (
   SELECT
     bag_name,
     "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","SINZA","UGANDA",
+    "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","SINZA","UGANDA",
     "KISII","KTDA","KTDA NEW","BUSIA","RONGAI",
     SPLIT_PART(bag_name, ' ', 1) AS family,
     0 AS sort_order
@@ -3150,7 +3172,7 @@ combined AS (
   SELECT
     bag_name,
     "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","SINZA","UGANDA",
+    "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","SINZA","UGANDA",
     "KISII","KTDA","KTDA NEW","BUSIA","RONGAI",
     bag_name AS family,
     1 AS sort_order
@@ -3159,7 +3181,7 @@ combined AS (
   SELECT
     bag_name,
     "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-    "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","SINZA","UGANDA",
+    "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","SINZA","UGANDA",
     "KISII","KTDA","KTDA NEW","BUSIA","RONGAI",
     '~~~~' AS family,
     2 AS sort_order
@@ -3169,10 +3191,10 @@ combined AS (
 SELECT
   bag_name AS "Product",
   "STARMALL","MOMBASA","NAKURU","ELDORET","KISUMU","MERU","THIKA","HAZINA",
-  "KITENGELA","WEBSITE","NANYUKI","KAKAMEGA","HILTON","SINZA","UGANDA",
+  "KITENGELA","WEBSITE","NANYUKI","NYERI","KAKAMEGA","HILTON","SINZA","UGANDA",
   "KISII","KTDA","KTDA NEW","BUSIA","RONGAI",
   ("STARMALL"+"MOMBASA"+"NAKURU"+"ELDORET"+"KISUMU"+"MERU"+"THIKA"+"HAZINA"+
-   "KITENGELA"+"WEBSITE"+"NANYUKI"+"KAKAMEGA"+"HILTON"+"SINZA"+"UGANDA"+
+   "KITENGELA"+"WEBSITE"+"NANYUKI"+"NYERI"+"KAKAMEGA"+"HILTON"+"SINZA"+"UGANDA"+
    "KISII"+"KTDA"+"KTDA NEW"+"BUSIA"+"RONGAI") AS "TOTAL",
   family AS "Family",
   sort_order
@@ -3214,6 +3236,7 @@ code_mapping AS (
   UNION ALL SELECT 'WEB', 'WEBSITE'
   UNION ALL SELECT 'WEBSITE', 'WEBSITE'
   UNION ALL SELECT 'NAN', 'NANYUKI'
+  UNION ALL SELECT 'NYERI', 'NYERI'
   UNION ALL SELECT 'KAK', 'KAKAMEGA'
   UNION ALL SELECT 'HTN', 'HILTON'
   UNION ALL SELECT 'DAR-ES-ALAM', 'SINZA'
@@ -3298,6 +3321,7 @@ dispatches AS (
       WHEN dest_path ILIKE '%HAZ%'    THEN 'HAZINA'
       WHEN dest_path ILIKE '%KITE%'   THEN 'KITENGELA'
       WHEN dest_path ILIKE '%NAN%'    THEN 'NANYUKI'
+      WHEN dest_path ILIKE '%NYERI%'    THEN 'NYERI'
       WHEN dest_path ILIKE '%KAK%'    THEN 'KAKAMEGA'
       WHEN dest_path ILIKE '%HTN%'    THEN 'HILTON'
       WHEN dest_path ILIKE '%KSI%'    THEN 'KISII'
@@ -3357,6 +3381,7 @@ receipts AS (
       WHEN dest_path ILIKE '%HAZ/Stock%'    THEN 'HAZINA'
       WHEN dest_path ILIKE '%KITE/Stock%'   THEN 'KITENGELA'
       WHEN dest_path ILIKE '%NAN/Stock%'    THEN 'NANYUKI'
+      WHEN dest_path ILIKE '%NYERI/Stock%'    THEN 'NYERI'
       WHEN dest_path ILIKE '%KAK/Stock%'    THEN 'KAKAMEGA'
       WHEN dest_path ILIKE '%HTN/Stock%'    THEN 'HILTON'
       WHEN dest_path ILIKE '%KSI/Stock%'    THEN 'KISII'
@@ -4392,7 +4417,7 @@ WITH mapping(location, target_branch) AS (
     VALUES ('Sinza', 'DAR-ES-ALAM'), ('Website', 'WEBSITE SALES'), ('Ktda', 'KTDA Shop'),
            ('Hilton', 'HILTON'), ('Busia', 'BUSIA'), ('Kisumu', 'KISUMU'), ('Thika', 'THIKA'),
            ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
-           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
+           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nyeri', 'NYERI'), ('Nakuru', 'NAKURU'),
            ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
            ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
 )
@@ -4429,7 +4454,7 @@ WITH mapping(location, target_branch) AS (
     VALUES ('Sinza', 'DAR-ES-ALAM'), ('Website', 'WEBSITE SALES'), ('Ktda', 'KTDA Shop'),
            ('Hilton', 'HILTON'), ('Busia', 'BUSIA'), ('Kisumu', 'KISUMU'), ('Thika', 'THIKA'),
            ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
-           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
+           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nyeri', 'NYERI'), ('Nakuru', 'NAKURU'),
            ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
            ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU'),
            -- The corporate team's own target (target_scope 'corporate').
@@ -4751,7 +4776,7 @@ WITH mapping(location, target_branch) AS (
     VALUES ('Sinza', 'DAR-ES-ALAM'), ('Website', 'WEBSITE SALES'), ('Ktda', 'KTDA Shop'),
            ('Hilton', 'HILTON'), ('Busia', 'BUSIA'), ('Kisumu', 'KISUMU'), ('Thika', 'THIKA'),
            ('Hazina', 'HAZINA'), ('Mombasa', 'MOMBASA'), ('Uganda', 'UGANDA'),
-           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nakuru', 'NAKURU'),
+           ('Starmall', 'STARMALL'), ('Nanyuki', 'NANYUKI'), ('Nyeri', 'NYERI'), ('Nakuru', 'NAKURU'),
            ('Eldoret', 'ELDORET'), ('Rongai', 'RONGAI'), ('Kisii', 'KISII'),
            ('Kakamega', 'KAKAMEGA'), ('Kitengela', 'KITENGELA'), ('Meru', 'MERU')
 )

@@ -16,7 +16,7 @@ import pandas as pd
 # Destinations both distribution reports carry.
 TRANSIT_COLUMNS = [
     "STARMALL", "MOMBASA", "NAKURU", "ELDORET", "KISUMU", "MERU", "THIKA",
-    "HAZINA", "KITENGELA", "WEBSITE", "NANYUKI", "KAKAMEGA", "HILTON",
+    "HAZINA", "KITENGELA", "WEBSITE", "NANYUKI", "NYERI", "KAKAMEGA", "HILTON",
     "SINZA", "UGANDA", "KISII", "KTDA", "KTDA NEW", "BUSIA", "RONGAI",
 ]
 

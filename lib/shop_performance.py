@@ -22,7 +22,7 @@ import pandas as pd
 # starts selling later and is not in NOT_SHOPS is added after these on its own,
 # so a new shop appears without anyone editing this file.
 SHOP_ORDER = ["Starmall", "Mombasa", "Nakuru", "Eldoret", "Kisumu", "Meru", "Thika",
-              "Hazina", "Kitengela", "Nanyuki", "Kakamega", "Hilton", "Sinza", "Uganda",
+              "Hazina", "Kitengela", "Nanyuki", "Nyeri", "Kakamega", "Hilton", "Sinza", "Uganda",
               "Kisii", "KTDA", "Busia", "Rongai", "Website"]
 
 # Tills that ring sales but are not shops: kept out of the location list, the
