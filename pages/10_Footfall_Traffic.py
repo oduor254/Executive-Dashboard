@@ -220,6 +220,9 @@ def render_footfall(start_date: date, end_date: date) -> None:
         table.insert(6, "Revenue per Walk-in",
                      (table["Walk-in Revenue"] / table["Walk-ins Counted"]
                       .where(table["Walk-ins Counted"] > 0)).round(0))
+        first = ["Purchased Walk-ins", "Didn't Buy", "Walk-ins Counted", "Walk-in Conversion %"]
+        table = table[first + [c for c in table.columns if c not in first + ["Days Counted"]]
+                      + ["Days Counted"]]
         table = table.reset_index().rename(columns={"index": "Location"})
         grid.filterable_table(table.sort_values("Walk-ins Counted", ascending=False),
                               currency_columns=("Walk-in Revenue", "Revenue per Walk-in",

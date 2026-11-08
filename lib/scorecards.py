@@ -348,7 +348,8 @@ def on_card_shop(frame: pd.DataFrame, shops: pd.Series, served_by: str = "Served
 
 def shops_worked(df: pd.DataFrame, served_by: str = "Served By") -> pd.Series:
     """(person, card shop) → the shops they served at, with days: "Hazina 3d, Ktda 1d"."""
-    staffed = df[df[served_by] != NOT_RECORDED].assign(Day=_dates(df["Date"]))
+    staffed = df[df[served_by] != NOT_RECORDED]
+    staffed = staffed.assign(Day=_dates(staffed["Date"]))
     days = staffed.groupby([served_by, "Location"])["Day"].nunique()
     text = days.reset_index().sort_values("Day", ascending=False).groupby(served_by).apply(
         lambda d: ", ".join(f"{loc} {n}d" for loc, n in zip(d["Location"], d["Day"])),
