@@ -10,6 +10,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
+import re
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -736,6 +737,61 @@ def _fulfilment(cases: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _call_list(cases: pd.DataFrame, position: pd.DataFrame) -> pd.DataFrame:
+    """Customers still waiting for a bag that is back in stock now: one row
+    per customer and bag (their latest request), for the call centre.
+
+    Still waiting = has a phone, hasn't bought it or anything else since.
+    Back in stock = any colour of the bag on a shop shelf, in transit or
+    ready in a warehouse. The colour they asked for is checked when the
+    request names one."""
+    waiting = cases[cases["Trackable"] & ~cases["Fulfilled"] & ~cases["Bought Other"]
+                    & ~cases["Bag"].isin(["Not recorded", None])]
+    stock = position[position["Bucket"].isin(["Shop", "Transit", "Warehouse"]) & (position["Qty"] > 0)]
+    if waiting.empty or stock.empty:
+        return pd.DataFrame()
+    waiting = (waiting.sort_values("Date", ascending=False)
+               .drop_duplicates(["Phone Key", "Bag"]))
+    stock = stock.assign(Colour=[sku[len(bag):].strip() or sku for sku, bag in zip(stock["SKU"], stock["Bag"])])
+    by_bag = {b: g for b, g in stock.groupby("Bag")}
+    today = pd.Timestamp(date.today())
+    rows = []
+    for _, r in waiting.iterrows():
+        g = by_bag.get(r["Bag"])
+        if g is None:
+            continue
+        asked = f"{r['Product Wanted'] or ''} {r['Colour'] or ''}".lower()
+        named = [c for c in g["Colour"].unique() if c.lower() in asked]
+        # What they asked for beyond the bag's name is the colour they want.
+        wants_colour = bool(re.sub(r"[^a-z]", "", asked.replace(str(r["Bag"]).lower(), "")))
+        colours = g.groupby("Colour")["Qty"].sum().sort_values(ascending=False)
+        shops = (g[g["Bucket"] != "Warehouse"].groupby("Location")["Qty"].sum()
+                 .sort_values(ascending=False))
+        rows.append({
+            "Customer": r["Customer"] if pd.notna(r["Customer"]) else "Unknown",
+            "Contact": r["Contact"], "Source": r["Source"],
+            "Their Shop": r["Location"], "Asked On": pd.Timestamp(r["Date"]).date(),
+            "Days Waiting": (today - pd.Timestamp(r["Date"]).normalize()).days,
+            "Bag Asked For": " ".join(str(v) for v in (r["Product Wanted"], r["Colour"]) if v),
+            "Their Colour In": ("Yes" if named else "No" if wants_colour else "No colour named"),
+            "At Their Shop": int(g.loc[(g["Location"] == r["Location"]) & (g["Bucket"] == "Shop")
+                                       & (g["Colour"].isin(named) if named else True), "Qty"].sum()),
+            "Colours in Stock": ", ".join(f"{c} {q:,.0f}" for c, q in colours.head(6).items()),
+            "Shops with Stock": ", ".join(f"{loc} {q:,.0f}" for loc, q in shops.head(5).items()),
+            "At Shops Now": int(g.loc[g["Bucket"] != "Warehouse", "Qty"].sum()),
+            "In Warehouse Now": int(g.loc[g["Bucket"] == "Warehouse", "Qty"].sum()),
+            "Note": r["Detail"],
+        })
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    # Their colour at their own shop first — the easiest call — then whoever has waited longest.
+    rank = (out["Their Colour In"] == "No").astype(int)
+    return (out.assign(_r=rank, _s=-(out["At Their Shop"] > 0).astype(int))
+            .sort_values(["_r", "_s", "Days Waiting"], ascending=[True, True, False])
+            .drop(columns=["_r", "_s"]))
+
+
 @st.fragment()
 def render_out_of_stock(start_date: date, end_date: date) -> None:
     """Out-of-stock demand from walk-in customers (Leads) and online customers
@@ -795,6 +851,24 @@ def render_out_of_stock(start_date: date, end_date: date) -> None:
     position = position.assign(Bag=position["SKU"].map(stock_planning.family))
     at_shops = position[position["Bucket"].isin(["Shop", "Transit"])].groupby("Bag")["Qty"].sum()
     in_wh = position[position["Bucket"] == "Warehouse"].groupby("Bag")["Qty"].sum()
+
+    with st.container(border=True):
+        st.markdown("**📞 To Call — Back in Stock**")
+        calls = _call_list(shown, position)
+        if calls.empty:
+            st.caption("Nobody still waiting is asking for a bag that is back in stock.")
+        else:
+            ready = int((calls["Their Colour In"] != "No").sum())
+            st.caption(f"{len(calls):,} customers to call — {ready:,} can get the colour they asked "
+                       f"for (or named none), {int((calls['At Their Shop'] > 0).sum()):,} at their own "
+                       f"shop; the other {len(calls) - ready:,} can be offered another colour. Customers still waiting (no bag bought since they asked) whose bag is "
+                       "now on a shop shelf, in transit or ready in a warehouse; one row per customer "
+                       "and bag, their latest request. Their colour, at their own shop, comes first, "
+                       "then whoever has waited longest. Follows the Source and Location filters above.")
+            grid.filterable_table(calls, pinned_columns=("Customer",), height=420)
+            st.download_button("⬇️ Download call list (CSV)", calls.to_csv(index=False).encode(),
+                               file_name=f"back_in_stock_call_list_{date.today():%Y%m%d}.csv",
+                               mime="text/csv", key="oos_call_list")
 
     c1, c2 = st.columns(2)
     with c1, st.container(border=True):
