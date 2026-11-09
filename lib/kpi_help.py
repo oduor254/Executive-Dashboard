@@ -203,6 +203,7 @@ GLOSSARY = {
     "POS Sessions": "Till sessions opened in the range.",
     "Attendants & BAs": "Shop attendants and brand ambassadors who served at least one order.",
     "Nobody Recorded": "Sales with no shop attendant or BA on the order (mostly Jumia orders on the website till).",
+    "Avg Revenue per Attendant per Day": "Sales made by attendants and BAs ÷ attendant-days (each person counted once for every day they made a sale). Sales with nobody recorded are left out.",
     "Answered So Far": "People on the team list who have answered today's questionnaire.",
     "Average Score So Far": "Average mark on today's answers so far.",
     "Latest Answer": "When the most recent answer to today's questionnaire came in.",
