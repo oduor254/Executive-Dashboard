@@ -195,6 +195,10 @@ GLOSSARY = {
     "Value": "What these customers spent on that purchase, in KES.",
     "Same Day": "Bought the same day as their first contact.",
     "Not Credited in App": "Bought, but the chat, DM or lead was never marked as converted in its app.",
+    "Bought (Any Way)": "Customers who bought a bag any way — in a shop, online or delivered — within the chosen window of their first contact. ÷ customers = overall conversion.",
+    "Bought Online Only": "Online customers who bought, but only online or as a delivery — never walked in.",
+    "Bought in Shop Only": "Walk-in leads who bought, but only in a shop — never online or delivered.",
+    "No Purchase": "Got in touch but bought nothing within the chosen window.",
     # ---- shop attendants
     "POS Sessions": "Till sessions opened in the range.",
     "Attendants & BAs": "Shop attendants and brand ambassadors who served at least one order.",
