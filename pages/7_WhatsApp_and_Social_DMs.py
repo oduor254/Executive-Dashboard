@@ -1108,10 +1108,12 @@ CHANNEL_COLORS = {lr.WHATSAPP: theme.CATEGORICAL[1], lr.SOCIAL: theme.CATEGORICA
 HYBRID_WORDS = {
     lr.ONLINE_TO_SHOP: {"who": "Online Customers", "how": "messaged on WhatsApp or a social DM",
                         "did": "Walked In & Bought", "where": "Shop they walked into",
-                        "split": "Channel", "credit": "the chat or DM was never marked as converted"},
+                        "split": "Channel", "credit": "the chat or DM was never marked as converted",
+                        "same": "Bought Online Only"},
     lr.SHOP_TO_ONLINE: {"who": "Walk-in Leads", "how": "captured as a walk-in lead at a shop",
                         "did": "Bought Online", "where": "Shop that took the lead, by how they bought",
-                        "split": "Bought Via", "credit": "the lead was never marked Purchased"},
+                        "split": "Bought Via", "credit": "the lead was never marked Purchased",
+                        "same": "Bought in Shop Only"},
 }
 
 
@@ -1129,8 +1131,10 @@ def _hybrid_data(start: date, end: date, within: int,
     touches, bought, _ = _recycling_data(min(start, pool_start), today)
     if touches.empty:
         return pd.DataFrame(), pd.DataFrame()
+    base = lr.first_contacts(touches, start, end, direction)
+    base = base.assign(**{"Bought Any Way": lr.bought_any_way(base, bought, within)})
     return (lr.hybrid(touches, bought, start=start, end=end, within=within, direction=direction),
-            lr.first_contacts(touches, start, end, direction))
+            base)
 
 
 def _hybrid_scorecard(conv: pd.DataFrame, base: pd.DataFrame, by: str, did: str) -> pd.DataFrame:
@@ -1148,11 +1152,38 @@ def _hybrid_scorecard(conv: pd.DataFrame, base: pd.DataFrame, by: str, did: str)
     # the contact itself recorded (not for where they ended up buying).
     base_col = {"Channel": "Channel", "Source": "Source", "Contact Branch": "Branch"}.get(by)
     if base_col:
-        contacts = base.groupby(base_col).size().rename_axis(by)
-        t = t.join(contacts.rename("Customers"), how="outer").fillna(0)
+        g = base.groupby(base_col)
+        contacts = pd.DataFrame({"Customers": g.size(),
+                                 "Bought (Any Way)": g["Bought Any Way"].sum()}).rename_axis(by)
+        t = t.join(contacts, how="outer").fillna(0)
+        t.insert(0, "Bought (Any Way)", t.pop("Bought (Any Way)").astype(int))
         t.insert(0, "Customers", t.pop("Customers").astype(int))
-        t["Conversion %"] = (t[did] / t["Customers"].where(t["Customers"] > 0) * 100).round(1)
+        per = t["Customers"].where(t["Customers"] > 0)
+        t.insert(2, "Overall Conversion %", (t["Bought (Any Way)"] / per * 100).round(1))
+        t["Conversion %"] = (t[did] / per * 100).round(1)
     return t.reset_index().sort_values(did, ascending=False)
+
+
+def _overall_conversion(base: pd.DataFrame, conv: pd.DataFrame, words: dict, window: str) -> None:
+    """Of everyone who got in touch this way: how many bought at all, split
+    into those who bought the same way and those who bought the other way."""
+    total = len(base)
+    bought = int(base["Bought Any Way"].sum())
+    other = len(conv)  # every hybrid buyer also bought "any way"
+    same = bought - other
+    st.markdown("**Overall Leads Conversion**")
+    _kpis([
+        (words["who"], f"{total:,}", words["how"]),
+        ("Bought (Any Way)", f"{bought:,}", f"{_pct(bought, total)} overall conversion"),
+        (words["same"], f"{same:,}", f"{_pct(same, total)} of {words['who'].lower()}"),
+        (words["did"], f"{other:,}", f"{_pct(other, total)} · {_pct(other, bought)} of buyers"),
+        ("No Purchase", f"{total - bought:,}", f"{_pct(total - bought, total)} {window.lower()}"),
+    ])
+    st.caption(f"**Overall conversion** = customers who bought a bag any way — in a shop, online "
+               f"or delivered — {window.lower()} of their first contact. **{words['did']}** are the "
+               f"hybrid buyers broken down below; **{words['same']}** bought only the same way "
+               f"they got in touch.")
+    st.markdown(f"**Hybrid Conversion — {words['did']}**")
 
 
 @st.fragment()
@@ -1178,6 +1209,7 @@ def render_hybrid(start_date: date, end_date: date) -> None:
     if base.empty:
         st.info(f"Nobody {words['how']} with a phone number in this date range.")
         return
+    _overall_conversion(base, conv, words, window)
     if conv.empty:
         st.info(f"None of the {len(base):,} customers {words['how']} in this range bought the "
                 f"other way ({window.lower()}).")
@@ -1187,8 +1219,6 @@ def render_hybrid(start_date: date, end_date: date) -> None:
     same_day = int((conv["Days to Buy"] == 0).sum())
     uncredited = conv[~conv["Credited in App"]]
     _kpis([
-        (words["who"], f"{total:,}", words["how"]),
-        (words["did"], f"{n:,}", f"{_pct(n, total)} of them"),
         ("Value", f"KES {conv['Amount'].sum():,.0f}",
          f"{int(conv['Bags'].sum()):,} bags · KES {conv['Amount'].mean():,.0f} each"),
         ("Same Day", f"{same_day:,}", f"{_pct(same_day, n)} · median "

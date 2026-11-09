@@ -259,6 +259,19 @@ def _bought_other_way(purchases: pd.DataFrame, direction: str) -> pd.DataFrame:
     return p.assign(**{"Bought Via": via})
 
 
+def bought_any_way(base: pd.DataFrame, purchases: pd.DataFrame, within: int) -> pd.Series:
+    """For each first contact in `base` (from first_contacts): did that
+    customer buy a bag at all — any till, any way — within `within` days of it
+    (the same day counts)."""
+    if base.empty or purchases.empty:
+        return pd.Series(False, index=base.index)
+    p = purchases[["Phone Key", "Bought On"]].assign(**{"Bought On": pd.to_datetime(purchases["Bought On"])})
+    p = p.merge(base[["Phone Key", "Date"]], on="Phone Key")
+    days = (p["Bought On"] - p["Date"].dt.normalize()).dt.days
+    keys = set(p.loc[(days >= 0) & (days <= within), "Phone Key"])
+    return base["Phone Key"].isin(keys)
+
+
 def hybrid(t: pd.DataFrame, purchases: pd.DataFrame, *, start: date, end: date,
            within: int, direction: str) -> pd.DataFrame:
     """One row per customer whose first touch the `direction` starts with fell
