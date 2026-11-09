@@ -41,8 +41,11 @@ def achievement(sessions: pd.DataFrame, served_by: pd.Series,
         "Sessions": g["Session"].nunique(),
         "Orders": g["Orders"].sum(),
         "Sales Made": g["Sales Made"].sum().round(2),
+        "Days Worked": pd.to_datetime(df["Date"]).dt.date.groupby(df["Served By"]).nunique(),
         "Individual Target": target.round(0),
     })
+    out.insert(out.columns.get_loc("Days Worked") + 1, "Avg Revenue per Day",
+               (out["Sales Made"] / out["Days Worked"]).round(0))
     out["Achievement %"] = (out["Sales Made"] / out["Individual Target"]
                             .where(out["Individual Target"] > 0) * 100).round(1)
     out = out.reset_index().rename(columns={"Served By": "Shop Attendant / BA"})

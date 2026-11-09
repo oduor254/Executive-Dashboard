@@ -220,6 +220,7 @@ _MASTER_PRODUCTS = [
     'Kaz Black','Kaz Yellow Dotted','Kaz Brown','Kaz Nude','Kaz Grey','Kaz Green',
     'Ladona Spice','Ladona Dark Brown','Ladona Black','Ladona Beige','Ladona Cracked',
     'Ladona Grey','Ladona Red','Ladona Yellow Brown','Ladona Chocolate',
+    'Lafemme Black (Obsidian)','Lafemme Pink (Éclat)','Lafemme Red (Garnet)','Lafemme Wine Red (Mulberry)',
     'Lamora Black','Lamora Sky Blue','Lamora Brown','Lamora Red',
     'Lanka Wooven Black','Lanka Wooven Mustard','Lanka Wooven Purple','Lanka Wooven Maroon',
     'Legacy Black','Legacy Brown','Legacy Grey','Legacy Dark Brown','Legacy Green',
@@ -394,7 +395,8 @@ def _strip_color(name: str) -> str:
     """Longest color suffix removed, case-insensitively — mirrors
     product_color_split's `pt.name LIKE '% ' || cl.color OR pt.name = cl.color`
     with colors tried longest-first."""
-    name = name.strip()
+    # A marketing name in brackets is part of the colour: "Lafemme Black (Obsidian)".
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name).strip()
     lowered = name.lower()
     for color in _COLOR_SUFFIXES:
         color_lower = color.lower()

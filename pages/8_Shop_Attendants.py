@@ -75,11 +75,18 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     unrecorded = shown[shown["Served By"] == NOT_RECORDED]
     bas = shown[shown["Brand Ambassador (BA)"] != ""]
+    # One attendant on the floor for one day = one attendant-day.
+    staffed = shown[shown["Served By"] != NOT_RECORDED]
+    person_days = len(staffed.assign(Day=pd.to_datetime(staffed["Date"]).dt.date)
+                      [["Served By", "Day"]].drop_duplicates())
     items = [
         ("Sales Made", f"KES {shown['Sales Made'].sum():,.0f}", None),
         ("POS Sessions", f"{shown['Session'].nunique():,}", f"{shown['Location'].nunique()} locations"),
         ("Attendants & BAs", f"{len(set(shown['Served By']) - {NOT_RECORDED}):,}",
          f"{bas['Brand Ambassador (BA)'].nunique()} BAs, KES {bas['Sales Made'].sum():,.0f}"),
+        ("Avg Revenue per Attendant per Day",
+         f"KES {staffed['Sales Made'].sum() / person_days:,.0f}" if person_days else "—",
+         f"{person_days:,} attendant-days"),
         ("Nobody Recorded", f"KES {unrecorded['Sales Made'].sum():,.0f}",
          f"{int(unrecorded['Orders'].sum()):,} orders"),
     ]
@@ -137,7 +144,7 @@ def render_attendants(start_date: date, end_date: date) -> None:
             per["Share %"] = (per["Sales Made"] / per["Sales Made"].sum() * 100).round(1)
             per["Avg Sale"] = (per["Sales Made"] / per["Orders"].where(per["Orders"] > 0)).round(0)
             grid.filterable_table(per, currency_columns=("Sales Made", "Individual Target",
-                                                         "Avg Sale"),
+                                                         "Avg Sale", "Avg Revenue per Day"),
                                   pinned_columns=("Shop Attendant / BA",), height=440)
     elif section == "Sales Training":
         _training(start_date, end_date, location)
