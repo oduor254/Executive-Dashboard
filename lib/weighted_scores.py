@@ -275,8 +275,8 @@ def attendant_cards(df: pd.DataFrame, people: pd.DataFrame, *, bag_lines: pd.Dat
     """
     keys = ["Attendant / BA", "Location"]
     t = people.set_index(keys).copy()
-    # A BA's sales at every shop they were sent to go on their one card.
-    served = scorecards.on_card_shop(df, scorecards.ba_card_shops(df))
+    # Everyone has one card: a BA's or a transferred attendant's sales at every shop go on it.
+    served = scorecards.on_card_shop(df, scorecards.card_shops(df))
     served = served[served["Served By"] != scorecards.NOT_RECORDED].rename(columns={"Served By": "Attendant / BA"})
     g = served.groupby(keys)
 

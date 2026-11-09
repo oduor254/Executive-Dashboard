@@ -338,6 +338,24 @@ def ba_card_shops(df: pd.DataFrame, served_by: str = "Served By") -> pd.Series:
     return counts.sort_values("n", ascending=False).drop_duplicates(served_by).set_index(served_by)["Location"]
 
 
+def card_shops(df: pd.DataFrame, served_by: str = "Served By") -> pd.Series:
+    """Person → the shop their one card is under. A BA: where they served the
+    most (ba_card_shops). An attendant transferred between shops (the CBD
+    rotation on 2 Nov 2026 moved seven): the shop they served at last, so the
+    card follows them to where they are now. Their targets are still worked
+    out day by day at whichever shop they were in."""
+    staffed = df[(df[served_by] != NOT_RECORDED) & ~df[served_by].astype(str).str.endswith(BA_SUFFIX)]
+    if staffed.empty:
+        return ba_card_shops(df, served_by)
+    day = pd.to_datetime(staffed["Date"]).dt.normalize()
+    last = staffed.assign(Day=day)[day == day.groupby(staffed[served_by]).transform("max")]
+    # On the last day itself, the shop with the most orders (a cover shift elsewhere loses).
+    latest = (last.groupby([served_by, "Location"]).size().reset_index(name="n")
+              .sort_values("n", ascending=False).drop_duplicates(served_by)
+              .set_index(served_by)["Location"])
+    return pd.concat([latest, ba_card_shops(df, served_by)])
+
+
 def on_card_shop(frame: pd.DataFrame, shops: pd.Series, served_by: str = "Served By") -> pd.DataFrame:
     """`frame` with each BA's rows moved to their card's shop (Location)."""
     if shops.empty:
@@ -359,8 +377,8 @@ def shops_worked(df: pd.DataFrame, served_by: str = "Served By") -> pd.Series:
 
 def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.DataFrame,
                     training: pd.Series | None = None) -> pd.DataFrame:
-    """One row per attendant (per shop they served at) or brand ambassador
-    (one card for all the shops they were sent to, under ba_card_shops).
+    """One row per attendant or brand ambassador: one card for all the shops
+    they served at, under the shop card_shops picks.
 
     For every day a person was on the floor, their target is the shop's
     daily target split equally between everyone who served there that day;
@@ -369,7 +387,7 @@ def attendant_cards(df: pd.DataFrame, previous: pd.DataFrame, day_targets: pd.Da
     worked out at the shop they were at each day, then added up on one card.
     """
     worked = person_days(df, day_targets)
-    shops = ba_card_shops(df)
+    shops = card_shops(df)
     df_cards = on_card_shop(df, shops)
     worked = on_card_shop(worked, shops)
     staffed = df_cards[df_cards["Served By"] != NOT_RECORDED]
