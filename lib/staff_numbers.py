@@ -59,10 +59,11 @@ _SHOP_NAMES = {"ktda": "Ktda", "website sales": "Website", "website": "Website",
                "dar-es-alam": "Sinza", "dar es salaam": "Sinza", "sinza": "Sinza"}
 
 
-# Attendants who have left: kept out of the attendant score cards and the
-# sales training (their sales still count towards their shop's figures).
-# Matched on the name, ignoring case and spacing ("Diana  Gatibaru" in Odoo).
-FORMER_STAFF = {"Doreen Omondi", "Diana Gatibaru", "Ann Muthoni"}
+# Attendants who have left, and staff who aren't attendants: kept out of the
+# attendant score cards and the sales training (their sales still count
+# towards their shop's figures). Matched on the name, ignoring case and spacing
+# ("Diana  Gatibaru" in Odoo).
+FORMER_STAFF = {"Doreen Omondi", "Diana Gatibaru", "Ann Muthoni", "Collins Oduor"}
 _FORMER_KEYS = {" ".join(n.lower().split()) for n in FORMER_STAFF}
 
 

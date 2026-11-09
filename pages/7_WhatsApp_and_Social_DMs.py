@@ -805,8 +805,16 @@ def render_out_of_stock(start_date: date, end_date: date) -> None:
         for name in [s for s in OOS_COLORS if s in bags.columns]:
             fig.add_bar(y=bags.index, x=bags[name], orientation="h", name=name,
                         marker=dict(color=OOS_COLORS[name], line=dict(color=theme.CHART_SURFACE, width=1)),
+                        text=bags[name].map(lambda n: f"{n:,.0f}" if n else ""),
+                        textposition="inside", insidetextanchor="middle",
+                        textfont=dict(color="white"),
                         hovertemplate=f"<b>%{{y}}</b><br>{name}: <b>%{{x:,.0f}}</b><extra></extra>")
+        total = bags.sum(axis=1)
+        fig.add_scatter(y=bags.index, x=total, mode="text", text=total.map("{:,.0f}".format),
+                        textposition="middle right", showlegend=False, hoverinfo="skip",
+                        textfont=dict(color=theme.TEXT_PRIMARY))
         theme.apply_layout(fig, show_legend=True)
+        fig.update_xaxes(range=[0, total.max() * 1.12 if len(total) else 1])
         fig.update_layout(title="Most-Requested Out-of-Stock Bags", barmode="stack",
                           hovermode="closest", legend_traceorder="normal",
                           height=max(380, 28 * len(bags) + 100))
