@@ -75,8 +75,8 @@ def render_attendants(start_date: date, end_date: date) -> None:
 
     unrecorded = shown[shown["Served By"] == NOT_RECORDED]
     bas = shown[shown["Brand Ambassador (BA)"] != ""]
-    # One attendant on the floor for one day = one attendant-day.
-    staffed = shown[shown["Served By"] != NOT_RECORDED]
+    # One attendant who made a sale on a day = one attendant-day. BAs left out.
+    staffed = shown[(shown["Served By"] != NOT_RECORDED) & (shown["Brand Ambassador (BA)"] == "")]
     person_days = len(staffed.assign(Day=pd.to_datetime(staffed["Date"]).dt.date)
                       [["Served By", "Day"]].drop_duplicates())
     items = [
