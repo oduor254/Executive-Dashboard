@@ -230,8 +230,6 @@ html[data-denri-liquid] .denri-lens {
 [data-testid="stSidebarNavLink"][href$="/Sales"] { --denri-icon: "payments"; }
 [data-testid="stSidebarNavLink"][href$="/Product_Sales"] { --denri-icon: "shopping_bag"; }
 [data-testid="stSidebarNavLink"][href$="/Customers"] { --denri-icon: "groups"; }
-[data-testid="stSidebarNavLink"][href$="/Production"] { --denri-icon: "precision_manufacturing"; }
-[data-testid="stSidebarNavLink"][href$="/Dispatch_Tracking"] { --denri-icon: "local_shipping"; }
 [data-testid="stSidebarNavLink"][href$="/Stock_Levels"] { --denri-icon: "inventory_2"; }
 [data-testid="stSidebarNavLink"][href$="/WhatsApp_and_Social_DMs"] { --denri-icon: "forum"; }
 [data-testid="stSidebarNavLink"][href$="/Shop_Attendants"] { --denri-icon: "badge"; }
