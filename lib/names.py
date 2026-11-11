@@ -178,7 +178,8 @@ def _tracker():
     return sheets_sync._client().open_by_key(sheet_id)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+# A day: mark_verified() clears it, so a name marked here shows at once.
+@st.cache_data(ttl=86400, show_spinner=False)
 def verified_names() -> frozenset[str]:
     """First names (lower case) marked as correct. Empty if the tab can't be
     read yet — it is created the first time a name is marked."""

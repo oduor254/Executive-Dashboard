@@ -81,6 +81,16 @@ def run_query(sql: str, params: dict | None = None) -> pd.DataFrame:
             time.sleep(QUERY_RETRY_BACKOFF_SECONDS * attempt)
 
 
+LIVE_REFRESH_SECONDS = 60
+
+
+@st.cache_data(ttl=LIVE_REFRESH_SECONDS, show_spinner=False)
+def run_live_query(sql: str, params: dict | None = None) -> pd.DataFrame:
+    """run_query with a one-minute cache, for live panels that redraw on a
+    timer and must not show data as old as REFRESH_INTERVAL_SECONDS."""
+    return run_query.__wrapped__(sql, params)
+
+
 def refresh_button(key: str, label: str = "🔄 Refresh now") -> bool:
     """Manual cache-bust control. Viewer decides when to re-poll Postgres,
     instead of a timer forcing a rerun (and resetting any in-progress table
@@ -98,5 +108,6 @@ def refresh_button(key: str, label: str = "🔄 Refresh now") -> bool:
     """
     if st.button(label, key=key):
         run_query.clear()
+        run_live_query.clear()
         return True
     return False

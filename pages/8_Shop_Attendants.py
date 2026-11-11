@@ -165,10 +165,10 @@ EAT = timezone(timedelta(hours=3))   # Kenya, Uganda and Tanzania: no daylight s
 OFF_STATUSES = {"leave", "off", "ooo"}
 
 
-def _attendance_rows(start_date: date, end_date: date, location: str) -> pd.DataFrame:
+def _attendance_rows(start_date: date, end_date: date, location: str, live: bool = False) -> pd.DataFrame:
     """The Attendance app's days at the shops, named as the tills name people
     (a brand ambassador with " (BA)") and the shop as the dashboard names it."""
-    a = db.run_query(queries.SHOP_ATTENDANCE, {"start_date": start_date, "end_date": end_date})
+    a = (db.run_live_query if live else db.run_query)(queries.SHOP_ATTENDANCE, {"start_date": start_date, "end_date": end_date})
     if a.empty:
         return a
     a = a[a["Place Type"] == "shop"].copy()
@@ -194,7 +194,7 @@ def _hhmm(minutes) -> str:
 def _attendance_today(location: str) -> None:
     """Who is in today and who is yet to clock in, redrawn on its own."""
     now = datetime.now(EAT)
-    a = _attendance_rows(now.date(), now.date(), location)
+    a = _attendance_rows(now.date(), now.date(), location, live=True)
     with st.container(border=True):
         st.markdown(f"**🟢 Live — today's attendance ({now:%a %d %b}, {now:%H:%M})**")
         if a.empty:
