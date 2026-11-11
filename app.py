@@ -1,6 +1,6 @@
 """Denri Executive Dashboard — landing page.
 
-Domain pages (Sales, Customers, Stock, ...) live under pages/
+Domain pages (Sales, Customers, Shops, ...) live under pages/
 and are added incrementally. This page just proves the live loop works:
 Streamlit fragment -> cached query -> Postgres -> chart, on demand.
 """
@@ -23,7 +23,7 @@ st.set_page_config(
 auth.require_login()
 
 st.title("Denri Executive Dashboard")
-st.caption("Sales · Customers · Stock · Shops — live from Postgres")
+st.caption("Sales · Customers · Shops — live from Postgres")
 
 connected, detail = db.check_connection()
 if not connected:
@@ -51,7 +51,7 @@ live_heartbeat()
 st.divider()
 st.subheader("Next up")
 st.markdown(
-    "- Add a page per domain under `pages/` (Sales, Customers, Stock, Shops)\n"
+    "- Add a page per domain under `pages/` (Sales, Customers, Shops)\n"
     "- Each page polls Postgres on its own `st.fragment(run_every=...)` loop\n"
     "- Share query helpers from `lib/db.py` and chart styling from `lib/theme.py`"
 )
