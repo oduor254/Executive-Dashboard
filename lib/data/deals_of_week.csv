@@ -438,3 +438,81 @@ year,month,product,location,type,price_then,price_now,tier,starts
 2026,October,Belt Bag,Mombasa,Deal of the Week,1400.0,1000.0,25 Oct - 7 Nov,2026-10-25
 2026,October,Mini Umbra,Mombasa,Deal of the Week,1600.0,1200.0,25 Oct - 7 Nov,2026-10-25
 2026,October,Fabela,Mombasa,Deal of the Week,2400.0,2000.0,25 Oct - 7 Nov,2026-10-25
+2026,November,Remi,Nairobi Town,Deal of the Week,2700.0,2300.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Nairobi Town,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Nizana,Nairobi Town,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Claire Handbag,Nairobi Town,Deal of the Week,3000.0,2600.0,8 - 21 Nov,2026-11-08
+2026,November,Liam,Nairobi Town,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Mini Umbra,Nairobi Town,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Kitengela,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Thika,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Rongai,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Safiri Travel,Kitengela,Deal of the Week,3600.0,3200.0,8 - 21 Nov,2026-11-08
+2026,November,Safiri Travel,Thika,Deal of the Week,3600.0,3200.0,8 - 21 Nov,2026-11-08
+2026,November,Safiri Travel,Rongai,Deal of the Week,3600.0,3200.0,8 - 21 Nov,2026-11-08
+2026,November,Nizana,Kitengela,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Nizana,Thika,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Nizana,Rongai,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Gym Bag,Kitengela,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Gym Bag,Thika,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Gym Bag,Rongai,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Kitengela,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Thika,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Rongai,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Pioneer,Kitengela,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Pioneer,Thika,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Pioneer,Rongai,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Eldoret,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Nakuru,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Eldoret,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Nakuru,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Nizana,Eldoret,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Nizana,Nakuru,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Eldoret,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Nakuru,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Eldoret,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Nakuru,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Sierra Handbag,Eldoret,Deal of the Week,2700.0,2300.0,8 - 21 Nov,2026-11-08
+2026,November,Sierra Handbag,Nakuru,Deal of the Week,2700.0,2300.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Kakamega,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Busia,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Kisumu,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Kisii,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Kakamega,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Busia,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Kisumu,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Kisii,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Mini Umbra,Kakamega,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Mini Umbra,Busia,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Mini Umbra,Kisumu,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Mini Umbra,Kisii,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Claire Handbag,Kakamega,Deal of the Week,3000.0,2600.0,8 - 21 Nov,2026-11-08
+2026,November,Claire Handbag,Busia,Deal of the Week,3000.0,2600.0,8 - 21 Nov,2026-11-08
+2026,November,Claire Handbag,Kisumu,Deal of the Week,3000.0,2600.0,8 - 21 Nov,2026-11-08
+2026,November,Claire Handbag,Kisii,Deal of the Week,3000.0,2600.0,8 - 21 Nov,2026-11-08
+2026,November,Aurora,Kakamega,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Aurora,Busia,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Aurora,Kisumu,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Aurora,Kisii,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Kakamega,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Busia,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Kisumu,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Kisii,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Meru,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Nanyuki,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Kai,Nyeri,Deal of the Week,2800.0,2400.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Meru,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Nanyuki,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Big Man Bag,Nyeri,Deal of the Week,2100.0,1700.0,8 - 21 Nov,2026-11-08
+2026,November,Elyse,Meru,Deal of the Week,3100.0,2700.0,8 - 21 Nov,2026-11-08
+2026,November,Elyse,Nanyuki,Deal of the Week,3100.0,2700.0,8 - 21 Nov,2026-11-08
+2026,November,Elyse,Nyeri,Deal of the Week,3100.0,2700.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Meru,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Nanyuki,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Fabela,Nyeri,Deal of the Week,2400.0,2000.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Meru,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Nanyuki,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Moon Bag,Nyeri,Deal of the Week,1600.0,1200.0,8 - 21 Nov,2026-11-08
+2026,November,Pioneer,Meru,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Pioneer,Nanyuki,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
+2026,November,Pioneer,Nyeri,Deal of the Week,2600.0,2200.0,8 - 21 Nov,2026-11-08
