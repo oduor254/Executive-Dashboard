@@ -5721,3 +5721,25 @@ LEFT JOIN stock_location sl    ON sl.id = spt.default_location_src_id
 WHERE pol.qty > 0 AND pc.complete_name ILIKE 'Bags%' AND NOT COALESCE(pol.is_combo_line, FALSE)
 GROUP BY 1, 2, 3
 """
+
+
+# ---------------------------------------------------------------- feedback ---
+# Customer feedback as the CRM module's Feedback page holds it (the feedback
+# forms post into denri.crm.feedback). A rating of 0 is "not rated".
+CRM_FEEDBACK = """
+SELECT (f.submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi') AS "Submitted",
+       f.partner_name AS "Customer", f.phone AS "Phone",
+       COALESCE(b.name, 'Not recorded') AS "Location",
+       CASE f.fb_type WHEN 'complaint' THEN 'Complaint' WHEN 'compliment' THEN 'Appraisal'
+                      ELSE 'Feedback' END AS "Type",
+       NULLIF(f.rating, 0) AS "Rating", NULLIF(f.rating_staff, 0) AS "Staff Rating",
+       f.body AS "Feedback", f.bag_purchased AS "Bag Purchased", f.pos_order_ref AS "Order",
+       rp.name AS "Attendant", INITCAP(f.status) AS "Status", f.resolution AS "Resolution"
+FROM denri_crm_feedback f
+LEFT JOIN denri_crm_branch b ON b.id = f.branch_id
+LEFT JOIN res_users ru ON ru.id = f.attendant_id
+LEFT JOIN res_partner rp ON rp.id = ru.partner_id
+WHERE (f.submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE
+      BETWEEN :start_date AND :end_date
+ORDER BY f.submitted_at DESC
+"""

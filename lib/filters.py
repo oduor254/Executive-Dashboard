@@ -8,7 +8,8 @@ import streamlit as st
 
 from lib import ui
 
-PRESETS = ["Today", "Yesterday", "Last 7 Days", "Last Week", "Last 30 Days", "Month to Date",
+PRESETS = ["Today", "Yesterday", "Last 7 Days", "This Week", "Last Week", "Last 30 Days",
+           "Month to Date",
            "Custom"]
 
 _PERIOD_CSS = f"""
@@ -52,9 +53,11 @@ def _preset_range(preset: str, today: date) -> tuple[date, date]:
         return y, y
     if preset == "Last 7 Days":
         return today - timedelta(days=6), today
+    # The business week runs Sunday to Saturday.
+    this_sunday = today - timedelta(days=(today.weekday() + 1) % 7)
+    if preset == "This Week":
+        return this_sunday, today
     if preset == "Last Week":
-        # The previous Sunday-to-Saturday week: the business week runs Sun-Sat.
-        this_sunday = today - timedelta(days=(today.weekday() + 1) % 7)
         return this_sunday - timedelta(days=7), this_sunday - timedelta(days=1)
     if preset == "Last 30 Days":
         return today - timedelta(days=29), today

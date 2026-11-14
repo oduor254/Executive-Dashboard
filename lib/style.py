@@ -235,6 +235,7 @@ html[data-denri-liquid] .denri-lens {
 [data-testid="stSidebarNavLink"][href$="/Shop_Performance"] { --denri-icon: "storefront"; }
 [data-testid="stSidebarNavLink"][href$="/Footfall_Traffic"] { --denri-icon: "directions_walk"; }
 [data-testid="stSidebarNavLink"][href$="/Reports"] { --denri-icon: "description"; }
+[data-testid="stSidebarNavLink"][href$="/Feedback"] { --denri-icon: "reviews"; }
 /* pages that bring their own icon (sales_operations_app.py) keep it */
 [data-testid="stSidebarNavLink"]:has([data-testid^="stIcon"])::before { display: none; }
 /* the entry page is called "app" after its file; show it as Home */
