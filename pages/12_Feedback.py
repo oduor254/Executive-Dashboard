@@ -26,11 +26,17 @@ if not connected:
     st.error(f"Could not connect to Postgres: {detail}", icon="🚫")
     st.stop()
 
-col_picker, col_refresh = st.columns([3, 1])
+col_picker, col_location, col_refresh = st.columns([2, 1, 1])
 with col_picker:
     start_date, end_date = filters.date_range_control("feedback", default="This Week")
+feedback = db.run_query(queries.CRM_FEEDBACK, {"start_date": start_date, "end_date": end_date})
+with col_location:
+    location = st.selectbox("Location", ["All Locations"] + sorted(feedback["Location"].unique()),
+                            key="feedback_location")
 with col_refresh:
     db.refresh_button(key="feedback_refresh")
+
+BEST_MIN_FEEDBACKS = 5   # fewer than this and one 5-star form would top the list
 
 # Every column a keyword is looked for in.
 SEARCHED = ["Feedback", "Customer", "Phone", "Location", "Bag Purchased", "Attendant", "Order",
@@ -51,9 +57,23 @@ def _summary(df: pd.DataFrame, by: list[str]) -> pd.DataFrame:
     return t.sort_values("Feedbacks", ascending=False).reset_index()
 
 
+def _best_location(df: pd.DataFrame) -> tuple[str, str]:
+    """(location with the highest average rating, "its feedback count · rating").
+    Locations with fewer than BEST_MIN_FEEDBACKS rated feedbacks are left out
+    unless none has that many; a tie goes to the one with more feedbacks."""
+    t = df.groupby("Location")["Rating"].agg(["count", "mean"]).dropna()
+    if t.empty:
+        return "—", "no rated feedback"
+    enough = t[t["count"] >= BEST_MIN_FEEDBACKS]
+    best = (enough if not enough.empty else t).sort_values(["mean", "count"], ascending=False).iloc[0]
+    received = (df["Location"] == best.name).sum()
+    return best.name, f"{received:,} feedbacks · avg rating {best['mean']:.2f} / 5"
+
+
 @st.fragment()
-def render_feedback(start_date: date, end_date: date) -> None:
-    df = db.run_query(queries.CRM_FEEDBACK, {"start_date": start_date, "end_date": end_date})
+def render_feedback(df: pd.DataFrame, start_date: date, end_date: date, location: str) -> None:
+    if location != "All Locations":
+        df = df[df["Location"] == location]
     if df.empty:
         st.info("No feedback was submitted in this date range.")
         return
@@ -68,6 +88,7 @@ def render_feedback(start_date: date, end_date: date) -> None:
         ("Appraisals", f"{len(appraisals):,}", f"{len(appraisals) / len(df) * 100:.1f}% of feedback"),
         ("Avg. Rating", f"{df['Rating'].mean():.2f} / 5" if df["Rating"].notna().any() else "—",
          f"staff {df['Staff Rating'].mean():.2f} / 5" if df["Staff Rating"].notna().any() else None),
+        ("Best Location", *_best_location(df)),
     ]
     for col, (label, value, note) in zip(st.columns(len(tiles)), tiles):
         with col.container(border=True):
@@ -117,4 +138,4 @@ def render_feedback(start_date: date, end_date: date) -> None:
                    "served the customer; the rest couldn't be matched to a sale.")
 
 
-render_feedback(start_date, end_date)
+render_feedback(feedback, start_date, end_date, location)
