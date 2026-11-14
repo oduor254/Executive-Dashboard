@@ -83,6 +83,9 @@ def _grid_css() -> dict:
         ".ag-row": {"border-color": f"{line} !important"},
         ".ag-floating-bottom .ag-cell": {"font-weight": "700 !important"},
         ".ag-input-field-input, .ag-text-field-input": {"color": f"{ink} !important"},
+        # a long comment wraps inside the tooltip instead of running off the grid
+        ".ag-tooltip": {"white-space": "normal !important", "max-width": "520px",
+                        "line-height": "1.45", "font-size": "13px", "padding": "8px 10px"},
         **({".ag-header, .ag-floating-filter": {"background-color": "#eceef3 !important"},
             ".ag-row-odd": {"background-color": "#f7f8fb !important"},
             ".ag-row-even": {"background-color": "#ffffff !important"},
@@ -101,6 +104,7 @@ def filterable_table(
     *,
     currency_columns: tuple[str, ...] = (),
     pinned_columns: tuple[str, ...] = (),
+    tooltip_columns: tuple[str, ...] = (),
     height: int = 480,
     total: bool = True,
 ) -> None:
@@ -108,6 +112,9 @@ def filterable_table(
 
     pinned_columns stay fixed on the left as the grid scrolls horizontally —
     useful for a row-identifying column (e.g. product name) on wide tables.
+
+    tooltip_columns show the whole cell text on hover — for long text (a
+    customer's comment) that the column width cuts off.
 
     total adds a TOTAL row pinned at the bottom, summing the countable
     columns over the rows currently shown. It is left off a table that
@@ -126,7 +133,11 @@ def filterable_table(
     for col in pinned_columns:
         if col in df.columns:
             gb.configure_column(col, pinned="left", minWidth=180)
+    for col in tooltip_columns:
+        if col in df.columns:
+            gb.configure_column(col, tooltipField=col)
     options = gb.build()
+    options["tooltipShowDelay"] = 300   # AG Grid waits 2 seconds by default
     # Let the text in a cell be selected (double-click a word, triple-click
     # the whole cell, or drag) and copied, as in a spreadsheet export.
     options["enableCellTextSelection"] = True

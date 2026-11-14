@@ -115,7 +115,8 @@ def render_feedback(df: pd.DataFrame, start_date: date, end_date: date, location
         grid.filterable_table(   # as text, or the grid shows the date without the time
             found.assign(Submitted=found["Submitted"].dt.strftime("%Y-%m-%d %H:%M"))[["Submitted", "Customer", "Phone", "Location", "Type", "Rating", "Staff Rating",
                  "Feedback", "Bag Purchased", "Attendant", "Order", "Status", "Resolution"]],
-            pinned_columns=("Submitted",), height=420, total=False)
+            pinned_columns=("Submitted",), height=420, total=False,
+            tooltip_columns=("Feedback", "Bag Purchased", "Resolution"))
 
     # ------------------------------------------------------- by location ---
     left, right = st.columns(2)
