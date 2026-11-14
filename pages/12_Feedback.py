@@ -40,10 +40,6 @@ BEST_MIN_FEEDBACKS = 5   # fewer than this and one 5-star form would top the lis
 FEEDBACK_TARGET = 0.30   # share of a location's customers expected to leave feedback
 TOP_MIN_CUSTOMERS = 10   # fewer than this and two forms would make a location the best
 
-VIEWS = ["Feedback", "Target Performance"]
-view = st.segmented_control("View", VIEWS, default=VIEWS[0], key="feedback_view",
-                            label_visibility="collapsed") or VIEWS[0]
-
 # Every column a keyword is looked for in.
 SEARCHED = ["Feedback", "Customer", "Phone", "Location", "Bag Purchased", "Attendant", "Order",
             "Resolution"]
@@ -159,6 +155,8 @@ def render_feedback(df: pd.DataFrame, start_date: date, end_date: date, location
 def render_targets(df: pd.DataFrame, start_date: date, end_date: date, location: str) -> None:
     """Feedback received against the customers served, per location: 30% of
     customers are expected to leave feedback."""
+    st.divider()
+    st.header("🎯 Feedback Target Performance")
     customers = db.run_query(queries.SHOP_ATTENDANT_CUSTOMERS,
                              {"start_date": start_date, "end_date": end_date})
     # The shops spell a few names differently from the CRM (Ktda / KTDA); tills
@@ -216,4 +214,5 @@ def render_targets(df: pd.DataFrame, start_date: date, end_date: date, location:
         "no location recorded has no customers to set it against.")
 
 
-(render_feedback if view == VIEWS[0] else render_targets)(feedback, start_date, end_date, location)
+render_feedback(feedback, start_date, end_date, location)
+render_targets(feedback, start_date, end_date, location)
