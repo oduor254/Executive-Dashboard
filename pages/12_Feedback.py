@@ -37,6 +37,12 @@ with col_refresh:
     db.refresh_button(key="feedback_refresh")
 
 BEST_MIN_FEEDBACKS = 5   # fewer than this and one 5-star form would top the list
+FEEDBACK_TARGET = 0.30   # share of a location's customers expected to leave feedback
+TOP_MIN_CUSTOMERS = 10   # fewer than this and two forms would make a location the best
+
+VIEWS = ["Feedback", "Target Performance"]
+view = st.segmented_control("View", VIEWS, default=VIEWS[0], key="feedback_view",
+                            label_visibility="collapsed") or VIEWS[0]
 
 # Every column a keyword is looked for in.
 SEARCHED = ["Feedback", "Customer", "Phone", "Location", "Bag Purchased", "Attendant", "Order",
@@ -70,6 +76,14 @@ def _best_location(df: pd.DataFrame) -> tuple[str, str]:
     return best.name, f"{received:,} feedbacks · avg rating {best['mean']:.2f} / 5"
 
 
+def _busiest_location(df: pd.DataFrame) -> tuple[str, str]:
+    """(location with the most feedback, "its feedback count · rating")."""
+    name = df["Location"].value_counts().index[0]
+    mine = df[df["Location"] == name]
+    rating = f"avg rating {mine['Rating'].mean():.2f} / 5" if mine["Rating"].notna().any() else "not rated"
+    return name, f"{len(mine):,} feedbacks · {rating}"
+
+
 @st.fragment()
 def render_feedback(df: pd.DataFrame, start_date: date, end_date: date, location: str) -> None:
     if location != "All Locations":
@@ -88,11 +102,13 @@ def render_feedback(df: pd.DataFrame, start_date: date, end_date: date, location
         ("Appraisals", f"{len(appraisals):,}", f"{len(appraisals) / len(df) * 100:.1f}% of feedback"),
         ("Avg. Rating", f"{df['Rating'].mean():.2f} / 5" if df["Rating"].notna().any() else "—",
          f"staff {df['Staff Rating'].mean():.2f} / 5" if df["Staff Rating"].notna().any() else None),
-        ("Best Location", *_best_location(df)),
+        ("Best Rated Location", *_best_location(df)),
+        ("Most Feedback", *_busiest_location(df)),
     ]
-    for col, (label, value, note) in zip(st.columns(len(tiles)), tiles):
-        with col.container(border=True):
-            st.metric(label, value, note, delta_color="off")
+    for row in (tiles[:3], tiles[3:]):
+        for col, (label, value, note) in zip(st.columns(3), row):
+            with col.container(border=True):
+                st.metric(label, value, note, delta_color="off")
 
     # ------------------------------------------------------------ search ---
     st.subheader("Search feedback")
@@ -139,4 +155,65 @@ def render_feedback(df: pd.DataFrame, start_date: date, end_date: date, location
                    "served the customer; the rest couldn't be matched to a sale.")
 
 
-render_feedback(feedback, start_date, end_date, location)
+@st.fragment()
+def render_targets(df: pd.DataFrame, start_date: date, end_date: date, location: str) -> None:
+    """Feedback received against the customers served, per location: 30% of
+    customers are expected to leave feedback."""
+    customers = db.run_query(queries.SHOP_ATTENDANT_CUSTOMERS,
+                             {"start_date": start_date, "end_date": end_date})
+    # The shops spell a few names differently from the CRM (Ktda / KTDA); tills
+    # that aren't a feedback branch (Staff POS) are left out.
+    branches = {b.lower(): b for b in db.run_query("SELECT name FROM denri_crm_branch")["name"]}
+    customers = customers.assign(
+        Location=customers["Location"].str.lower().map(branches),
+        Key=customers["Phone Key"].fillna("name:" + customers["Customer"])).dropna(subset=["Location"])
+    t = pd.concat([customers.groupby("Location")["Key"].nunique().rename("Customers"),
+                   df.groupby("Location").size().rename("Feedbacks")], axis=1).fillna(0)
+    if location != "All Locations":
+        t = t[t.index == location]
+    if t.empty or not t["Customers"].sum():
+        st.info("No customers were served in this date range.")
+        return
+
+    t["Target"] = (t["Customers"] * FEEDBACK_TARGET).round()
+    t["Feedback %"] = (t["Feedbacks"] / t["Customers"].where(t["Customers"] > 0) * 100).round(1)
+    t["Target Achieved %"] = (t["Feedbacks"] / t["Target"].where(t["Target"] > 0) * 100).round(1)
+    t["Short of Target"] = (t["Target"] - t["Feedbacks"]).clip(lower=0)
+    t["Status"] = (t["Feedback %"] >= FEEDBACK_TARGET * 100).map({True: "Target met", False: "Below target"})
+    t = t.reset_index(names="Location").sort_values("Feedback %", ascending=False)
+
+    served = t[t["Customers"] > 0]
+    customers_n, received = served["Customers"].sum(), served["Feedbacks"].sum()
+    rate = received / customers_n * 100
+    enough = served[served["Customers"] >= TOP_MIN_CUSTOMERS]
+    top = (enough if not enough.empty else served).iloc[0]
+    target = round(customers_n * FEEDBACK_TARGET)
+    tiles = [
+        ("Customers", f"{customers_n:,.0f}", f"{start_date:%a %d %b} – {end_date:%a %d %b %Y}"),
+        (f"Feedback Target ({FEEDBACK_TARGET:.0%})", f"{target:,}", "feedbacks expected"),
+        ("Feedbacks Received", f"{received:,.0f}",
+         f"{max(target - received, 0):,.0f} short of target" if received < target else "target met"),
+        ("Feedback % of Customers", f"{rate:.1f}%",
+         f"{received / target * 100:.0f}% of the {FEEDBACK_TARGET:.0%} target" if target else None),
+        ("Top Location", top["Location"],
+         f"{top['Feedback %']:.1f}% · {top['Feedbacks']:,.0f} feedbacks from {top['Customers']:,.0f} customers"),
+        ("Locations on Target", f"{(served['Feedback %'] >= FEEDBACK_TARGET * 100).sum()} of {len(served)}",
+         f"at or above {FEEDBACK_TARGET:.0%}"),
+    ]
+    for row in (tiles[:3], tiles[3:]):
+        for col, (label, value, note) in zip(st.columns(3), row):
+            with col.container(border=True):
+                st.metric(label, value, note, delta_color="off")
+
+    st.subheader("Feedback target by location")
+    grid.filterable_table(
+        t[["Location", "Customers", "Target", "Feedbacks", "Feedback %", "Target Achieved %",
+           "Short of Target", "Status"]], pinned_columns=("Location",), height=560)
+    st.caption(
+        f"Customers are the distinct people who bought at the location in the period; the target is "
+        f"{FEEDBACK_TARGET:.0%} of them. Feedback % is the feedbacks received at the location over "
+        "its customers: the two are counted separately, not matched person by person. Feedback with "
+        "no location recorded has no customers to set it against.")
+
+
+(render_feedback if view == VIEWS[0] else render_targets)(feedback, start_date, end_date, location)
