@@ -216,6 +216,7 @@ def headline(df: pd.DataFrame, corporate: float) -> dict:
         "Repeat Rate": pct(cust["Repeat"].sum(), n) if n else 0.0,
         "Avg Rev/Txn": df["Revenue"].sum() / sales["Order ID"].nunique() if len(sales) else 0.0,
         "Avg Spend/Customer": cust["Revenue"].sum() / n if n else 0.0,
+        "Avg Bags/Txn": df["Bags"].sum() / sales["Order ID"].nunique() if len(sales) else 0.0,
         "Walk-in Avg Spend": (df.loc[df["Channel"] == "Walk-in", "Revenue"].sum()
                               / max(by_channel["Walk-in"]["Order ID"].nunique(), 1)),
         "Online Avg Spend": (df.loc[df["Channel"] == "Online", "Revenue"].sum()
@@ -856,6 +857,10 @@ def summary_rows(r: dict) -> pd.DataFrame:
         ("Avg Spend/Customer", money(cur["Avg Spend/Customer"]),
          f"{change(cur['Avg Spend/Customer'], prev['Avg Spend/Customer'])} {vs}",
          tone(cur["Avg Spend/Customer"], prev["Avg Spend/Customer"])),
+        # the basket: revenue per order, with the bags per order beside it
+        ("Avg Basket Value", money(cur["Avg Rev/Txn"]),
+         f"{change(cur['Avg Rev/Txn'], prev['Avg Rev/Txn'])} {vs} · {cur['Avg Bags/Txn']:.2f} bags per order",
+         tone(cur["Avg Rev/Txn"], prev["Avg Rev/Txn"])),
         ("Repeat Rate", "n/a", "n/a — a daily report covers one day", "neutral")
         if p.kind == DAILY else
         ("Repeat Rate", f"{cur['Repeat Rate']:.1f}%",

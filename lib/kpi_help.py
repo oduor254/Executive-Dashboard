@@ -40,6 +40,7 @@ GLOSSARY = {
     "Total Customers": "Different customers who bought, counted by phone number.",
     "Avg Spend / Customer": "Revenue ÷ unique customers: what one customer spent on average in the range.",
     "Avg Spend/Customer": "Revenue ÷ unique customers: what one customer spent on average in the range.",
+    "Avg Basket Value": "Revenue ÷ orders: what one order was worth on average, with the bags in it.",
     "Average per Customer": "Corporate revenue ÷ corporate customers.",
     "Repeat Rate": "Share of customers who bought on two or more different days in the range.",
     "Repeat Purchase": "Share of the shop's customers who bought on two or more different days in the range (two orders the same day are one visit).",

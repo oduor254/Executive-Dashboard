@@ -592,11 +592,6 @@ def to_docx(r: dict) -> bytes:
         run = para.add_run(change_text)
         run.font.size = Pt(8.5)
         run.font.color.rgb = rgb(UP if k.Tone == "up" else DOWN if k.Tone == "down" else MUTED)
-    last = grid_t.rows[1].cells[3]
-    shade(last, SOFT[ACCENT])
-    write(last, "COMPARED WITH", bold=True, colour=MUTED, size=7)
-    run = last.add_paragraph().add_run(p.prev_label)
-    run.bold, run.font.size = True, Pt(11)
 
     contents = doc.add_paragraph()
     contents.paragraph_format.space_before = Pt(22)
@@ -972,7 +967,7 @@ def to_pptx(r: dict) -> bytes:
         tiles.append(tile)
 
     # --- headline figures ---
-    kslide = frame("Key performance indicators", f"{p.label} at a glance")
+    kslide = frame("Key performance indicators", f"{p.label} at a glance, compared with {p.prev_label}")
     kpis = reports.summary_rows(r)
     card_w, card_h = Inches(2.9), Inches(1.85)
     for i, k in enumerate(kpis.itertuples(index=False)):
@@ -987,9 +982,6 @@ def to_pptx(r: dict) -> bytes:
                  k.Value, size=20 if len(k.Value) < 16 else 17, bold=True)
         text_box(kslide, left + Inches(0.25), top + Inches(1.2), card_w - Inches(0.4), Inches(0.5),
                  k.Change.split(" vs ")[0], size=11.5, bold=True, colour=colour)
-    text_box(kslide, margin + (card_w + Inches(0.22)) * 3 + Inches(0.25), Inches(1.55) + card_h
-             + Inches(0.3) + Inches(0.3), card_w, Inches(1.2),
-             f"Compared with\n{p.prev_label}", size=13, colour=MUTED)
     speaker_notes(kslide, [r["exec_note"]] + r["flags"])
 
     # --- sections ---
