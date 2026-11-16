@@ -66,10 +66,46 @@ def _change_tile(col, label: str, now, then, money: bool) -> None:
                   delta_color="normal" if now != then else "off")
 
 
+def _dumbbell(df: pd.DataFrame, before: str, after: str, title: str, money: bool) -> go.Figure:
+    """Each shop as a line from last year (hollow dot) to this period (filled
+    dot, red when down), biggest fall first, the change written at the end."""
+    t = df.assign(_chg=df[after] - df[before]).sort_values("_chg")
+    t["_pct"] = t["_chg"] / t[before].where(t[before] > 0) * 100
+    show = _money if money else (lambda v: f"{v:,.0f}")
+    colours = [RED if v < 0 else GREEN for v in t["_chg"]]
+    fig = go.Figure()
+    xs, ys = [], []
+    for loc, a, b in zip(t["Location"], t[before], t[after]):
+        xs += [a, b, None]
+        ys += [loc, loc, None]
+    fig.add_scatter(x=xs, y=ys, mode="lines", line=dict(color=theme.OTHER, width=3),
+                    hoverinfo="skip", showlegend=False)
+    fig.add_scatter(x=t[before], y=t["Location"], mode="markers", name="Last year",
+                    marker=dict(size=11, color="rgba(0,0,0,0)", line=dict(color=theme.OTHER, width=2)),
+                    hovertemplate="%{y} last year: <b>%{text}</b><extra></extra>",
+                    text=[show(v) for v in t[before]])
+    fig.add_scatter(x=t[after], y=t["Location"], mode="markers", name="This period",
+                    marker=dict(size=12, color=colours),
+                    customdata=list(zip([show(v) for v in t[before]], [show(v) for v in t[after]],
+                                        t["_pct"].fillna(0))),
+                    hovertemplate="<b>%{y}</b><br>%{customdata[0]} → %{customdata[1]}"
+                                  "<br>%{customdata[2]:+.1f}%<extra></extra>")
+    for loc, chg, pct, colour in zip(t["Location"], t["_chg"], t["_pct"], colours):
+        label = (("+" if chg > 0 else "−") + show(abs(chg))).replace("−-", "−")
+        label += f"  ({pct:+.0f}%)" if pd.notna(pct) else ""
+        fig.add_annotation(x=1, xref="paper", xanchor="left", xshift=10, y=loc, yref="y",
+                           text=f"<b>{label}</b>", showarrow=False, font=dict(color=colour, size=12))
+    theme.apply_layout(fig, show_legend=True)
+    fig.update_layout(title=title, height=max(360, 34 * len(t) + 110), hovermode="closest",
+                      margin=dict(r=150))
+    fig.update_yaxes(autorange="reversed", showgrid=True)
+    fig.update_xaxes(showgrid=True, gridcolor=theme.GRIDLINE, rangemode="tozero",
+                     tickprefix="KSh " if money else "")
+    return fig
+
+
 @st.fragment()
-def render_overview(start_date, end_date) -> None:
-    with st.spinner("Reading this period and the same period last year…"):
-        r = cg.build(start_date, end_date)
+def render_overview(r: dict, start_date, end_date) -> None:
     (ly_start, ly_end) = r["last_year"]
     older, older_ly = r["older"]
     new_shops, new_shops_ly = r["new_shops"]
@@ -77,10 +113,6 @@ def render_overview(start_date, end_date) -> None:
     shops = r["shops"]
     old = shops[shops["Group"] == cg.OLDER].copy()
     new = shops[shops["Group"] == cg.NEW_SHOP].copy()
-    if not kenya["Revenue"]:
-        st.info("No sales in Kenya in this period.")
-        return
-
     st.caption(f"**{start_date:%d %b %Y} – {end_date:%d %b %Y}** against the same period last year, "
                f"**{ly_start:%d %b %Y} – {ly_end:%d %b %Y}**. Older shops: the {len(old)} shops already "
                f"open then. New shops: the {len(new)} opened since.")
@@ -143,26 +175,15 @@ def render_overview(start_date, end_date) -> None:
 
     # ------------------------------------------ revenue change by older shop ---
     st.subheader("Revenue change by older shop")
-    c1, c2 = st.columns([2, 3])
-    with c1, st.container(border=True):
-        ranked = old.sort_values("Change")
-        fig = go.Figure(go.Bar(
-            y=ranked["Location"], x=ranked["Change"], orientation="h",
-            marker=dict(color=[RED if v < 0 else GREEN for v in ranked["Change"]], cornerradius=4),
-            text=[_money(v) for v in ranked["Change"]], textposition="outside", cliponaxis=False,
-            customdata=ranked[["Revenue LY", "Revenue", "Change %"]],
-            hovertemplate="<b>%{y}</b><br>KSh %{customdata[0]:,.0f} → KSh %{customdata[1]:,.0f}"
-                          "<br>%{customdata[2]:+.1f}%<extra></extra>"))
-        theme.apply_layout(fig, show_legend=False)
-        fig.update_layout(title="Revenue change vs last year", height=max(380, 30 * len(ranked) + 100))
-        theme.show(fig)
-    with c2, st.container(border=True):
+    with st.container(border=True):
+        theme.show(_dumbbell(old, "Revenue LY", "Revenue", "Revenue: last year → this period", True))
+    with st.container(border=True):
         grid.filterable_table(
             old.sort_values("Change")[["Location", "Opened", "Revenue LY", "Revenue", "Change",
                                        "Change %", "Orders LY", "Orders"]]
             .rename(columns={"Revenue LY": "Revenue (LY)", "Orders LY": "Orders (LY)"}),
             currency_columns=("Revenue (LY)", "Revenue", "Change"), pinned_columns=("Location",),
-            height=max(380, 30 * len(ranked) + 100))
+            height=min(520, 34 * len(old) + 120))
 
     # -------------------------------------- new-customer change by older shop ---
     st.subheader("New-customer change by older shop")
@@ -170,19 +191,11 @@ def render_overview(start_date, end_date) -> None:
     old["New Change %"] = (old["New Change"] / old["New Customers LY"].where(old["New Customers LY"] > 0)
                            * 100).round(1)
     old["Returning Change"] = old["Returning Customers"] - old["Returning Customers LY"]
-    c1, c2 = st.columns([2, 3])
-    with c1, st.container(border=True):
-        ranked = old.sort_values("New Change")
-        fig = go.Figure()
-        fig.add_bar(y=ranked["Location"], x=ranked["New Customers LY"], orientation="h",
-                    name="Last year", marker=dict(color=theme.OTHER, cornerradius=3))
-        fig.add_bar(y=ranked["Location"], x=ranked["New Customers"], orientation="h",
-                    name="This period", marker=dict(color=theme.CATEGORICAL[0], cornerradius=3))
-        theme.apply_layout(fig, show_legend=True)
-        fig.update_layout(title="New customers: last year and this period", barmode="group",
-                          height=max(420, 40 * len(ranked) + 100))
-        theme.show(fig)
-    with c2, st.container(border=True):
+    ranked = old.sort_values("New Change")
+    with st.container(border=True):
+        theme.show(_dumbbell(old, "New Customers LY", "New Customers",
+                             "New customers: last year → this period", False))
+    with st.container(border=True):
         grid.filterable_table(
             ranked[["Location", "New Customers LY", "New Customers", "New Change", "New Change %",
                     "Returning Customers LY", "Returning Customers", "Returning Change"]]
@@ -190,7 +203,7 @@ def render_overview(start_date, end_date) -> None:
                              "New Change": "Change", "New Change %": "Change %",
                              "Returning Customers LY": "Returning (LY)",
                              "Returning Customers": "Returning"}),
-            pinned_columns=("Location",), height=max(420, 40 * len(ranked) + 100))
+            pinned_columns=("Location",), height=min(520, 34 * len(ranked) + 120))
 
     # ------------------------------------ where the older shops' change came from ---
     st.subheader("Where the older shops' revenue change came from")
@@ -257,4 +270,146 @@ def render_overview(start_date, end_date) -> None:
                "Website and Jumia; Sinza, Uganda and staff or stock tills are left out.")
 
 
-render_overview(start_date, end_date)
+def _change_note(row: pd.Series) -> str:
+    """One line on what moved a shop's revenue, for the summary table."""
+    rev = row["Revenue Δ%"]
+    if pd.isna(rev):
+        return "No sales last year to compare with."
+    d_new = row["New-Customer Revenue"] - row["New-Customer Revenue LY"]
+    d_ret = row["Returning-Customer Revenue"] - row["Returning-Customer Revenue LY"]
+    driver = ("fewer new customers" if d_new < 0 and d_new <= d_ret else
+              "lower returning-customer spend" if d_ret < 0 else
+              "more new customers" if d_new > 0 and d_new >= d_ret else "returning customers")
+    spend = row["Avg Spend / Customer Δ%"]
+    spend_text = (f"; each customer spends {abs(spend):.0f}% {'more' if spend > 0 else 'less'}"
+                  if pd.notna(spend) and abs(spend) >= 3 else "")
+    return (f"Revenue {'down' if rev < 0 else 'up'} {abs(rev):.0f}%, mainly {driver} "
+            f"(new {_money(d_new)}, returning {_money(d_ret)}){spend_text}.")
+
+
+@st.fragment()
+def render_older_shops(r: dict, start_date, end_date) -> None:
+    ly_start, ly_end = r["last_year"]
+    card = cg.scorecard(r["shops"][r["shops"]["Group"] == cg.OLDER])
+    if card.empty:
+        st.info("No shop was open in last year's period to compare with.")
+        return
+    st.caption(f"The {len(card)} shops already open on {ly_start:%d %b %Y}: "
+               f"**{start_date:%d %b %Y} – {end_date:%d %b %Y}** against "
+               f"**{ly_start:%d %b %Y} – {ly_end:%d %b %Y}**.")
+
+    pick = st.selectbox("Shop", ["All older shops"] + sorted(card["Location"]), key="growth_older_shop")
+    if pick == "All older shops":
+        older, older_ly = r["older"]
+        one = cg.with_ratios(cg.with_ratios(pd.DataFrame([{
+            **older, **{k + " LY": v for k, v in older_ly.items()},
+            "Identified Revenue": (older["Avg Spend / Customer"] or 0) * older["Customers"],
+            "Identified Revenue LY": (older_ly["Avg Spend / Customer"] or 0) * older_ly["Customers"],
+        }])), " LY").iloc[0]
+    else:
+        one = card[card["Location"] == pick].iloc[0]
+    tiles = ["Revenue", "Orders", "Bags", "Customers", "New Customers", "Returning Customers",
+             "Returning-Customer Revenue", "Avg Spend / Customer"]
+    for row in (tiles[:4], tiles[4:]):
+        for col, m in zip(st.columns(4), row):
+            _change_tile(col, m, one[m], one[m + " LY"], cg.METRICS[m])
+
+    # --------------------------------------------------- notable changes ---
+    def worst(metric: str, n: int = 2) -> pd.DataFrame:
+        return card.dropna(subset=[metric + " Δ%"]).sort_values(metric + " Δ%").head(n)
+
+    notes = []
+    for _, x in worst("Revenue").iterrows():
+        notes.append(f":red[**{x['Location']}**] revenue {x['Revenue Δ%']:+.0f}% "
+                     f"({_money(x['Revenue LY'])} → {_money(x['Revenue'])}).")
+    for _, x in worst("New Customers").iterrows():
+        notes.append(f":red[**{x['Location']}**] new customers {x['New Customers Δ%']:+.0f}% "
+                     f"({x['New Customers LY']:,.0f} → {x['New Customers']:,.0f}).")
+    for _, x in worst("Returning Customers", 1).iterrows():
+        if x["Returning Customers Δ%"] < 0:
+            notes.append(f":red[**{x['Location']}**] lost the most returning customers: "
+                         f"{x['Returning Customers Δ%']:+.0f}%.")
+    up = card[card["Revenue Δ%"] > 0].sort_values("Revenue Δ%", ascending=False)
+    for _, x in up.iterrows():
+        notes.append(f":green[**{x['Location']}**] is ahead of last year: revenue "
+                     f"{x['Revenue Δ%']:+.0f}% ({_money(x['Revenue LY'])} → {_money(x['Revenue'])}).")
+    ret_up = card[card["Returning-Customer Revenue Δ%"] >= 10].sort_values(
+        "Returning-Customer Revenue Δ%", ascending=False).head(3)
+    if not ret_up.empty:
+        notes.append(":green[Returning customers are spending more at] " + ", ".join(
+            f"**{loc}** ({v:+.0f}%)" for loc, v in
+            zip(ret_up["Location"], ret_up["Returning-Customer Revenue Δ%"])) + ".")
+    spend_up = card[card["Avg Spend / Customer Δ%"] >= 5]
+    if len(spend_up):
+        notes.append(f"Average spend per customer is up at {len(spend_up)} of {len(card)} shops, "
+                     "so the fall is in how many people buy, not how much each spends."
+                     if len(spend_up) > len(card) / 2 else
+                     f"Average spend per customer is up at {', '.join(spend_up['Location'])}.")
+    with st.container(border=True):
+        st.markdown("#### Notable changes")
+        st.markdown("\n".join(f"- {n}" for n in notes))
+
+    # --------------------------------------------------- change heatmap ---
+    shown = ["Revenue", "Orders", "Customers", "New Customers", "Returning Customers",
+             "Returning-Customer Revenue", "Avg Spend / Customer", "Avg Order Value"]
+    heat = card.set_index("Location").sort_values("Revenue Δ%")[[m + " Δ%" for m in shown]]
+    z = heat.clip(-60, 60)
+    with st.container(border=True):
+        fig = go.Figure(go.Heatmap(
+            z=z.values, x=[m.replace("-Customer ", "-customer<br>").replace(" Customers", "<br>customers")
+                           .replace(" / ", "<br>per ").replace("Avg Order", "Avg order<br>")
+                           .replace("<br> ", "<br>") for m in shown], y=heat.index, zmid=0, zmin=-60, zmax=60,
+            colorscale=[[0, theme.DIVERGING["warm"]], [0.5, theme.DIVERGING["mid"]],
+                        [1, theme.DIVERGING["cool"]]],
+            text=[[f"{v:+.0f}%" if pd.notna(v) else "—" for v in row] for row in heat.values],
+            texttemplate="%{text}", textfont=dict(size=12), xgap=3, ygap=3,
+            hovertemplate="<b>%{y}</b> · %{x}<br>%{text} vs last year<extra></extra>",
+            colorbar=dict(title="vs LY", ticksuffix="%", thickness=10)))
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Change vs last year, every figure (red down, blue up)",
+                          height=max(380, 34 * len(heat) + 140), hovermode="closest")
+        fig.update_yaxes(autorange="reversed", showgrid=False)
+        fig.update_xaxes(side="bottom", tickangle=0, showgrid=False)
+        theme.show(fig)
+
+    # ------------------------------------------------- summary per shop ---
+    st.subheader("Summary notes by shop")
+    summary = card.sort_values("Revenue Δ%").assign(Note=lambda t: t.apply(_change_note, axis=1))
+    grid.filterable_table(
+        summary[["Location", "Revenue Δ%", "New Customers Δ%", "Returning Customers Δ%",
+                 "Avg Spend / Customer Δ%", "Note"]].round(1)
+        .rename(columns=lambda c: c.replace(" Δ%", " Change %")),
+        pinned_columns=("Location",), height=min(520, 34 * len(card) + 120), total=False,
+        tooltip_columns=("Note",))
+
+    # --------------------------------------------------- full scorecard ---
+    st.subheader("Every figure, every older shop")
+    cols = ["Location"]
+    for m in cg.METRICS:
+        cols += [m + " LY", m, m + " Δ%"]
+    full = card[cols].copy()
+    for m in ("Avg Spend / Customer", "Avg Order Value", "Bags per Order"):
+        full[[m + " LY", m]] = full[[m + " LY", m]].round(2 if m == "Bags per Order" else 0)
+    full = full.round({c: 1 for c in full.columns if c.endswith("Δ%")})
+    full = full.rename(columns=lambda c: c.replace(" LY", " (LY)").replace(" Δ%", " Change %"))
+    grid.filterable_table(
+        full, pinned_columns=("Location",), height=min(520, 34 * len(card) + 120),
+        currency_columns=tuple(c for c in full.columns
+                               if any(c.startswith(m) for m, money in cg.METRICS.items() if money)
+                               and not c.endswith("Change %")))
+    st.caption("**(LY)**: the same period last year. **Change %** is this period against it. "
+               "Avg spend per customer counts the sales with a customer's phone number; avg order "
+               "value and bags per order count every sale.")
+
+
+SECTIONS = ["Overview", "Older shops"]
+section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0], key="growth_section",
+                               label_visibility="collapsed") or SECTIONS[0]
+with st.spinner("Reading this period and the same period last year…"):
+    report = cg.build(start_date, end_date)
+if not report["kenya"][0]["Revenue"]:
+    st.info("No sales in Kenya in this period.")
+elif section == "Overview":
+    render_overview(report, start_date, end_date)
+else:
+    render_older_shops(report, start_date, end_date)
