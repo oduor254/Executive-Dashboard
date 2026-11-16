@@ -76,6 +76,7 @@ def _orders(start: date, end: date, older_before: date) -> pd.DataFrame:
     """The period's Kenya orders, each with its group and customer kind."""
     df = reports._orders(start, end).copy()
     df["Revenue"] = pd.to_numeric(df["Revenue"], errors="coerce").fillna(0)
+    df["Bags"] = pd.to_numeric(df["Bags"], errors="coerce").fillna(0)
     opened_on = opened()
     df["Group"] = [group_of(loc, opened_on.get(loc), older_before) for loc in df["Location"]]
     df = df[df["Group"].notna()]
@@ -95,7 +96,9 @@ def _per_location(df: pd.DataFrame) -> pd.DataFrame:
     known = sales[sales["Key"].notna()]
     out = pd.DataFrame({
         "Revenue": g["Revenue"].sum(),
+        "Bags": g["Bags"].sum(),
         "Orders": sales.groupby("Location")["Order ID"].nunique(),
+        "Identified Revenue": known.groupby("Location")["Revenue"].sum(),
         "Customers": known.groupby("Location")["Key"].nunique(),
         "New Customers": known[known["Kind"] == "New"].groupby("Location")["Key"].nunique(),
         "Returning Customers": known[known["Kind"] == "Returning"].groupby("Location")["Key"].nunique(),
@@ -111,6 +114,7 @@ def _totals(df: pd.DataFrame) -> dict:
     customers = sales["Key"].nunique()
     return {
         "Revenue": df["Revenue"].sum(),
+        "Bags": df["Bags"].sum(),
         "Orders": df.loc[df["Revenue"] > 0, "Order ID"].nunique(),
         "Customers": customers,
         "New Customers": sales.loc[sales["Kind"] == "New", "Key"].nunique(),
@@ -147,3 +151,30 @@ def build(start: date, end: date) -> dict:
         "kenya": (part(now), part(then)),
         "shops": shops.reset_index(names="Location"),
     }
+
+
+# The older shops' scorecard: each figure last year, this period and the change.
+METRICS = {   # figure -> written as money?
+    "Revenue": True, "Orders": False, "Bags": False, "Customers": False,
+    "New Customers": False, "Returning Customers": False,
+    "New-Customer Revenue": True, "Returning-Customer Revenue": True,
+    "Avg Spend / Customer": True, "Avg Order Value": True, "Bags per Order": False,
+}
+
+
+def with_ratios(t: pd.DataFrame, suffix: str = "") -> pd.DataFrame:
+    """Add the per-customer and per-order figures for one side (suffix "" or " LY")."""
+    t = t.copy()
+    pos = lambda c: t[c + suffix].where(t[c + suffix] > 0)
+    t["Avg Spend / Customer" + suffix] = t["Identified Revenue" + suffix] / pos("Customers")
+    t["Avg Order Value" + suffix] = t["Revenue" + suffix] / pos("Orders")
+    t["Bags per Order" + suffix] = t["Bags" + suffix] / pos("Orders")
+    return t
+
+
+def scorecard(shops: pd.DataFrame) -> pd.DataFrame:
+    """One row per shop: every METRICS figure last year, now, and the % change."""
+    t = with_ratios(with_ratios(shops), " LY")
+    for m in METRICS:
+        t[m + " Δ%"] = (t[m] - t[m + " LY"]) / t[m + " LY"].where(t[m + " LY"] > 0) * 100
+    return t
