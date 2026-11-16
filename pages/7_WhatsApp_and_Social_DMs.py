@@ -146,21 +146,31 @@ def _kpis(items: list[tuple[str, str, str | None]]) -> None:
             st.metric(label, value, note, delta_color="off")
 
 
-def _new_repeat(won: pd.DataFrame, by: str, what: str) -> pd.DataFrame:
-    """Tiles for the new and repeat customers among the converted rows (Contact,
-    Date); returns the same split per `by`, to sit in the conversion table."""
-    t = customer_kind.split(won, "Contact", "Date", by)
-    new, repeat, unknown = (int(t[c].sum()) for c in t.columns)
-    st.markdown(f"**New and repeat customers** — among the {what}")
+def _new_repeat(df: pd.DataFrame, by: str, noun: str) -> pd.DataFrame:
+    """Tiles for the new and repeat customers among df's rows (Contact, Date,
+    Converted) and each group's own conversion rate; returns the same per
+    `by`, to sit in the conversion table."""
+    NEW, REPEAT = customer_kind.NEW, customer_kind.REPEAT
+    asked = customer_kind.split(df, "Contact", "Date", by)
+    won = customer_kind.split(df[df["Converted"]], "Contact", "Date", by).reindex(asked.index, fill_value=0)
+    a, w, n_won = asked.sum(), won.sum(), int(df["Converted"].sum())
+    st.markdown(f"**New and repeat customers** — among the {noun} that purchased")
     _kpis([
-        ("New Customers", f"{new:,}", f"{_pct(new, len(won))} of {what}"),
-        ("Repeat Customers", f"{repeat:,}", f"{_pct(repeat, len(won))} of {what}"),
-        ("No Phone", f"{unknown:,}", "blank or a shop's own number"),
+        ("New Customers", f"{w[NEW]:,}", f"{_pct(w[NEW], n_won)} of {noun} that purchased"),
+        ("Repeat Customers", f"{w[REPEAT]:,}", f"{_pct(w[REPEAT], n_won)} of {noun} that purchased"),
+        ("New-Customer Conversion", _pct(w[NEW], a[NEW]),
+         f"{w[NEW]:,} purchased of {a[NEW]:,} {noun} from new customers"),
+        ("Repeat-Customer Conversion", _pct(w[REPEAT], a[REPEAT]),
+         f"{w[REPEAT]:,} purchased of {a[REPEAT]:,} {noun} from repeat customers"),
+        ("No Phone", f"{w[customer_kind.NO_PHONE]:,}", "blank or a shop's own number"),
     ])
     st.caption("**Repeat**: the customer's number had already bought from Denri, at any shop or "
-               "online, before that day. **New**: no purchase on record under that number before it.")
-    return t.rename(columns={customer_kind.NEW: "New Customers",
-                             customer_kind.REPEAT: "Repeat Customers"})
+               "online, before that day. **New**: no purchase on record under that number before it. "
+               f"Each group's conversion is its {noun} that purchased over all its {noun}.")
+    out = won.rename(columns={NEW: "New Customers", REPEAT: "Repeat Customers"})
+    out["New Conversion %"] = (won[NEW] / asked[NEW].where(asked[NEW] > 0) * 100).round(1)
+    out["Repeat Conversion %"] = (won[REPEAT] / asked[REPEAT].where(asked[REPEAT] > 0) * 100).round(1)
+    return out
 
 
 def _table(df: pd.DataFrame, columns: dict[str, str], **kwargs) -> None:
@@ -289,7 +299,7 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                  "median"),
             ])
             won = df[df["Converted"]]
-            kinds = None if won.empty else _new_repeat(won, "Branch", "chats that purchased")
+            kinds = None if won.empty else _new_repeat(df, "Branch", "chats")
             with st.container(border=True):
                 theme.show(_stacked_by_branch(df, "Activity", ACTIVITY_COLORS,
                                               "Interactions by Branch and Outcome"))
@@ -314,7 +324,7 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                 by_branch["Conversion %"] = (by_branch["Purchased"]
                                              / by_branch["Interactions"] * 100).round(1)
                 if kinds is not None:
-                    by_branch = by_branch.join(kinds, on="Branch").fillna({c: 0 for c in kinds.columns})
+                    by_branch = by_branch.join(kinds, on="Branch")
                 grid.filterable_table(by_branch.sort_values("Interactions", ascending=False),
                                       height=360)
 
@@ -574,7 +584,7 @@ def render_leads(start_date: date, end_date: date) -> None:
             ("Awaiting Stock", f"{stock:,}", f"+ {offer:,} awaiting an offer"),
             ("Lost", f"{lost:,}", "unreachable, not interested, wrong number"),
         ])
-        kinds = None if won.empty else _new_repeat(won, "Branch", "leads that purchased")
+        kinds = None if won.empty else _new_repeat(df, "Branch", "leads")
         with st.container(border=True):
             theme.show(_stacked_by_branch(df, "Stage", STAGE_COLORS,
                                           "Leads by Location and Stage"))
@@ -610,7 +620,7 @@ def render_leads(start_date: date, end_date: date) -> None:
             table.insert(2, "Conversion %", (table["Purchased"] / table["Leads"] * 100).round(1))
             if kinds is not None:
                 for i, c in enumerate(kinds.columns, start=3):
-                    table.insert(i, c, kinds[c].reindex(table.index, fill_value=0))
+                    table.insert(i, c, kinds[c].reindex(table.index))
             table = (table.reset_index().rename(columns={"Branch": "Location"})
                      .sort_values("Leads", ascending=False))
             grid.filterable_table(table, currency_columns=("Amount Paid",),

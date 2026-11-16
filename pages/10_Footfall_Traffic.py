@@ -240,7 +240,13 @@ def render_footfall(start_date: date, end_date: date) -> None:
                       .where(table["Walk-ins Counted"] > 0)).round(0))
         for i, c in enumerate(kinds.columns, start=3):
             table.insert(i, c, kinds[c].reindex(table.index, fill_value=0))
-        first = ["Purchased Walk-ins", *kinds.columns, "Didn't Buy", "Walk-ins Counted",
+        rates = {}
+        for label, col in (("New-Customer Conversion %", "New Customers"),
+                           ("Repeat-Customer Conversion %", "Repeat Customers")):
+            rates[label] = (table[col] / table["Walk-ins Counted"]
+                            .where(table["Walk-ins Counted"] > 0) * 100).round(1)
+        table = table.assign(**rates)
+        first = ["Purchased Walk-ins", *kinds.columns, *rates, "Didn't Buy", "Walk-ins Counted",
                  "Walk-in Conversion %"]
         table = table[first + [c for c in table.columns if c not in first + ["Days Counted"]]
                       + ["Days Counted"]]
