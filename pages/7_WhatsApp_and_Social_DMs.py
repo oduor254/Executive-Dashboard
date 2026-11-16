@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, charts, db, filters, grid, queries, stock_planning, theme
+from lib import auth, charts, customer_kind, db, filters, grid, queries, stock_planning, theme
 from lib import lead_recycling as lr
 
 st.set_page_config(page_title=auth.page_title("WhatsApp & Social DMs"),
@@ -144,6 +144,23 @@ def _kpis(items: list[tuple[str, str, str | None]]) -> None:
     for col, (label, value, note) in zip(st.columns(len(items)), items):
         with col.container(border=True):
             st.metric(label, value, note, delta_color="off")
+
+
+def _new_repeat(won: pd.DataFrame, by: str, what: str) -> pd.DataFrame:
+    """Tiles for the new and repeat customers among the converted rows (Contact,
+    Date); returns the same split per `by`, to sit in the conversion table."""
+    t = customer_kind.split(won, "Contact", "Date", by)
+    new, repeat, unknown = (int(t[c].sum()) for c in t.columns)
+    st.markdown(f"**New and repeat customers** — among the {what}")
+    _kpis([
+        ("New Customers", f"{new:,}", f"{_pct(new, len(won))} of {what}"),
+        ("Repeat Customers", f"{repeat:,}", f"{_pct(repeat, len(won))} of {what}"),
+        ("No Phone", f"{unknown:,}", "blank or a shop's own number"),
+    ])
+    st.caption("**Repeat**: the customer's number had already bought from Denri, at any shop or "
+               "online, before that day. **New**: no purchase on record under that number before it.")
+    return t.rename(columns={customer_kind.NEW: "New Customers",
+                             customer_kind.REPEAT: "Repeat Customers"})
 
 
 def _table(df: pd.DataFrame, columns: dict[str, str], **kwargs) -> None:
@@ -271,6 +288,8 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                  if df["First Response (min)"].notna().any() else "—",
                  "median"),
             ])
+            won = df[df["Converted"]]
+            kinds = None if won.empty else _new_repeat(won, "Branch", "chats that purchased")
             with st.container(border=True):
                 theme.show(_stacked_by_branch(df, "Activity", ACTIVITY_COLORS,
                                               "Interactions by Branch and Outcome"))
@@ -294,6 +313,8 @@ def render_whatsapp(start_date: date, end_date: date) -> None:
                                .reset_index())
                 by_branch["Conversion %"] = (by_branch["Purchased"]
                                              / by_branch["Interactions"] * 100).round(1)
+                if kinds is not None:
+                    by_branch = by_branch.join(kinds, on="Branch").fillna({c: 0 for c in kinds.columns})
                 grid.filterable_table(by_branch.sort_values("Interactions", ascending=False),
                                       height=360)
 
@@ -553,6 +574,7 @@ def render_leads(start_date: date, end_date: date) -> None:
             ("Awaiting Stock", f"{stock:,}", f"+ {offer:,} awaiting an offer"),
             ("Lost", f"{lost:,}", "unreachable, not interested, wrong number"),
         ])
+        kinds = None if won.empty else _new_repeat(won, "Branch", "leads that purchased")
         with st.container(border=True):
             theme.show(_stacked_by_branch(df, "Stage", STAGE_COLORS,
                                           "Leads by Location and Stage"))
@@ -586,6 +608,9 @@ def render_leads(start_date: date, end_date: date) -> None:
                 "Amount Paid": g["Amount Paid"].sum(),
             }).astype({"Purchased": int})
             table.insert(2, "Conversion %", (table["Purchased"] / table["Leads"] * 100).round(1))
+            if kinds is not None:
+                for i, c in enumerate(kinds.columns, start=3):
+                    table.insert(i, c, kinds[c].reindex(table.index, fill_value=0))
             table = (table.reset_index().rename(columns={"Branch": "Location"})
                      .sort_values("Leads", ascending=False))
             grid.filterable_table(table, currency_columns=("Amount Paid",),

@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from lib import auth, charts, db, filters, footfall, grid, queries, theme
+from lib import auth, charts, customer_kind, db, filters, footfall, grid, queries, theme
 
 st.set_page_config(page_title="Footfall Traffic · Denri Executive Dashboard",
                    page_icon="🚶", layout="wide")
@@ -79,6 +79,24 @@ def render_footfall(start_date: date, end_date: date) -> None:
         ("Revenue per Walk-in", f"KES {counted['Walk-in Revenue'].sum() / walkins:,.0f}"
          if walkins else "—", "walk-in revenue ÷ counted"),
     ])
+    # New or repeat, for the purchased walk-ins on counted days (the funnel's days).
+    buyers = db.run_query(queries.FOOTFALL_WALKIN_BUYERS,
+                          {"start_date": start_date, "end_date": end_date})
+    buyers = (buyers.assign(Date=pd.to_datetime(buyers["Date"]))
+              .merge(counted[["Date", "Location"]].drop_duplicates(), on=["Date", "Location"]))
+    kinds = (customer_kind.split(buyers, "Phone", "Date", "Location")
+             .rename(columns={customer_kind.NEW: "New Customers", customer_kind.REPEAT: "Repeat Customers"}))
+    new, repeat, unknown = (int(kinds[c].sum()) for c in kinds.columns)
+    st.markdown("**New and repeat customers** — among the purchased walk-ins")
+    _kpis([
+        ("New Customers", f"{new:,}", f"{_pct(new, bought)} of purchased walk-ins"),
+        ("Repeat Customers", f"{repeat:,}", f"{_pct(repeat, bought)} of purchased walk-ins"),
+        ("New-Customer Conversion", _pct(new, walkins), "new customers ÷ walk-ins counted"),
+        ("Repeat-Customer Conversion", _pct(repeat, walkins), "repeat customers ÷ walk-ins counted"),
+        ("No Phone", f"{unknown:,}", "blank or a shop's own number"),
+    ])
+    st.caption("**Repeat**: the customer's number had already bought from Denri, at any shop or "
+               "online, before that day. **New**: no purchase on record under that number before it.")
     st.markdown("**Not walk-ins** — orders that are not part of the conversion")
     _kpis([
         ("Online Orders", f"{shown['Online Orders'].sum():,.0f}", "ordered online"),
@@ -220,7 +238,10 @@ def render_footfall(start_date: date, end_date: date) -> None:
         table.insert(6, "Revenue per Walk-in",
                      (table["Walk-in Revenue"] / table["Walk-ins Counted"]
                       .where(table["Walk-ins Counted"] > 0)).round(0))
-        first = ["Purchased Walk-ins", "Didn't Buy", "Walk-ins Counted", "Walk-in Conversion %"]
+        for i, c in enumerate(kinds.columns, start=3):
+            table.insert(i, c, kinds[c].reindex(table.index, fill_value=0))
+        first = ["Purchased Walk-ins", *kinds.columns, "Didn't Buy", "Walk-ins Counted",
+                 "Walk-in Conversion %"]
         table = table[first + [c for c in table.columns if c not in first + ["Days Counted"]]
                       + ["Days Counted"]]
         table = table.reset_index().rename(columns={"index": "Location"})

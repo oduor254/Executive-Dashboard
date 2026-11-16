@@ -5266,6 +5266,42 @@ ORDER BY 1 DESC, 2
 """
 
 
+# The purchased walk-ins of FOOTFALL_DAILY one order at a time, with the
+# customer's phone, so the page can tell new customers from repeat ones.
+# Same shops, Kenya-time dates and "worth something" test as FOOTFALL_DAILY.
+FOOTFALL_WALKIN_BUYERS = r"""
+WITH shops AS (
+    SELECT DISTINCT config_id FROM denri_footfall_count
+),
+orders AS (
+    SELECT ps.config_id, po.id, po.partner_id,
+           (po.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE AS date,
+           SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%' AND pt.name NOT ILIKE '%Customization Fee%'
+                    THEN pol.price_subtotal_incl / COALESCE(NULLIF(po.currency_rate, 0), 1)
+                    ELSE 0 END) AS revenue
+    FROM pos_order po
+    JOIN pos_session      ps  ON ps.id = po.session_id
+    JOIN shops            s   ON s.config_id = ps.config_id
+    JOIN pos_order_line   pol ON pol.order_id = po.id
+    JOIN product_product  pp  ON pp.id = pol.product_id
+    JOIN product_template pt  ON pt.id = pp.product_tmpl_id
+    WHERE po.state IN ('done', 'paid', 'invoiced') AND po.customer_type = 'walkin'
+      AND po.date_order >= CAST(:start_date AS TIMESTAMP) - INTERVAL '1 day'
+      AND po.date_order < CAST(:end_date AS TIMESTAMP) + INTERVAL '2 days'
+      AND (po.date_order AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE
+          BETWEEN CAST(:start_date AS DATE) AND CAST(:end_date AS DATE)
+    GROUP BY 1, 2, 3, 4
+)
+SELECT o.date AS "Date",
+       CASE pc.name WHEN 'KTDA Shop' THEN 'Ktda' WHEN 'DAR-ES-ALAM' THEN 'Sinza'
+                    ELSE INITCAP(TRIM(REGEXP_REPLACE(pc.name, '\s*Shop\s*', '', 'gi'))) END AS "Location",
+       COALESCE(rp.phone, rp.mobile, '') AS "Phone"
+FROM orders o
+JOIN pos_config pc ON pc.id = o.config_id
+LEFT JOIN res_partner rp ON rp.id = o.partner_id
+WHERE o.revenue > 0
+"""
+
 # The Reports page (daily / weekly / monthly): every till order in the range
 # with its customer, gender, channel, revenue and bags — revenue counted as
 # the Sales page counts it (every line except delivery and customization
