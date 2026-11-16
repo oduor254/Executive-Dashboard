@@ -6,7 +6,8 @@ For a period and the same period last year (lib.filters.last_year), Kenya only:
   * Older shops — open before last year's period started, so both periods
     can be compared like for like. New shops — opened since then, i.e. in the
     last twelve months or so. A shop "opens" on its first sale in Odoo.
-  * Online — the Website and Jumia; neither an older nor a new shop.
+  * The Website counts as an older location (it has sold since 2023); Jumia
+    is Online, apart from both.
   * A customer is their phone number (last nine digits). Shop and attendant
     numbers typed in place of the customer's are nobody, as on the rest of the
     dashboard (lib.customer_kind).
@@ -25,7 +26,7 @@ import streamlit as st
 from lib import customer_kind, filters, reports, staff_numbers
 
 OLDER, NEW_SHOP, ONLINE = "Older shop", "New shop", "Online"
-ONLINE_LOCATIONS = {"Website", "Jumia"}
+ONLINE_LOCATIONS = {"Jumia"}
 NOT_KENYA = {"Sinza", "Uganda"}
 # Tills that sell but aren't a shop customers walk into.
 NOT_SHOPS = {"Staff POS", "Marketing", "Rejects", "Flash Sale Warehouse", "Loop",
@@ -77,6 +78,7 @@ def _orders(start: date, end: date, older_before: date) -> pd.DataFrame:
     df = reports._orders(start, end).copy()
     df["Revenue"] = pd.to_numeric(df["Revenue"], errors="coerce").fillna(0)
     df["Bags"] = pd.to_numeric(df["Bags"], errors="coerce").fillna(0)
+    df["Units"] = pd.to_numeric(df["Units"], errors="coerce").fillna(0)
     opened_on = opened()
     df["Group"] = [group_of(loc, opened_on.get(loc), older_before) for loc in df["Location"]]
     df = df[df["Group"].notna()]
@@ -150,6 +152,7 @@ def build(start: date, end: date) -> dict:
         "online": (part(now, ONLINE), part(then, ONLINE)),
         "kenya": (part(now), part(then)),
         "shops": shops.reset_index(names="Location"),
+        "orders": (now, then),
     }
 
 
@@ -178,3 +181,91 @@ def scorecard(shops: pd.DataFrame) -> pd.DataFrame:
     for m in METRICS:
         t[m + " Δ%"] = (t[m] - t[m + " LY"]) / t[m + " LY"].where(t[m + " LY"] > 0) * 100
     return t
+
+
+# ------------------------------------------------------ customer behaviour ---
+# Bulk and corporate orders would skew what an ordinary customer does, so the
+# behaviour figures leave them out: an order of more than BULK_UNITS items, or
+# one whose customer is recorded as Corporate (on gender or customer type).
+BULK_UNITS = 15
+WALK_IN, ONLINE_CH = "Walk-in", "Online"
+# Activation customers are walk-ins met where the activation was held.
+CHANNEL = {"Walk-in": WALK_IN, "Activation": WALK_IN, "Online": ONLINE_CH}
+
+
+def split_bulk(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(ordinary customer orders, bulk and corporate orders)."""
+    corporate = df["Gender"].eq("Corporate") | df["Channel"].eq("Corporate")
+    out = (df["Units"] > BULK_UNITS) | corporate
+    kept = df[~out].copy()
+    kept["Sales Channel"] = kept["Channel"].map(CHANNEL).fillna("Other")
+    kept["Gender"] = kept["Gender"].where(kept["Gender"].isin(["Female", "Male"]), "Not recorded")
+    return kept, df[out]
+
+
+def behaviour(df: pd.DataFrame, before: pd.DataFrame) -> dict:
+    """How the period's customers bought. `before` is the month ahead of the
+    period, for who came back from it."""
+    sales = df[(df["Revenue"] > 0) & df["Key"].notna()].copy()
+    sales["Month"] = pd.to_datetime(sales["Date"]).dt.to_period("M")
+    days = sales.groupby("Key")["Date"].nunique()
+    customers = len(days)
+    orders = df.loc[df["Revenue"] > 0, "Order ID"].nunique()
+    # bought on two or more days of the same calendar month
+    month_days = sales.groupby(["Month", "Key"])["Date"].nunique()
+    # of each month's buyers, how many had bought the month before
+    prev = pd.concat([before[(before["Revenue"] > 0) & before["Key"].notna()], sales])
+    prev_month = pd.to_datetime(prev["Date"]).dt.to_period("M")
+    buyers = prev.assign(Month=prev_month).groupby("Month")["Key"].apply(set)
+    came, base = 0, 0
+    for m in sales["Month"].unique():
+        if m - 1 in buyers.index:
+            came += len(buyers[m - 1] & buyers[m])
+            base += len(buyers[m - 1])
+    return {
+        "Customers": customers,
+        "Orders": orders,
+        "Revenue": df["Revenue"].sum(),
+        "Average Order Value": df["Revenue"].sum() / orders if orders else None,
+        "Items per Order": df.loc[df["Revenue"] > 0, "Units"].sum() / orders if orders else None,
+        "Repeat Customers %": (days >= 2).mean() * 100 if customers else None,
+        "Came Back Next Month %": came / base * 100 if base else None,
+        "Bought Twice in a Month %": (month_days >= 2).mean() * 100 if len(month_days) else None,
+        "Revenue per Customer": sales["Revenue"].sum() / customers if customers else None,
+        "Orders per Customer": sales["Order ID"].nunique() / customers if customers else None,
+        "New Customers %": sales.loc[sales["Kind"] == "New", "Key"].nunique() / customers * 100
+        if customers else None,
+    }
+
+
+def by(df: pd.DataFrame, col: str) -> pd.DataFrame:
+    """Customers, revenue and how they buy, per value of `col` (Gender, Sales Channel)."""
+    sales = df[(df["Revenue"] > 0) & df["Key"].notna()]
+    g = sales.groupby(col)
+    days = sales.groupby([col, "Key"])["Date"].nunique()
+    t = pd.DataFrame({
+        "Customers": g["Key"].nunique(),
+        "Orders": df[df["Revenue"] > 0].groupby(col)["Order ID"].nunique(),
+        "Revenue": df.groupby(col)["Revenue"].sum(),
+        "Identified Revenue": g["Revenue"].sum(),
+        "Repeat %": (days >= 2).groupby(level=0).mean() * 100,
+    }).fillna(0)
+    t["Customer Share %"] = t["Customers"] / t["Customers"].sum() * 100
+    t["Revenue Share %"] = t["Revenue"] / t["Revenue"].sum() * 100
+    t["Average Order Value"] = t["Revenue"] / t["Orders"].where(t["Orders"] > 0)
+    t["Revenue per Customer"] = t["Identified Revenue"] / t["Customers"].where(t["Customers"] > 0)
+    return t.drop(columns="Identified Revenue")
+
+
+def visit_gaps(df: pd.DataFrame) -> pd.Series:
+    """Days between one purchase day and a customer's next, within the period."""
+    days = (df[(df["Revenue"] > 0) & df["Key"].notna()][["Key", "Date"]].drop_duplicates()
+            .assign(Date=lambda t: pd.to_datetime(t["Date"])).sort_values(["Key", "Date"]))
+    return days.groupby("Key")["Date"].diff().dt.days.dropna()
+
+
+def tenure(df: pd.DataFrame, start: date) -> pd.Series:
+    """For each returning customer, months since their first Denri purchase."""
+    keys = df.loc[(df["Revenue"] > 0) & (df["Kind"] == "Returning"), "Key"].unique()
+    first = pd.Series(keys).map(customer_kind.first_purchases())
+    return ((pd.Timestamp(start) - first).dt.days / 30.44).dropna()

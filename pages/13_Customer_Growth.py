@@ -225,7 +225,7 @@ def render_overview(r: dict, start_date, end_date) -> None:
         theme.show(fig)
     with c2, st.container(border=True):
         mix = pd.DataFrame({
-            "Group": ["Older shops", "New shops", "Online"],
+            "Group": ["Older locations", "New shops", "Jumia"],
             "Last year": [older_ly["Revenue"], new_shops_ly["Revenue"], r["online"][1]["Revenue"]],
             "This period": [older["Revenue"], new_shops["Revenue"], r["online"][0]["Revenue"]],
         })
@@ -235,7 +235,7 @@ def render_overview(r: dict, start_date, end_date) -> None:
                         name=g, marker=dict(color=theme.CATEGORICAL[i]),
                         hovertemplate=f"{g}: KSh %{{y:,.0f}}<extra></extra>")
         theme.apply_layout(fig, show_legend=True)
-        fig.update_layout(title="Kenya revenue: older shops, new shops and online", barmode="stack",
+        fig.update_layout(title="Kenya revenue: older locations, new shops and Jumia", barmode="stack",
                           height=420)
         theme.show(fig)
 
@@ -266,8 +266,8 @@ def render_overview(r: dict, start_date, end_date) -> None:
     st.caption("**(LY)**: the same period last year. **New customer**: their first Denri purchase anywhere falls in the period. **Returning "
                "customer**: they had bought from Denri before it. Customers are counted by phone number; "
                "orders with no phone, or a shop's or attendant's own number, are under **No phone**. "
-               "A shop opens on its first sale in Odoo, which began in December 2023. Online is the "
-               "Website and Jumia; Sinza, Uganda and staff or stock tills are left out.")
+               "A shop opens on its first sale in Odoo, which began in December 2023. The Website counts "
+               "as an older location; Online is Jumia. Sinza, Uganda and staff or stock tills are left out.")
 
 
 def _change_note(row: pd.Series) -> str:
@@ -402,7 +402,255 @@ def render_older_shops(r: dict, start_date, end_date) -> None:
                "value and bags per order count every sale.")
 
 
-SECTIONS = ["Overview", "Older shops"]
+def _rate_tile(col, label: str, now, then, suffix: str, money: bool = False, extra: str = "") -> None:
+    """A level as the headline, last year and the change underneath."""
+    show = (_money if money else (lambda v: f"{v:,.0f}") if suffix == "count"
+            else (lambda v: f"{v:,.1f}{suffix}") if suffix else (lambda v: f"{v:,.2f}"))
+    if now is None or pd.isna(now):
+        value, note = "—", "no data"
+    elif then is None or pd.isna(then):
+        value, note = show(now), "no last year to compare"
+    elif suffix == "%":
+        value, note = show(now), f"{now - then:+.1f} pts · {show(then)} last yr"
+    else:
+        value, note = show(now), f"{(now - then) / then * 100:+.1f}% · {show(then)} last yr" if then else "—"
+    with col.container(border=True):
+        st.metric(label, value, note + extra, delta_color="normal" if note[:1] in "+-" else "off")
+
+
+def _share_bars(now: pd.Series, then: pd.Series, title: str, colours: dict) -> go.Figure:
+    """Last year and this period as two 100% bars split by category."""
+    fig = go.Figure()
+    for name in [c for c in colours if c in now.index or c in then.index]:
+        vals = [then.get(name, 0), now.get(name, 0)]
+        fig.add_bar(y=["Last year", "This period"], x=vals, orientation="h", name=name,
+                    marker=dict(color=colours[name], line=dict(color=theme.CHART_SURFACE, width=1)),
+                    text=[f"{v:.0f}%" if v >= 6 else "" for v in vals], textposition="inside",
+                    insidetextanchor="middle", textfont=dict(color="#ffffff", size=12),
+                    hovertemplate=f"{name}: <b>%{{x:.1f}}%</b><extra></extra>")
+    theme.apply_layout(fig, show_legend=True)
+    fig.update_layout(title=title, barmode="stack", height=240, hovermode="closest", bargap=0.35)
+    fig.update_xaxes(range=[0, 100], ticksuffix="%", showgrid=False)
+    fig.update_yaxes(autorange="reversed", showgrid=False)
+    return fig
+
+
+def _bucket_bars(now: pd.Series, then: pd.Series, title: str, x_title: str) -> go.Figure:
+    """Share of customers in each bucket, last year beside this period."""
+    fig = go.Figure()
+    fig.add_bar(x=then.index, y=then.values, name="Last year",
+                marker=dict(color=theme.OTHER, cornerradius=3),
+                hovertemplate="%{x}: <b>%{y:.1f}%</b> last year<extra></extra>")
+    fig.add_bar(x=now.index, y=now.values, name="This period",
+                marker=dict(color=theme.CATEGORICAL[0], cornerradius=3),
+                text=[f"{v:.0f}%" for v in now.values], textposition="outside", cliponaxis=False,
+                hovertemplate="%{x}: <b>%{y:.1f}%</b> this period<extra></extra>")
+    theme.apply_layout(fig, show_legend=True)
+    fig.update_layout(title=title, barmode="group", height=340, hovermode="closest", bargap=0.3)
+    fig.update_yaxes(ticksuffix="%", rangemode="tozero")
+    fig.update_xaxes(title=x_title)
+    return fig
+
+
+def _buckets(values: pd.Series, edges: list, labels: list) -> pd.Series:
+    """% of values in each bucket."""
+    if values.empty:
+        return pd.Series(0.0, index=labels)
+    b = pd.cut(values, edges, labels=labels, right=True)
+    return b.value_counts(normalize=True).reindex(labels).fillna(0) * 100
+
+
+@st.fragment()
+def render_behaviour(r: dict, start_date, end_date) -> None:
+    ly_start, ly_end = r["last_year"]
+    scope = st.segmented_control("Customers of", ["All Kenya", "Older locations", "New shops"],
+                                 default="All Kenya", key="growth_behaviour_scope") or "All Kenya"
+    group = {"Older locations": cg.OLDER, "New shops": cg.NEW_SHOP}.get(scope)
+
+    def prepare(df, s, e):
+        before_start = (s.replace(day=1) - pd.Timedelta(days=1)).replace(day=1)
+        before = cg._orders(before_start, s - pd.Timedelta(days=1), ly_start)
+        if group:
+            groups = r["orders"][0].groupby("Location")["Group"].first()
+            before = before[before["Location"].map(groups).eq(group)]
+            df = df[df["Group"] == group]
+        kept, out = cg.split_bulk(df)
+        return kept, out, cg.split_bulk(before)[0]
+
+    now, now_out, now_before = prepare(r["orders"][0], start_date, end_date)
+    then, then_out, then_before = prepare(r["orders"][1], ly_start, ly_end)
+    if now.empty:
+        st.info("No customer sales here in this period.")
+        return
+    b, b_ly = cg.behaviour(now, now_before), cg.behaviour(then, then_before)
+
+    st.caption(f"**{scope}**, {start_date:%d %b %Y} – {end_date:%d %b %Y} against "
+               f"{ly_start:%d %b %Y} – {ly_end:%d %b %Y}. Bulk orders (more than {cg.BULK_UNITS} items) "
+               "and corporate orders are left out, so these figures describe ordinary customers.")
+
+    row = st.columns(4)
+    _rate_tile(row[0], "Customers", b["Customers"], b_ly["Customers"], "count")
+    _rate_tile(row[1], "Average order value", b["Average Order Value"], b_ly["Average Order Value"], "",
+               money=True, extra=f" · {b['Items per Order']:.1f} items per order" if b["Items per Order"] else "")
+    _rate_tile(row[2], "Repeat customers", b["Repeat Customers %"], b_ly["Repeat Customers %"], "%",
+               extra=" · bought on 2+ days")
+    _rate_tile(row[3], "Revenue per customer", b["Revenue per Customer"], b_ly["Revenue per Customer"], "",
+               money=True)
+    row = st.columns(4)
+    _rate_tile(row[0], "Came back next month", b["Came Back Next Month %"], b_ly["Came Back Next Month %"],
+               "%", extra=" · of the month before's buyers")
+    _rate_tile(row[1], "Bought twice in the same month", b["Bought Twice in a Month %"],
+               b_ly["Bought Twice in a Month %"], "%")
+    _rate_tile(row[2], "New customers", b["New Customers %"], b_ly["New Customers %"], "%",
+               extra=" · first Denri purchase")
+    with row[3].container(border=True):
+        st.metric("Bulk & corporate orders left out", f"{now_out['Order ID'].nunique():,}",
+                  f"{_money(now_out['Revenue'].sum())} · {len(then_out):,} last yr", delta_color="off")
+
+    # ------------------------------------------------- how often they come back ---
+    st.subheader("How often customers come back")
+    visits = now[(now["Revenue"] > 0) & now["Key"].notna()].groupby("Key")["Date"].nunique()
+    visits_ly = then[(then["Revenue"] > 0) & then["Key"].notna()].groupby("Key")["Date"].nunique()
+    edges, labels = [0, 1, 2, 3, 10**6], ["1 day", "2 days", "3 days", "4+ days"]
+    gaps, gaps_ly = cg.visit_gaps(now), cg.visit_gaps(then)
+    gap_edges, gap_labels = [0, 7, 14, 30, 60, 10**6], ["Within a week", "8–14 days", "15–30 days",
+                                                         "31–60 days", "Over 60 days"]
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        theme.show(_bucket_bars(_buckets(visits, edges, labels), _buckets(visits_ly, edges, labels),
+                                "Days each customer bought on", "Purchase days in the period"))
+    with c2, st.container(border=True):
+        theme.show(_bucket_bars(_buckets(gaps, gap_edges, gap_labels),
+                                _buckets(gaps_ly, gap_edges, gap_labels),
+                                "Time until the next purchase", "Gap between purchase days"))
+    ten, ten_ly = cg.tenure(now, start_date), cg.tenure(then, ly_start)
+    ten_edges, ten_labels = [-1, 3, 6, 12, 24, 10**6], ["Under 3 months", "3–6 months", "6–12 months",
+                                                        "1–2 years", "Over 2 years"]
+    c1, c2 = st.columns([3, 2])
+    with c1, st.container(border=True):
+        theme.show(_bucket_bars(_buckets(ten, ten_edges, ten_labels),
+                                _buckets(ten_ly, ten_edges, ten_labels),
+                                "Returning customers: how long since their first purchase",
+                                "Time since first Denri purchase"))
+    with c2, st.container(border=True):
+        freq = pd.DataFrame({
+            "Figure": ["Customers", "Bought on 2+ days", "Repeat customers %", "Orders per customer",
+                       "Median days to next purchase", "Came back next month %"],
+            "Last year": [f"{b_ly['Customers']:,}", f"{(visits_ly >= 2).sum():,}",
+                          f"{b_ly['Repeat Customers %'] or 0:.1f}%", f"{b_ly['Orders per Customer'] or 0:.2f}",
+                          f"{gaps_ly.median():.0f}" if len(gaps_ly) else "—",
+                          f"{b_ly['Came Back Next Month %']:.1f}%" if b_ly["Came Back Next Month %"] else "—"],
+            "This period": [f"{b['Customers']:,}", f"{(visits >= 2).sum():,}",
+                            f"{b['Repeat Customers %'] or 0:.1f}%", f"{b['Orders per Customer'] or 0:.2f}",
+                            f"{gaps.median():.0f}" if len(gaps) else "—",
+                            f"{b['Came Back Next Month %']:.1f}%" if b["Came Back Next Month %"] else "—"],
+        })
+        st.markdown("**Coming back, in numbers**")
+        st.dataframe(freq, hide_index=True, width="stretch")
+        st.caption("A customer's purchase days are the different days they bought on in the period. "
+                   "Came back next month: of the buyers in the month before each month of the period, "
+                   "the share who bought again in that month.")
+
+    # -------------------------------------------------------- demographics ---
+    st.subheader("Demographic performance")
+    g, g_ly = cg.by(now, "Gender"), cg.by(then, "Gender")
+    gender_colours = {"Female": theme.CATEGORICAL[0], "Male": theme.CATEGORICAL[1],
+                      "Not recorded": theme.OTHER}
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        theme.show(_share_bars(g["Customer Share %"], g_ly["Customer Share %"], "Share of customers",
+                               gender_colours))
+    with c2, st.container(border=True):
+        theme.show(_share_bars(g["Revenue Share %"], g_ly["Revenue Share %"], "Share of revenue",
+                               gender_colours))
+    table = g.join(g_ly, rsuffix=" (LY)", how="outer").fillna(0)
+    table["Customers Change %"] = (table["Customers"] - table["Customers (LY)"]) \
+        / table["Customers (LY)"].where(table["Customers (LY)"] > 0) * 100
+    table["Revenue Change %"] = (table["Revenue"] - table["Revenue (LY)"]) \
+        / table["Revenue (LY)"].where(table["Revenue (LY)"] > 0) * 100
+    table = table.reset_index(names="Gender")
+    ly_unrecorded = g_ly["Customer Share %"].get("Not recorded", 0)
+    comparable = ly_unrecorded < 30   # gender is recorded at the till only since 22 Jul 2026
+    gender_cols = (["Gender", "Customers (LY)", "Customers", "Customers Change %", "Customer Share %",
+                    "Revenue (LY)", "Revenue", "Revenue Change %", "Revenue Share %"] if comparable else
+                   ["Gender", "Customers", "Customer Share %", "Revenue", "Revenue Share %"])
+    gender_cols += ["Average Order Value", "Revenue per Customer"] + (["Repeat % (LY)"] if comparable else []) + ["Repeat %"]
+    grid.filterable_table(
+        table[table["Customers"] > 0][gender_cols].round(1),
+        currency_columns=("Revenue (LY)", "Revenue", "Average Order Value", "Revenue per Customer"),
+        pinned_columns=("Gender",), height=200, total=False)
+    notes = []
+    known = table[(table["Gender"] != "Not recorded") & (table["Customers"] > 0)]
+    for _, x in known.iterrows():
+        change = (f" Revenue {x['Revenue Change %']:+.1f}% and customers {x['Customers Change %']:+.1f}% "
+                  "on last year." if comparable else "")
+        tone = ("red" if x["Revenue Change %"] < 0 else "green") if comparable else "blue"
+        notes.append(f":{tone}[**{x['Gender']}**]: {x['Customer Share %']:.0f}% of customers and "
+                     f"{x['Revenue Share %']:.0f}% of revenue, KSh {x['Revenue per Customer']:,.0f} per "
+                     f"customer, KSh {x['Average Order Value']:,.0f} per order.{change}")
+    if len(known) == 2:
+        hi = known.sort_values("Revenue per Customer").iloc[-1]
+        lo = known.sort_values("Revenue per Customer").iloc[0]
+        if lo["Revenue per Customer"]:
+            notes.append(f"**{hi['Gender']}** customers spend {hi['Revenue per Customer'] / lo['Revenue per Customer'] * 100 - 100:.0f}% "
+                         f"more each than {lo['Gender'].lower()} customers, and "
+                         f"{hi['Repeat %']:.1f}% of them bought more than once (vs {lo['Repeat %']:.1f}%).")
+    if "Not recorded" in g.index or ly_unrecorded:
+        notes.append(f"Gender isn't recorded for {g['Customer Share %'].get('Not recorded', 0):.0f}% of this "
+                     f"period's customers and {ly_unrecorded:.0f}% of last year's"
+                     + ("." if comparable else
+                        ": staff have recorded it at the till only since 22 Jul 2026, so the change on "
+                        "last year by gender isn't meaningful yet. The split above is this period's."))
+    with st.container(border=True):
+        st.markdown("**Notable changes**")
+        st.markdown("\n".join(f"- {n}" for n in notes))
+
+    # ---------------------------------------------------- walk-in vs online ---
+    st.subheader("Walk-in and online customers")
+    ch, ch_ly = cg.by(now, "Sales Channel"), cg.by(then, "Sales Channel")
+    ch_colours = {cg.WALK_IN: theme.CATEGORICAL[2], cg.ONLINE_CH: theme.CATEGORICAL[3], "Other": theme.OTHER}
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        theme.show(_share_bars(ch["Customer Share %"], ch_ly["Customer Share %"], "Share of customers",
+                               ch_colours))
+    with c2, st.container(border=True):
+        theme.show(_share_bars(ch["Revenue Share %"], ch_ly["Revenue Share %"], "Share of revenue",
+                               ch_colours))
+    per_loc = now[(now["Revenue"] > 0) & now["Key"].notna()].pivot_table(
+        index="Location", columns="Sales Channel", values="Key", aggfunc="nunique", fill_value=0)
+    per_loc_ly = then[(then["Revenue"] > 0) & then["Key"].notna()].pivot_table(
+        index="Location", columns="Sales Channel", values="Key", aggfunc="nunique", fill_value=0)
+    per_loc = per_loc.reindex(columns=[cg.WALK_IN, cg.ONLINE_CH], fill_value=0)
+    per_loc_ly = per_loc_ly.reindex(columns=[cg.WALK_IN, cg.ONLINE_CH], fill_value=0)
+    loc = pd.DataFrame({"Walk-in Customers": per_loc[cg.WALK_IN],
+                        "Online Customers": per_loc[cg.ONLINE_CH]})
+    loc["Online Share %"] = (loc["Online Customers"]
+                             / (loc["Walk-in Customers"] + loc["Online Customers"]).where(lambda v: v > 0) * 100)
+    ly_share = (per_loc_ly[cg.ONLINE_CH]
+                / (per_loc_ly[cg.WALK_IN] + per_loc_ly[cg.ONLINE_CH]).where(lambda v: v > 0) * 100)
+    loc["Online Share % (LY)"] = ly_share.reindex(loc.index)
+    loc["Change (pts)"] = loc["Online Share %"] - loc["Online Share % (LY)"]
+    loc["Walk-in Revenue per Customer"] = (now[(now["Sales Channel"] == cg.WALK_IN) & now["Key"].notna()]
+                                           .groupby("Location")["Revenue"].sum() / loc["Walk-in Customers"]
+                                           .where(loc["Walk-in Customers"] > 0))
+    loc["Online Revenue per Customer"] = (now[(now["Sales Channel"] == cg.ONLINE_CH) & now["Key"].notna()]
+                                          .groupby("Location")["Revenue"].sum() / loc["Online Customers"]
+                                          .where(loc["Online Customers"] > 0))
+    grid.filterable_table(
+        loc.reset_index(names="Location").sort_values("Online Share %", ascending=False).round(1),
+        currency_columns=("Walk-in Revenue per Customer", "Online Revenue per Customer"),
+        pinned_columns=("Location",), height=min(560, 32 * len(loc) + 120))
+    if ch_ly["Customer Share %"].get("Other", 0) > 50:
+        st.info("Last year's orders mostly carry no walk-in or online type: the till only started "
+                "recording it in January 2026 (every order since February). The last-year bars and "
+                "Online Share % (LY) fill in once the comparison period is from February 2026 on.",
+                icon="ℹ️")
+    st.caption("Activation customers are counted as walk-ins: they came to the stand where the "
+               "activation was held. Online is the order's customer type, wherever it was rung up. "
+               "Other is staff purchases and orders with no customer type.")
+
+
+SECTIONS = ["Overview", "Older shops", "Customer behaviour"]
 section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0], key="growth_section",
                                label_visibility="collapsed") or SECTIONS[0]
 with st.spinner("Reading this period and the same period last year…"):
@@ -411,5 +659,7 @@ if not report["kenya"][0]["Revenue"]:
     st.info("No sales in Kenya in this period.")
 elif section == "Overview":
     render_overview(report, start_date, end_date)
-else:
+elif section == "Older shops":
     render_older_shops(report, start_date, end_date)
+else:
+    render_behaviour(report, start_date, end_date)

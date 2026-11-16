@@ -5331,7 +5331,11 @@ SELECT
              ELSE 0 END)                                            AS "Revenue",
     SUM(CASE WHEN (COALESCE(pc.name, '') ILIKE 'Bags%' OR pt.name ILIKE '%Gift Bag%')
               AND NOT COALESCE(pol.is_combo_line, FALSE) AND NOT COALESCE(pt.is_combo, FALSE)
-             THEN pol.qty ELSE 0 END)                               AS "Bags"
+             THEN pol.qty ELSE 0 END)                               AS "Bags",
+    -- every item sold, fees and combo containers aside: bulk orders are told apart by it
+    SUM(CASE WHEN pt.name NOT ILIKE '%Delivery Fee%' AND pt.name NOT ILIKE '%Customization Fee%'
+              AND NOT COALESCE(pt.is_combo, FALSE)
+             THEN pol.qty ELSE 0 END)                               AS "Units"
 FROM pos_order po
 JOIN pos_order_line            pol   ON pol.order_id = po.id
 JOIN product_product           pp    ON pp.id = pol.product_id
