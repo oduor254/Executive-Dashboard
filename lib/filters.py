@@ -91,8 +91,10 @@ def resolve_range(key_prefix: str, default: str = "Today") -> tuple[date, date]:
     return picked, picked
 
 
-def date_range_control(key_prefix: str, default: str = "Today") -> tuple[date, date]:
-    """Render the PERIOD dropdown (+ a custom picker when 'Custom' is chosen).
+def date_range_control(key_prefix: str, default: str = "Today",
+                       compare: bool = True) -> tuple[date, date]:
+    """Render the PERIOD dropdown (+ a custom picker when 'Custom' is chosen),
+    and the COMPARE WITH picker beside it unless `compare` is False.
 
     Returns (start_date, end_date) for the caller to bind into a query.
     """
@@ -126,8 +128,9 @@ def date_range_control(key_prefix: str, default: str = "Today") -> tuple[date, d
                 picked = (picked, picked)
             elif len(picked) == 1:
                 picked = (picked[0], picked[0])
-    with col_compare:
-        _compare_control(key_prefix, *picked)
+    if compare:
+        with col_compare:
+            _compare_control(key_prefix, *picked)
     return picked
 
 
