@@ -11,7 +11,7 @@ import streamlit as st
 from lib import ui
 
 PRESETS = ["Today", "Yesterday", "Last 7 Days", "This Week", "Last Week", "Last 30 Days",
-           "Month to Date",
+           "Month to Date", "Year to Date",
            "Custom"]
 
 _PERIOD_CSS = f"""
@@ -65,6 +65,8 @@ def _preset_range(preset: str, today: date) -> tuple[date, date]:
         return today - timedelta(days=29), today
     if preset == "Month to Date":
         return today.replace(day=1), today
+    if preset == "Year to Date":
+        return today.replace(month=1, day=1), today
     return today, today  # "Today" and the "Custom" pre-selection default
 
 
@@ -151,6 +153,8 @@ def _unit(start: date, end: date) -> str:
         return "week"
     if start.day == 1 and end.month == start.month and end.year == start.year:
         return "month"
+    if (start.month, start.day) == (1, 1) and end.year == start.year:
+        return "year"
     return "span"
 
 
@@ -164,12 +168,20 @@ def _months_back(start: date, end: date, months: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, last if whole else min(end.day, last))
 
 
+def _years_back(start: date, end: date, years: int) -> tuple[date, date]:
+    """The same dates of an earlier year (29 Feb becomes 28 Feb)."""
+    back = lambda d: d.replace(year=d.year - years, day=min(d.day, calendar.monthrange(d.year - years, d.month)[1]))
+    return back(start), back(end)
+
+
 def earlier(start: date, end: date, steps: int) -> tuple[date, date]:
     """The period `steps` before the selected one: days back for a day, weeks
     for a week (so weekdays line up), months for a month."""
     unit = _unit(start, end)
     if unit == "month":
         return _months_back(start, end, steps)
+    if unit == "year":
+        return _years_back(start, end, steps)
     back = timedelta(days=steps * (7 if unit == "week" else (end - start).days + 1))
     return start - back, end - back
 
@@ -179,6 +191,8 @@ def last_year(start: date, end: date) -> tuple[date, date]:
     52 weeks back so a Sunday-to-Saturday week stays one."""
     if _unit(start, end) == "month":
         return _months_back(start, end, 12)
+    if _unit(start, end) == "year":
+        return _years_back(start, end, 1)
     return start - timedelta(weeks=52), end - timedelta(weeks=52)
 
 
@@ -192,7 +206,7 @@ def _compare_control(key_prefix: str, start: date, end: date) -> None:
     """The COMPARE WITH picker. What was picked is left in session state for
     comparisons() to read, so date_range_control keeps returning the period."""
     unit = _unit(start, end)
-    noun = {"day": "day", "week": "week", "month": "month"}.get(unit, "period")
+    noun = {"day": "day", "week": "week", "month": "month", "year": "year"}.get(unit, "period")
     names = {"prev1": f"Previous {noun}", "prev2": f"2 {noun}s ago", "prev3": f"3 {noun}s ago",
              "year": f"Same {noun} last year", _CUSTOM: "Custom range"}
     st.markdown('<div class="denri-period-wrap">', unsafe_allow_html=True)
@@ -290,4 +304,7 @@ if __name__ == "__main__":   # python -m lib.filters
     assert week == (d(2025, 11, 9), d(2025, 11, 15)) and week[0].weekday() == 6
     assert _change(110, 100, "") == "▲ +10.0%" and _change(40.0, 42.5, "%") == "▼ -2.5 pts"
     assert _change(5, 0, "") == "▲ n/a" and _change(None, 3, "") == "—"
+    assert _preset_range("Year to Date", d(2026, 11, 16)) == (d(2026, 1, 1), d(2026, 11, 16))
+    assert earlier(d(2026, 1, 1), d(2026, 11, 16), 1) == (d(2025, 1, 1), d(2025, 11, 16))
+    assert last_year(d(2026, 1, 1), d(2026, 11, 16)) == (d(2025, 1, 1), d(2025, 11, 16))
     print("filters ok")
