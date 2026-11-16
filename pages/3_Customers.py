@@ -502,6 +502,20 @@ def render_all_customers(start_date: date, end_date: date) -> None:
 SECTIONS = ["🧑 Customers", "🏢 Corporate", "👥 All Customers"]
 section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0], key="customers_section",
                                label_visibility="collapsed") or SECTIONS[0]
+
+
+def _headline(start: date, end: date) -> dict:
+    """The Customers section's headline tiles for any period."""
+    df = db.run_query(queries.CUSTOMER_SALES, {"start_date": start, "end_date": end})
+    revenue = df["Total"].sum() if not df.empty else 0
+    customers = df.loc[df["Phone"] != "N/A", "Phone"].nunique() if not df.empty else 0
+    return {"Revenue": revenue, "Unique Customers": customers,
+            "Avg Spend / Customer": revenue / customers if customers else None}
+
+
+filters.comparison("customers", start_date, end_date, _headline,
+                   {"Revenue": "KES", "Avg Spend / Customer": "KES"},
+                   note="Shop customers, as on the Customers section")
 if section == "🏢 Corporate":
     render_corporate(start_date, end_date)
 elif section == "👥 All Customers":

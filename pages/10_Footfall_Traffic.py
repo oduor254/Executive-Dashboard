@@ -277,4 +277,20 @@ def render_footfall(start_date: date, end_date: date) -> None:
             currency_columns=("Revenue",), pinned_columns=("Location",), height=460)
 
 
+
+def _headline(start: date, end: date) -> dict:
+    """The walk-in funnel for any period, on counted days, every shop."""
+    df = footfall.daily(start, end)[0]
+    counted = df[df["Visitors"].notna()] if not df.empty else df
+    walkins = counted["Visitors"].sum() if not counted.empty else 0
+    bought = counted["Walk-in Orders"].sum() if not counted.empty else 0
+    return {"Walk-ins Counted": walkins, "Purchased Walk-ins": bought,
+            "Didn't Buy": counted["Didn't Buy"].sum() if not counted.empty else 0,
+            "Walk-in Conversion": bought / walkins * 100 if walkins else None,
+            "Revenue per Walk-in": counted["Walk-in Revenue"].sum() / walkins if walkins else None}
+
+
+filters.comparison("footfall", start_date, end_date, _headline,
+                   {"Walk-in Conversion": "%", "Revenue per Walk-in": "KES"},
+                   note="All shops, whatever location is picked below")
 render_footfall(start_date, end_date)

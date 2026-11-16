@@ -1814,4 +1814,23 @@ def _score_cards(start_date: date, end_date: date, location: str, person: str) -
         _attendant_view(inputs, w, location, person, role=weighted_scores.ATTENDANT)
 
 
+
+def _headline(start: date, end: date) -> dict:
+    """The page's headline tiles for any period, every location and person."""
+    df = db.run_query(queries.SHOP_ATTENDANT_SESSIONS, {"start_date": start, "end_date": end})
+    if df.empty:
+        return {"Sales Made": 0, "POS Sessions": 0, "Attendants & BAs": 0,
+                "Avg Revenue per Attendant per Day": None}
+    df = df.assign(**{"Served By": _served_by(df)})
+    staffed = df[(df["Served By"] != NOT_RECORDED) & (df["Brand Ambassador (BA)"] == "")]
+    days = len(staffed.assign(Day=pd.to_datetime(staffed["Date"]).dt.date)
+               [["Served By", "Day"]].drop_duplicates())
+    return {"Sales Made": df["Sales Made"].sum(), "POS Sessions": df["Session"].nunique(),
+            "Attendants & BAs": len(set(df["Served By"]) - {NOT_RECORDED}),
+            "Avg Revenue per Attendant per Day": staffed["Sales Made"].sum() / days if days else None}
+
+
+filters.comparison("attendants", start_date, end_date, _headline,
+                   {"Sales Made": "KES", "Avg Revenue per Attendant per Day": "KES"},
+                   note="All locations and people, whatever is picked below")
 render_attendants(start_date, end_date)

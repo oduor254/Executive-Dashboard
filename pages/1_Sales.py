@@ -245,4 +245,20 @@ def render_sales(start_date: date, end_date: date) -> None:
         grid.filterable_table(df, currency_columns=("Revenue", "Target"))
 
 
+
+def _headline(start: date, end: date) -> dict:
+    """The page's headline tiles for any period (the corporate row added in,
+    as render_sales does)."""
+    params = {"start_date": start, "end_date": end}
+    df = db.run_query(queries.SALES_PERFORMANCE_BY_BRANCH, params)
+    total = df[df["Branch"] == "GRAND TOTAL"].sum(numeric_only=True)
+    corp = db.run_query(queries.CORPORATE_TOTALS, params).iloc[0]
+    return {"Revenue": total.get("Revenue", 0) + float(corp["Revenue"]),
+            "Orders": total.get("Orders", 0) + int(corp["Payments"]),
+            "Units Sold": total.get("Qty", 0) + float(corp["Qty"]),
+            "Corporate Revenue": float(corp["Revenue"])}
+
+
+filters.comparison("sales", start_date, end_date, _headline,
+                   {"Revenue": "KES", "Corporate Revenue": "KES"})
 render_sales(start_date, end_date)

@@ -1065,4 +1065,23 @@ RENDERERS = {
     "New Products": render_new_products,
     "Corporate": render_corporate,
 }
+
+
+def _headline(start: date, end: date) -> dict:
+    """Bags sold and sales value for any period, across every shop."""
+    params = {"start_date": start, "end_date": end}
+    bags = db.run_query(queries.BAGS_SOLD_BY_CATEGORY, params)
+    bags = bags[bags["sort_priority"] == 0] if not bags.empty else bags
+    sold = bags[bags["TOTAL"] != 0] if not bags.empty else bags
+    value = db.run_query(queries.PRODUCT_SALES_VALUE_BY_SHOP, params)
+    totals = value[value["PRODUCT"].isin(["MASTERFILE TOTAL", "NON-MASTERFILE TOTAL"])] \
+        if not value.empty else value
+    return {"Total Bags Sold": sold["TOTAL"].sum() if not sold.empty else 0,
+            "Bag Styles Sold": len(sold),
+            "Categories Sold": sold["Category"].nunique() if not sold.empty else 0,
+            "Total Sales Value": totals["ACTUAL SALES"].sum() if not totals.empty else 0}
+
+
+filters.comparison("products", start_date, end_date, _headline, {"Total Sales Value": "KES"},
+                   note="All shops together, whichever section is open")
 RENDERERS[section](start_date, end_date)

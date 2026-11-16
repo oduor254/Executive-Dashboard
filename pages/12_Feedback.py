@@ -214,5 +214,18 @@ def render_targets(df: pd.DataFrame, start_date: date, end_date: date, location:
         "no location recorded has no customers to set it against.")
 
 
+def _headline(start: date, end: date) -> dict:
+    """The headline tiles for any period, at the location picked above."""
+    df = db.run_query(queries.CRM_FEEDBACK, {"start_date": start, "end_date": end})
+    if location != "All Locations":
+        df = df[df["Location"] == location]
+    return {"Total Feedbacks": len(df), "Complaints": (df["Type"] == "Complaint").sum(),
+            "Appraisals": (df["Type"] == "Appraisal").sum(),
+            "Avg. Rating": df["Rating"].mean() if len(df) else None,
+            "Avg. Staff Rating": df["Staff Rating"].mean() if len(df) else None}
+
+
+filters.comparison("feedback", start_date, end_date, _headline,
+                   {"Avg. Rating": "decimal", "Avg. Staff Rating": "decimal"})
 render_feedback(feedback, start_date, end_date, location)
 render_targets(feedback, start_date, end_date, location)

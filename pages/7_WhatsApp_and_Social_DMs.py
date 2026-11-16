@@ -1440,6 +1440,23 @@ def render_hybrid(start_date: date, end_date: date) -> None:
     st.caption(f"Last updated {datetime.now().strftime('%H:%M:%S')}")
 
 
+def _headline(start: date, end: date) -> dict:
+    """Chats, DMs and leads with their conversions, for any period."""
+    params = {"start_date": start, "end_date": end}
+    out = {}
+    for name, query in (("WhatsApp Chats", queries.WA_INTERACTIONS),
+                        ("Social DMs", queries.SOCIAL_DMS), ("Leads", queries.WALKIN_LEADS)):
+        df = db.run_query(query, params)
+        won = int(df["Converted"].sum()) if not df.empty else 0
+        out[name] = len(df)
+        out[f"{name} Converted"] = won
+        out[f"{name} Conversion %"] = won / len(df) * 100 if len(df) else None
+    return out
+
+
+filters.comparison("engagement", start_date, end_date, _headline,
+                   {f"{n} Conversion %": "%" for n in ("WhatsApp Chats", "Social DMs", "Leads")},
+                   note="All branches, whichever app is open")
 app_view = _section(["💬 WhatsApp Monitor", "📱 Social DMs", "🚶 Leads", "📭 Out of Stock",
                      "🔀 Hybrid Conversion", "♻️ Lead Recycling"], "engagement_app")
 if app_view == "💬 WhatsApp Monitor":
