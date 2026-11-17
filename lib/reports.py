@@ -722,10 +722,11 @@ def _fetch(p: Period) -> dict:
         return run
 
     def responses():
-        try:
-            return feedback.load()
-        except feedback.FeedbackUnavailable:
-            return None
+        # From the CRM's Feedback (the Feedback page's data), since the forms moved into Odoo.
+        r = db.run_query(queries.REPORT_FEEDBACK, {"start_date": p.prev_start, "end_date": p.end})
+        r["Submitted"] = pd.to_datetime(r["Submitted"])
+        r["Form"] = r["Form Kind"].map({"shop": feedback.RATED_FORM}).fillna("Other forms")
+        return r
 
     jobs = {
         **{f"orders {i}": (lambda s=s, e=e: _orders(s, e)) for i, (_, s, e) in enumerate(spans)},

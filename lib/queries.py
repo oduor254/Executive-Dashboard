@@ -5783,3 +5783,19 @@ WHERE (f.submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE
       BETWEEN :start_date AND :end_date
 ORDER BY f.submitted_at DESC
 """
+
+# The same feedback shaped as the Reports page reads it (it used to read the
+# Google Sheet): Experience is the overall rating, Assistance the staff rating
+# (0 = not rated), Source the Walk-In / Online answer on the form, and Form the
+# main shop form or another one (inquiry, Tanzania, Uganda).
+REPORT_FEEDBACK = r"""
+SELECT (f.submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi') AS "Submitted",
+       COALESCE(b.name, '') AS "Branch",
+       NULLIF(f.rating, 0) AS "Experience", NULLIF(f.rating_staff, 0) AS "Assistance",
+       SUBSTRING(f.answers FROM '(?m)^Source:\s*(.+)$') AS "Source",
+       COALESCE(f.form_kind, '') AS "Form Kind"
+FROM denri_crm_feedback f
+LEFT JOIN denri_crm_branch b ON b.id = f.branch_id
+WHERE (f.submitted_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Nairobi')::DATE
+      BETWEEN :start_date AND :end_date
+"""
