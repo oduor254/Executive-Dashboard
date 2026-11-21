@@ -3,6 +3,8 @@ carrying the business? Older shops against the same period last year, new and
 returning customers, Kenya only (lib/customer_growth.py)."""
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -28,7 +30,7 @@ if not connected:
 
 col_picker, col_refresh = st.columns([3, 1])
 with col_picker:
-    start_date, end_date = filters.date_range_control("growth", default="Month to Date", compare=False)
+    start_date, end_date = filters.date_range_control("growth", default="Year to Date", compare=False)
 with col_refresh:
     db.refresh_button(key="growth_refresh")
 
@@ -460,14 +462,12 @@ def _buckets(values: pd.Series, edges: list, labels: list) -> pd.Series:
     return b.value_counts(normalize=True).reindex(labels).fillna(0) * 100
 
 
-@st.fragment()
-def render_behaviour(r: dict, start_date, end_date) -> None:
-    ly_start, ly_end = r["last_year"]
-    scope = st.segmented_control("Customers of", ["All Kenya", "Older locations", "New shops"],
-                                 default="All Kenya", key="growth_behaviour_scope") or "All Kenya"
-    group = {"Older locations": cg.OLDER, "New shops": cg.NEW_SHOP}.get(scope)
+def _behaviour_data(r: dict, start_date, group: str | None):
+    """Ordinary-customer orders (bulk and corporate left out) for the period and
+    last year, the bulk and corporate orders, and the month before each period."""
+    ly_start = r["last_year"][0]
 
-    def prepare(df, s, e):
+    def prepare(df, s):
         before_start = (s.replace(day=1) - pd.Timedelta(days=1)).replace(day=1)
         before = cg._orders(before_start, s - pd.Timedelta(days=1), ly_start)
         if group:
@@ -477,8 +477,16 @@ def render_behaviour(r: dict, start_date, end_date) -> None:
         kept, out = cg.split_bulk(df)
         return kept, out, cg.split_bulk(before)[0]
 
-    now, now_out, now_before = prepare(r["orders"][0], start_date, end_date)
-    then, then_out, then_before = prepare(r["orders"][1], ly_start, ly_end)
+    return (*prepare(r["orders"][0], start_date), *prepare(r["orders"][1], ly_start))
+
+
+@st.fragment()
+def render_behaviour(r: dict, start_date, end_date) -> None:
+    ly_start, ly_end = r["last_year"]
+    scope = st.segmented_control("Customers of", ["All Kenya", "Older locations", "New shops"],
+                                 default="All Kenya", key="growth_behaviour_scope") or "All Kenya"
+    group = {"Older locations": cg.OLDER, "New shops": cg.NEW_SHOP}.get(scope)
+    now, now_out, now_before, then, then_out, then_before = _behaviour_data(r, start_date, group)
     if now.empty:
         st.info("No customer sales here in this period.")
         return
@@ -650,7 +658,274 @@ def render_behaviour(r: dict, start_date, end_date) -> None:
                "Other is staff purchases and orders with no customer type.")
 
 
-SECTIONS = ["Overview", "Older shops", "Customer behaviour"]
+VERDICT_COLOUR = {"Success": "green", "On track": "blue", "Watch": "orange", "Struggling": "red",
+                  "Too early": "gray"}
+
+
+def _new_shop_data(r: dict, start_date, end_date) -> dict:
+    """Each new shop's figures, its monthly pace, where its customers first
+    bought, and the older shops' pace to judge it against."""
+    shops = r["shops"]
+    new = shops[shops["Group"] == cg.NEW_SHOP].copy()
+    old = shops[shops["Group"] == cg.OLDER]
+    orders = r["orders"][0]
+    period_days = (end_date - start_date).days + 1
+    benchmark = (old["Revenue"] / period_days).median() if len(old) else 0
+    new["Days Open"] = [(end_date - max(start_date, o)).days + 1 if pd.notna(o) else period_days
+                        for o in new["Opened"]]
+    new["Revenue per Day"] = new["Revenue"] / new["Days Open"]
+
+    sales = orders[orders["Group"] == cg.NEW_SHOP].assign(Month=lambda t: pd.to_datetime(t["Date"]).dt.to_period("M"))
+    monthly = sales.groupby(["Location", "Month"])["Revenue"].sum().reset_index()
+    opened = dict(zip(new["Location"], new["Opened"]))
+
+    def open_days(row):
+        first = max(row["Month"].start_time.date(), opened.get(row["Location"]) or start_date, start_date)
+        last = min(row["Month"].end_time.date(), end_date)
+        return max((last - first).days + 1, 1)
+    monthly["Revenue per Day"] = monthly["Revenue"] / monthly.apply(open_days, axis=1)
+
+    def trend(loc):
+        m = monthly[monthly["Location"] == loc].sort_values("Month")["Revenue per Day"]
+        if len(m) < 4:
+            return None
+        recent, before = m.iloc[-3:].mean(), m.iloc[-6:-3].mean()
+        return (recent - before) / before * 100 if before else None
+    new["Trend %"] = new["Location"].map(trend)
+
+    people = cg.came_from(orders)
+    people["New to Denri"] = people["First Bought At"] == people["Location"]
+    new["New to Denri %"] = new["Location"].map(people.groupby("Location")["New to Denri"].mean() * 100).fillna(0)
+    moved = people[~people["New to Denri"]]
+    top = moved.groupby(["Location", "First Bought At"]).size().reset_index(name="n") \
+        .sort_values("n", ascending=False).drop_duplicates("Location").set_index("Location")
+    new["Main Source Shop"] = new["Location"].map(top["First Bought At"])
+    new["From Main Source"] = new["Location"].map(top["n"]).fillna(0)
+    # revenue from customers who had first bought at another Denri location
+    keyed = sales.merge(people[["Location", "Key", "New to Denri"]], on=["Location", "Key"], how="left")
+    new["Revenue from Existing Customers"] = new["Location"].map(
+        keyed[keyed["New to Denri"].eq(False)].groupby("Location")["Revenue"].sum()).fillna(0)
+    new[["Verdict", "Why"]] = [
+        cg.verdict(rpd, benchmark, tr if pd.notna(tr) else None, nd, days)
+        for rpd, tr, nd, days in zip(new["Revenue per Day"], new["Trend %"], new["New to Denri %"],
+                                     [(end_date - o).days + 1 if pd.notna(o) else 999 for o in new["Opened"]])]
+    return {"new": new.sort_values("Revenue", ascending=False), "monthly": monthly, "people": people,
+            "benchmark": benchmark}
+
+
+@st.fragment()
+def render_new_shops(r: dict, start_date, end_date) -> None:
+    with st.spinner("Tracing where the new shops' customers first bought…"):
+        d = _new_shop_data(r, start_date, end_date)
+    new, monthly, benchmark = d["new"], d["monthly"], d["benchmark"]
+    if new.empty:
+        st.info("No shop has opened since last year's period.")
+        return
+    kenya = r["kenya"][0]
+    st.caption(f"The {len(new)} shops opened since {r['last_year'][0]:%d %b %Y}, "
+               f"{start_date:%d %b %Y} – {end_date:%d %b %Y}. Each is judged against an older "
+               f"shop's typical pace: **{_money(benchmark)} a day** (the median older shop).")
+
+    existing = new["Revenue from Existing Customers"].sum()
+    row = st.columns(4)
+    for col, (label, value, note) in zip(row, [
+        ("New shops, revenue", _money(new["Revenue"].sum()),
+         f"{new['Revenue'].sum() / kenya['Revenue'] * 100:.1f}% of Kenya revenue"),
+        ("Customers", f"{new['Customers'].sum():,.0f}", f"{new['New Customers'].sum():,.0f} first-time Denri buyers"),
+        ("New to Denri", f"{(d['people']['New to Denri']).mean() * 100:.0f}%",
+         "of their customers first bought there"),
+        ("From existing customers", _money(existing),
+         f"{existing / new['Revenue'].sum() * 100:.0f}% of their revenue, people who first bought elsewhere"),
+    ]):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+
+    # ---------------------------------------------------- story per shop ---
+    st.subheader("Each new shop's story")
+    for pair in [new.iloc[i:i + 2] for i in range(0, len(new), 2)]:
+        for col, (_, x) in zip(st.columns(2), pair.iterrows()):
+            with col.container(border=True):
+                colour = VERDICT_COLOUR[x["Verdict"]]
+                st.markdown(f"#### {x['Location']} &nbsp; :{colour}-badge[{x['Verdict']}]")
+                pace = x["Revenue per Day"] / benchmark * 100 if benchmark else 0
+                story = [f"Opened **{x['Opened']:%d %b %Y}**; **{_money(x['Revenue'])}** from "
+                         f"{x['Customers']:,.0f} customers in {x['Days Open']:,} days open this period."]
+                story.append(f"Sells **{_money(x['Revenue per Day'])} a day**, {pace:.0f}% of an older shop's pace.")
+                if pd.notna(x["Trend %"]):
+                    story.append(f"Last 3 months' daily sales are **{x['Trend %']:+.0f}%** on the 3 before.")
+                story.append(f"**{x['New to Denri %']:.0f}%** of its customers are new to Denri"
+                             + (f"; the rest mostly first bought at **{x['Main Source Shop']}** "
+                                f"({x['From Main Source']:,.0f} people)." if pd.notna(x["Main Source Shop"]) else "."))
+                story.append(f"_Verdict: {x['Why']}._")
+                st.markdown("\n".join(f"- {t}" for t in story))
+                m = monthly[monthly["Location"] == x["Location"]].sort_values("Month")
+                if len(m) > 1:
+                    fig = go.Figure()
+                    fig.add_scatter(x=m["Month"].dt.to_timestamp(), y=m["Revenue per Day"], mode="lines+markers",
+                                    line=dict(color=theme.CATEGORICAL[0], width=2.5), name=x["Location"],
+                                    hovertemplate="%{x|%b %Y}: <b>KSh %{y:,.0f}</b> a day<extra></extra>")
+                    fig.add_hline(y=benchmark, line_dash="dot", line_color=theme.OTHER,
+                                  annotation_text="older-shop pace", annotation_position="top left",
+                                  annotation_font=dict(size=11, color=theme.TEXT_SECONDARY))
+                    theme.apply_layout(fig, show_legend=False)
+                    fig.update_layout(height=200, margin=dict(t=10, b=10), hovermode="closest")
+                    fig.update_yaxes(tickprefix="KSh ", rangemode="tozero")
+                    fig.update_xaxes(tickformat="%b")
+                    theme.show(fig, key=f"ns_trend_{x['Location']}")
+
+    # ---------------------------------------------- where customers came from ---
+    st.subheader("Where the new shops' customers first bought")
+    people = d["people"]
+    src = people.assign(Source=lambda t: t["First Bought At"].where(~t["New to Denri"], "New to Denri"))
+    top_src = src.loc[src["Source"] != "New to Denri", "Source"].value_counts().head(5).index
+    src["Source"] = src["Source"].where(src["Source"].isin(list(top_src) + ["New to Denri"]), "Other Denri shops")
+    shares = (src.groupby(["Location", "Source"]).size() / src.groupby("Location").size() * 100).unstack(fill_value=0)
+    order = ["New to Denri"] + [c for c in shares.columns if c not in ("New to Denri", "Other Denri shops")] \
+        + (["Other Denri shops"] if "Other Denri shops" in shares.columns else [])
+    fig = go.Figure()
+    for i, name in enumerate(order):
+        colour = GREEN if name == "New to Denri" else theme.OTHER if name == "Other Denri shops" \
+            else theme.CATEGORICAL[(i + 1) % len(theme.CATEGORICAL)]
+        fig.add_bar(y=shares.index, x=shares[name], orientation="h", name=name, marker=dict(color=colour),
+                    text=[f"{v:.0f}%" if v >= 7 else "" for v in shares[name]], textposition="inside",
+                    insidetextanchor="middle", textfont=dict(color="#ffffff"),
+                    hovertemplate=f"%{{y}}: <b>%{{x:.1f}}%</b> {name}<extra></extra>")
+    theme.apply_layout(fig, show_legend=True)
+    fig.update_layout(title="Each new shop's customers by where they first bought", barmode="stack",
+                      height=max(260, 46 * len(shares) + 120), hovermode="closest")
+    fig.update_xaxes(range=[0, 100], ticksuffix="%")
+    with st.container(border=True):
+        theme.show(fig)
+
+    st.subheader("Every figure, every new shop")
+    grid.filterable_table(
+        new[["Location", "Verdict", "Opened", "Days Open", "Revenue", "Revenue per Day", "Trend %",
+             "Orders", "Customers", "New Customers", "Returning Customers", "New to Denri %",
+             "Main Source Shop", "Revenue from Existing Customers"]].round(1),
+        currency_columns=("Revenue", "Revenue per Day", "Revenue from Existing Customers"),
+        pinned_columns=("Location",), height=min(420, 40 * len(new) + 120))
+    st.caption("**Revenue per day** counts only the days a shop was open in the period. **Trend %**: "
+               "the last 3 months' daily sales against the 3 before (shown once a shop has 4 months). "
+               "**New to Denri**: the customer's first Denri purchase was at this shop. Verdicts: "
+               "Success = at least 80% of an older shop's daily pace, not falling, mostly new buyers; "
+               "Struggling = under 40% of that pace or down 25%+; Watch = most customers came from other "
+               "Denri shops; Too early = open under 45 days.")
+
+
+def _analysis_text(r: dict, start_date, end_date) -> dict:
+    """The page's findings as plain sentences, conclusion first."""
+    older, older_ly = r["older"]
+    kenya, kenya_ly = r["kenya"]
+    new_shops = r["new_shops"][0]
+    months = max(((end_date - start_date).days + 1) / 30.44, 1 / 30.44)
+    gap = older["Revenue"] - older_ly["Revenue"]
+    gap_month = gap / months
+    lost_new = older_ly["New Customers"] - older["New Customers"]
+    lost_new_month = lost_new / months
+    spend = older["Avg Spend / Customer"] or 0
+    ret_change = older["Returning-Customer Revenue"] - older_ly["Returning-Customer Revenue"]
+    new_rev_month = (older["New-Customer Revenue"] - older_ly["New-Customer Revenue"]) / months
+
+    now, _, now_before, then, _, then_before = _behaviour_data(r, start_date, None)
+    b = cg.behaviour(now, now_before)
+    came_back = b["Came Back Next Month %"] or 0
+    monthly_buyers = b["Customers"] / months
+    rev_per_customer = b["Revenue per Customer"] or 0
+
+    nd = _new_shop_data(r, start_date, end_date)
+    new = nd["new"]
+    moved = new["Revenue from Existing Customers"].sum()
+    net_new = new_shops["Revenue"] - moved
+    cover = net_new / -gap * 100 if gap < 0 else None
+
+    year_end = date(end_date.year, 12, 31)
+    days_left = (year_end - end_date).days
+    projected = gap + gap / ((end_date - start_date).days + 1) * days_left
+
+    shops = r["shops"][r["shops"]["Group"] == cg.OLDER].assign(
+        Change=lambda t: t["Revenue"] - t["Revenue LY"]).sort_values("Change")
+    worst3 = shops.head(3)
+    struggling = new[new["Verdict"] == "Struggling"]["Location"].tolist()
+    winners = new[new["Verdict"] == "Success"]["Location"].tolist()
+
+    direction = "losing" if gap < 0 else "gaining"
+    headline = (f"Our older shops are {direction} {_money(abs(gap_month))} a month against last year, "
+                f"because {lost_new_month:,.0f} fewer first-time customers walk in every month. "
+                + (f"The new shops win back only {cover:.0f}% of that in genuinely new revenue."
+                   if cover is not None else "The new shops add on top of that."))
+    cost = [
+        ("Revenue gap, older shops", _money(abs(gap_month)) + " a month",
+         f"{_money(abs(gap))} {'below' if gap < 0 else 'above'} last year so far, {_money(abs(gap) / ((end_date - start_date).days + 1))} a day"),
+        ("First-time customers lost", f"{lost_new_month:,.0f} a month",
+         f"{lost_new:,.0f} so far, taking {_money(abs(new_rev_month))} a month of revenue with them"),
+        (f"Gap by 31 Dec if nothing changes", _money(abs(projected)),
+         f"{days_left} days left in {end_date.year}"),
+    ]
+    why = [
+        f"**It is a getting-customers problem, not a keeping-customers problem.** Returning customers at the "
+        f"older shops spent {_money(ret_change)} {'more' if ret_change >= 0 else 'less'} than last year; "
+        f"first-time customers fell {abs(lost_new) / older_ly['New Customers'] * 100:.0f}%.",
+        f"**We lose almost everyone after the first month.** Of every 100 customers, {came_back:.0f} buy again "
+        f"the next month. The other {100 - came_back:.0f} are gone until we win them again.",
+        f"**Price is not the issue.** Each customer at the older shops spends {_money(spend)}, "
+        f"{_pct(spend, older_ly['Avg Spend / Customer'] or 0) or 0:+.0f}% on last year. Fewer people are buying.",
+        f"**The new shops partly move sales instead of adding them.** {_money(moved)} of their "
+        f"{_money(new_shops['Revenue'])} came from people who first bought at another Denri location.",
+        "**The biggest holes**: " + ", ".join(f"{loc} ({_money(c)})" for loc, c in
+                                               zip(worst3["Location"], worst3["Change"])) + ".",
+    ]
+    if winners or struggling:
+        why.append(("**New shops working**: " + ", ".join(winners) + ". " if winners else "")
+                   + ("**New shops failing**: " + ", ".join(struggling) + "." if struggling else ""))
+    prize_acq = abs(min(new_rev_month, 0)) / 2
+    prize_ret = monthly_buyers * 0.02 * rev_per_customer
+    prize_worst = abs(worst3["Change"].clip(upper=0).sum()) / months / 2
+    actions = [
+        f"**Win back half the lost first-time buyers at the older shops** — "
+        f"{lost_new_month / 2:,.0f} more a month is worth **{_money(prize_acq)} a month**, half of what "
+        "losing them costs.",
+        f"**Bring 2 more of every 100 customers back the next month** "
+        f"(from {came_back:.0f} to {came_back + 2:.0f}) — worth **{_money(prize_ret)} a month**.",
+        f"**Fix {', '.join(worst3['Location'])} first** — halving their fall recovers "
+        f"**{_money(prize_worst)} a month**.",
+    ]
+    if struggling:
+        actions.append(f"**Decide on {', '.join(struggling)}**: "
+                       + ("it sells" if len(struggling) == 1 else "they sell")
+                       + " under 40% of an older shop's pace or is falling fast.".replace(
+                           "is falling", "is falling" if len(struggling) == 1 else "are falling"))
+    return {"headline": headline, "cost": cost, "why": why, "actions": actions,
+            "period": f"{start_date:%d %b %Y} – {end_date:%d %b %Y}"}
+
+
+def render_analysis(r: dict, start_date, end_date) -> None:
+    with st.spinner("Putting the analysis together…"):
+        a = _analysis_text(r, start_date, end_date)
+    with st.container(border=True):
+        st.caption(f"THE ANSWER · {a['period']} against the same days last year · Kenya")
+        st.markdown(f"## {a['headline']}")
+    st.markdown("#### What it costs us")
+    for col, (label, value, note) in zip(st.columns(len(a["cost"])), a["cost"]):
+        with col.container(border=True):
+            st.metric(label, value, note, delta_color="off")
+    c1, c2 = st.columns([3, 2])
+    with c1, st.container(border=True):
+        st.markdown("#### Why")
+        st.markdown("\n".join(f"- {w}" for w in a["why"]))
+    with c2, st.container(border=True):
+        st.markdown("#### What we do next")
+        st.markdown("\n".join(f"{i}. {t}" for i, t in enumerate(a["actions"], 1)))
+    text = "\n".join([f"CUSTOMER GROWTH — {a['period']}", "", a["headline"], "", "WHAT IT COSTS US"]
+                      + [f"- {l}: {v} ({n})" for l, v, n in a["cost"]] + ["", "WHY"]
+                      + [f"- {w}" for w in a["why"]] + ["", "WHAT WE DO NEXT"]
+                      + [f"{i}. {t}" for i, t in enumerate(a["actions"], 1)]).replace("**", "")
+    st.download_button("⬇️ Download the analysis (text)", text, file_name=f"customer_growth_{end_date}.txt",
+                       mime="text/plain", key="growth_analysis_download")
+    st.caption("Monthly figures are the period's totals spread evenly over its months. The year-end "
+               "gap assumes the same daily gap continues. Prizes assume today's spend per customer.")
+
+
+SECTIONS = ["Overview", "Older shops", "Customer behaviour", "New shops", "Analysis"]
 section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0], key="growth_section",
                                label_visibility="collapsed") or SECTIONS[0]
 with st.spinner("Reading this period and the same period last year…"):
@@ -661,5 +936,9 @@ elif section == "Overview":
     render_overview(report, start_date, end_date)
 elif section == "Older shops":
     render_older_shops(report, start_date, end_date)
-else:
+elif section == "Customer behaviour":
     render_behaviour(report, start_date, end_date)
+elif section == "New shops":
+    render_new_shops(report, start_date, end_date)
+else:
+    render_analysis(report, start_date, end_date)

@@ -269,3 +269,74 @@ def tenure(df: pd.DataFrame, start: date) -> pd.Series:
     keys = df.loc[(df["Revenue"] > 0) & (df["Kind"] == "Returning"), "Key"].unique()
     first = pd.Series(keys).map(customer_kind.first_purchases())
     return ((pd.Timestamp(start) - first).dt.days / 30.44).dropna()
+
+
+# ------------------------------------------------------------- new shops ---
+_LOCATION = OPENED.split("SELECT ", 1)[1].split(' AS "Location"')[0]
+_FROM = OPENED.split("FROM pos_order po", 1)[1].split("WHERE")[0]
+
+# Where each customer (phone, last nine digits) made their very first purchase.
+# Each customer record's first order is found first (materialized, or the
+# planner nests loops over every order), then the earliest per phone. Only the
+# phones asked about come back: the query takes seconds, sending every phone minutes.
+FIRST_SHOP = r"""
+WITH first_order AS MATERIALIZED (
+    SELECT DISTINCT ON (po.partner_id) po.partner_id, po.session_id, po.date_order
+    FROM pos_order po
+    WHERE po.state IN ('done', 'paid', 'invoiced') AND po.amount_total > 0 AND po.partner_id IS NOT NULL
+    ORDER BY po.partner_id, po.date_order
+), keyed AS MATERIALIZED (
+    SELECT RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9) AS key,
+           fo.session_id, fo.date_order
+    FROM first_order fo
+    JOIN res_partner rp ON rp.id = fo.partner_id
+)
+SELECT DISTINCT ON (po.key) po.key, """ + _LOCATION + r""" AS location
+FROM keyed po""" + _FROM + r"""
+WHERE po.key = ANY(:keys)
+ORDER BY po.key, po.date_order
+"""
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def first_shop(keys: tuple[str, ...]) -> pd.Series:
+    """Phone key -> the location of that customer's first Denri purchase."""
+    from lib import db
+    return db.run_query(FIRST_SHOP, {"keys": list(keys)}).set_index("key")["location"]
+
+
+def came_from(df: pd.DataFrame) -> pd.DataFrame:
+    """For each new shop, its period customers split by where they first bought:
+    the shop itself (new to Denri there) or an older location."""
+    sales = df[(df["Group"] == NEW_SHOP) & (df["Revenue"] > 0) & df["Key"].notna()]
+    people = sales[["Location", "Key"]].drop_duplicates()
+    first = first_shop(tuple(sorted(people["Key"].unique())))
+    people["First Bought At"] = people["Key"].map(first).fillna(people["Location"])
+    return people
+
+
+def verdict(rev_per_day: float, benchmark: float, trend: float | None, new_share: float,
+            days_open: int) -> tuple[str, str]:
+    """(Success / On track / Watch / Struggling / Too early, why) for a new shop."""
+    if days_open < 45:
+        return "Too early", f"open {days_open} days"
+    pace = rev_per_day / benchmark * 100 if benchmark else 0
+    if pace >= 80 and (trend is None or trend >= 0) and new_share >= 50:
+        return "Success", f"sells at {pace:.0f}% of an older shop's daily pace and mostly brings new buyers"
+    if pace < 40 or (trend is not None and trend <= -25):
+        return "Struggling", (f"sells at {pace:.0f}% of an older shop's daily pace"
+                              + (f", last 3 months {trend:+.0f}% on the 3 before" if trend is not None else ""))
+    if new_share < 50:
+        return "Watch", f"{100 - new_share:.0f}% of its customers already bought at another Denri shop"
+    return "On track", f"sells at {pace:.0f}% of an older shop's daily pace"
+
+
+if __name__ == "__main__":   # python -m lib.customer_growth
+    assert verdict(1, 1, None, 90, 10)[0] == "Too early"
+    assert verdict(90, 100, 5, 70, 200)[0] == "Success"
+    assert verdict(30, 100, 5, 70, 200)[0] == "Struggling"
+    assert verdict(70, 100, -30, 70, 200)[0] == "Struggling"
+    assert verdict(90, 100, 5, 30, 200)[0] == "Watch"
+    assert verdict(60, 100, 5, 70, 200)[0] == "On track"
+    assert "LEFT JOIN stock_location sl" in FIRST_SHOP and "FROM keyed po" in FIRST_SHOP
+    print("customer_growth ok")
