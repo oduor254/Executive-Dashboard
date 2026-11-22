@@ -740,6 +740,54 @@ def _pace_chart(m: pd.DataFrame, benchmark: float) -> go.Figure:
     return fig
 
 
+def _source_chart(people: pd.DataFrame) -> go.Figure:
+    """Two panels sharing the shops: how many customers are new to Denri, and
+    where the customers Denri already had first bought."""
+    from plotly.subplots import make_subplots
+    share_new = people.groupby("Location")["New to Denri"].mean().mul(100).sort_values()
+    existing = people[~people["New to Denri"]]
+    n_existing = existing.groupby("Location").size().reindex(share_new.index).fillna(0)
+    # the five biggest sources overall, plus each shop's own top two, so no shop is all "Other"
+    counts = existing["First Bought At"].value_counts()
+    own = existing.groupby("Location")["First Bought At"].agg(lambda v: v.value_counts().head(2).index.tolist())
+    keep = set(counts.head(5).index) | {x for xs in own for x in xs}
+    top = [x for x in counts.index if x in keep]
+    src = existing.assign(Source=existing["First Bought At"].where(existing["First Bought At"].isin(top),
+                                                                    "Other locations"))
+    mix = (src.groupby(["Location", "Source"]).size().unstack(fill_value=0)
+           .reindex(share_new.index).fillna(0))
+    mix = mix.div(mix.sum(axis=1).where(lambda v: v > 0), axis=0).mul(100).fillna(0)
+    labels = [f"<b>{loc}</b>  <span style='font-size:11px'>{int(n):,} existing</span>"
+              for loc, n in zip(share_new.index, n_existing)]
+
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.28, 0.72],
+                        horizontal_spacing=0.04,
+                        subplot_titles=("New to Denri", "Customers Denri already had: where they first bought"))
+    fig.add_bar(y=labels, x=share_new.values, orientation="h", row=1, col=1, showlegend=False,
+                marker=dict(color=GREEN, cornerradius=4), text=[f"{v:.0f}%" for v in share_new.values],
+                textposition="inside", insidetextanchor="end", textfont=dict(color="#ffffff", size=12),
+                hovertemplate="%{y}: <b>%{x:.1f}%</b> new to Denri<extra></extra>")
+    palette = [c for i, c in enumerate(theme.CATEGORICAL) if i != 1]   # 1 is the green of "new"
+    for i, name in enumerate(top + (["Other locations"] if "Other locations" in mix.columns else [])):
+        if name not in mix.columns:
+            continue
+        colour = theme.OTHER if name == "Other locations" else palette[i % len(palette)]
+        fig.add_bar(y=labels, x=mix[name], orientation="h", name=name, row=1, col=2,
+                    marker=dict(color=colour, line=dict(color=theme.CHART_SURFACE, width=1)),
+                    text=[f"{v:.0f}%" if v >= 8 else "" for v in mix[name]], textposition="inside",
+                    insidetextanchor="middle", textfont=dict(color="#ffffff", size=12),
+                    hovertemplate=f"%{{y}}<br>{name}: <b>%{{x:.1f}}%</b> of existing customers<extra></extra>")
+    theme.apply_layout(fig, show_legend=True)
+    fig.update_layout(title="Where each new shop's customers first bought", barmode="stack",
+                      height=max(320, 58 * len(labels) + 150), hovermode="closest", bargap=0.3,
+                      legend=dict(orientation="v", x=1.01, xanchor="left", y=1, yanchor="top", title=None))
+    fig.update_xaxes(range=[0, 100], ticksuffix="%", showgrid=False, row=1, col=1)
+    fig.update_xaxes(range=[0, 100], ticksuffix="%", showgrid=True, gridcolor=theme.GRIDLINE, row=1, col=2)
+    fig.update_yaxes(showgrid=False)
+    fig.update_annotations(font=dict(size=12, color=theme.TEXT_SECONDARY))
+    return fig
+
+
 @st.fragment()
 def render_new_shops(r: dict, start_date, end_date) -> None:
     with st.spinner("Tracing where the new shops' customers first bought…"):
@@ -793,26 +841,48 @@ def render_new_shops(r: dict, start_date, end_date) -> None:
     # ---------------------------------------------- where customers came from ---
     st.subheader("Where the new shops' customers first bought")
     people = d["people"]
-    src = people.assign(Source=lambda t: t["First Bought At"].where(~t["New to Denri"], "New to Denri"))
-    top_src = src.loc[src["Source"] != "New to Denri", "Source"].value_counts().head(5).index
-    src["Source"] = src["Source"].where(src["Source"].isin(list(top_src) + ["New to Denri"]), "Other Denri shops")
-    shares = (src.groupby(["Location", "Source"]).size() / src.groupby("Location").size() * 100).unstack(fill_value=0)
-    order = ["New to Denri"] + [c for c in shares.columns if c not in ("New to Denri", "Other Denri shops")] \
-        + (["Other Denri shops"] if "Other Denri shops" in shares.columns else [])
-    fig = go.Figure()
-    for i, name in enumerate(order):
-        colour = GREEN if name == "New to Denri" else theme.OTHER if name == "Other Denri shops" \
-            else theme.CATEGORICAL[(i + 1) % len(theme.CATEGORICAL)]
-        fig.add_bar(y=shares.index, x=shares[name], orientation="h", name=name, marker=dict(color=colour),
-                    text=[f"{v:.0f}%" if v >= 7 else "" for v in shares[name]], textposition="inside",
-                    insidetextanchor="middle", textfont=dict(color="#ffffff"),
-                    hovertemplate=f"%{{y}}: <b>%{{x:.1f}}%</b> {name}<extra></extra>")
-    theme.apply_layout(fig, show_legend=True)
-    fig.update_layout(title="Each new shop's customers by where they first bought", barmode="stack",
-                      height=max(260, 46 * len(shares) + 120), hovermode="closest")
-    fig.update_xaxes(range=[0, 100], ticksuffix="%")
     with st.container(border=True):
-        theme.show(fig)
+        theme.show(_source_chart(people), config={"displayModeBar": False})
+    st.caption("Left: the share of each new shop's customers whose first Denri purchase was at that shop. "
+               "Right: the rest — customers Denri already had — split by where they first bought, so the "
+               "sources can be compared shop by shop.")
+
+    # ------------------------- the full distribution of existing customers ---
+    existing = people[~people["New to Denri"]]
+    if not existing.empty:
+        st.markdown("**Existing customers by where they first bought** — each new shop's customers who "
+                    "had already bought at another Denri location")
+        counts = pd.crosstab(existing["Location"], existing["First Bought At"])
+        counts = counts[counts.sum().sort_values(ascending=False).index]
+        counts.insert(0, "Existing Customers", counts.sum(axis=1))
+        counts.insert(1, "Share of Shop's Customers %",
+                      (counts["Existing Customers"] / people.groupby("Location").size() * 100).round(1))
+        grid.filterable_table(counts.reset_index().rename(columns={"Location": "New Shop"}),
+                              pinned_columns=("New Shop",), height=min(320, 40 * len(counts) + 120))
+
+        groups = dict(zip(r["shops"]["Location"], r["shops"]["Group"]))
+        kind = people["First Bought At"].map(groups).map(
+            {cg.OLDER: "Older locations", cg.NEW_SHOP: "Another new shop", cg.ONLINE: "Jumia"}).fillna("Other (Sinza, Uganda, staff and stock tills)")
+        kind = kind.where(~people["New to Denri"], "New to Denri (first bought at this shop)")
+        overall = kind.value_counts().rename("Customers").to_frame()
+        overall["Share %"] = (overall["Customers"] / overall["Customers"].sum() * 100).round(1)
+        by_source = existing.assign(Group=existing["First Bought At"].map(groups)) \
+            .query("Group == @cg.OLDER")["First Bought At"].value_counts().rename("Customers").to_frame()
+        by_source["Share of Existing %"] = (by_source["Customers"] / len(existing) * 100).round(1)
+        by_source["Revenue at New Shops"] = existing.merge(
+            r["orders"][0].query("Group == @cg.NEW_SHOP")[["Location", "Key", "Revenue"]], on=["Location", "Key"]) \
+            .groupby("First Bought At")["Revenue"].sum().reindex(by_source.index).fillna(0).round(0)
+        c1, c2 = st.columns([2, 3])
+        with c1, st.container(border=True):
+            st.markdown("**All new shops together: new to Denri vs existing**")
+            st.dataframe(overall.reset_index(names="Where they first bought"), hide_index=True, width="stretch")
+        with c2, st.container(border=True):
+            st.markdown("**Which older locations they came from**")
+            grid.filterable_table(by_source.reset_index(names="Older Location"),
+                                  currency_columns=("Revenue at New Shops",), pinned_columns=("Older Location",),
+                                  height=min(420, 34 * len(by_source) + 120))
+        st.caption("A customer is counted once per new shop. **Revenue at New Shops** is what those "
+                   "customers spent at the new shops in the period — sales moved from that older location.")
 
     st.subheader("Every figure, every new shop")
     grid.filterable_table(
