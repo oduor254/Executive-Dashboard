@@ -851,8 +851,10 @@ def _analysis_text(r: dict, start_date, end_date) -> dict:
     direction = "losing" if gap < 0 else "gaining"
     headline = (f"Our older shops are {direction} {_money(abs(gap_month))} a month against last year, "
                 f"because {lost_new_month:,.0f} fewer first-time customers walk in every month. "
-                + (f"The new shops win back only {cover:.0f}% of that in genuinely new revenue."
-                   if cover is not None else "The new shops add on top of that."))
+                + ("The new shops add on top of that." if cover is None else
+                   f"The new shops win back only {cover:.0f}% of that in genuinely new revenue." if cover < 100 else
+                   f"The new shops cover it {cover / 100:.1f} times over with genuinely new revenue "
+                   f"({_money(net_new)}), so the older shops' decline is hidden, not solved."))
     cost = [
         ("Revenue gap, older shops", _money(abs(gap_month)) + " a month",
          f"{_money(abs(gap))} {'below' if gap < 0 else 'above'} last year so far, {_money(abs(gap) / ((end_date - start_date).days + 1))} a day"),

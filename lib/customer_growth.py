@@ -286,14 +286,15 @@ WITH first_order AS MATERIALIZED (
     WHERE po.state IN ('done', 'paid', 'invoiced') AND po.amount_total > 0 AND po.partner_id IS NOT NULL
     ORDER BY po.partner_id, po.date_order
 ), keyed AS MATERIALIZED (
-    SELECT RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9) AS key,
-           fo.session_id, fo.date_order
+    SELECT w.key, fo.session_id, fo.date_order
     FROM first_order fo
     JOIN res_partner rp ON rp.id = fo.partner_id
+    -- a join, not "= ANY(:keys)": that compares every row with every phone asked about
+    JOIN UNNEST(CAST(:keys AS TEXT[])) AS w(key)
+      ON w.key = RIGHT(REGEXP_REPLACE(COALESCE(rp.phone, rp.mobile, ''), '[^0-9]', '', 'g'), 9)
 )
 SELECT DISTINCT ON (po.key) po.key, """ + _LOCATION + r""" AS location
 FROM keyed po""" + _FROM + r"""
-WHERE po.key = ANY(:keys)
 ORDER BY po.key, po.date_order
 """
 
