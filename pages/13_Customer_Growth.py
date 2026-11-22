@@ -683,7 +683,10 @@ def _new_shop_data(r: dict, start_date, end_date) -> dict:
         first = max(row["Month"].start_time.date(), opened.get(row["Location"]) or start_date, start_date)
         last = min(row["Month"].end_time.date(), end_date)
         return max((last - first).days + 1, 1)
-    monthly["Revenue per Day"] = monthly["Revenue"] / monthly.apply(open_days, axis=1)
+    monthly["Open Days"] = monthly.apply(open_days, axis=1)
+    # a month a shop was open under 10 days (its opening month, often) swings too much to read
+    monthly = monthly[monthly["Open Days"] >= 10]
+    monthly["Revenue per Day"] = monthly["Revenue"] / monthly["Open Days"]
 
     def trend(loc):
         m = monthly[monthly["Location"] == loc].sort_values("Month")["Revenue per Day"]
@@ -711,6 +714,30 @@ def _new_shop_data(r: dict, start_date, end_date) -> dict:
                                      [(end_date - o).days + 1 if pd.notna(o) else 999 for o in new["Opened"]])]
     return {"new": new.sort_values("Revenue", ascending=False), "monthly": monthly, "people": people,
             "benchmark": benchmark}
+
+
+def _pace_chart(m: pd.DataFrame, benchmark: float) -> go.Figure:
+    """A new shop's daily sales month by month, against an older shop's pace."""
+    xs, ys = m["Month"].dt.to_timestamp(), m["Revenue per Day"]
+    colour = GREEN if ys.iloc[-1] >= benchmark else theme.CATEGORICAL[0]
+    fig = go.Figure()
+    fig.add_scatter(x=xs, y=ys, mode="lines", line=dict(color=colour, width=3, shape="spline", smoothing=0.6),
+                    fill="tozeroy", fillcolor="rgba(46,158,91,0.10)" if colour == GREEN else "rgba(42,120,214,0.10)",
+                    hovertemplate="%{x|%b %Y}: <b>KSh %{y:,.0f}</b> a day<extra></extra>")
+    fig.add_scatter(x=[xs.iloc[-1]], y=[ys.iloc[-1]], mode="markers+text", marker=dict(size=9, color=colour),
+                    text=[f"<b>{_money(ys.iloc[-1])}</b>"], textposition="top center",
+                    textfont=dict(color=colour, size=12), hoverinfo="skip")
+    fig.add_hline(y=benchmark, line_dash="dash", line_width=1.5, line_color=theme.OTHER)
+    fig.add_annotation(x=xs.iloc[0], y=benchmark, yshift=10, xanchor="left", showarrow=False,
+                       text=f"Older-shop pace {_money(benchmark)}/day",
+                       font=dict(size=11, color=theme.TEXT_SECONDARY))
+    theme.apply_layout(fig, show_legend=False)
+    top = max(ys.max(), benchmark) * 1.25
+    fig.update_layout(title="Daily sales, month by month", height=270, hovermode="closest",
+                      margin=dict(l=8, r=16, b=8))
+    fig.update_yaxes(range=[0, top], tickprefix="KSh ", tickformat="~s", nticks=4)
+    fig.update_xaxes(tickformat="%b %y", dtick="M2", showgrid=False)
+    return fig
 
 
 @st.fragment()
@@ -760,18 +787,8 @@ def render_new_shops(r: dict, start_date, end_date) -> None:
                 st.markdown("\n".join(f"- {t}" for t in story))
                 m = monthly[monthly["Location"] == x["Location"]].sort_values("Month")
                 if len(m) > 1:
-                    fig = go.Figure()
-                    fig.add_scatter(x=m["Month"].dt.to_timestamp(), y=m["Revenue per Day"], mode="lines+markers",
-                                    line=dict(color=theme.CATEGORICAL[0], width=2.5), name=x["Location"],
-                                    hovertemplate="%{x|%b %Y}: <b>KSh %{y:,.0f}</b> a day<extra></extra>")
-                    fig.add_hline(y=benchmark, line_dash="dot", line_color=theme.OTHER,
-                                  annotation_text="older-shop pace", annotation_position="top left",
-                                  annotation_font=dict(size=11, color=theme.TEXT_SECONDARY))
-                    theme.apply_layout(fig, show_legend=False)
-                    fig.update_layout(height=200, margin=dict(t=10, b=10), hovermode="closest")
-                    fig.update_yaxes(tickprefix="KSh ", rangemode="tozero")
-                    fig.update_xaxes(tickformat="%b")
-                    theme.show(fig, key=f"ns_trend_{x['Location']}")
+                    theme.show(_pace_chart(m, benchmark), key=f"ns_trend_{x['Location']}",
+                               config={"displayModeBar": False})
 
     # ---------------------------------------------- where customers came from ---
     st.subheader("Where the new shops' customers first bought")
@@ -896,8 +913,154 @@ def _analysis_text(r: dict, start_date, end_date) -> dict:
                        + ("it sells" if len(struggling) == 1 else "they sell")
                        + " under 40% of an older shop's pace or is falling fast.".replace(
                            "is falling", "is falling" if len(struggling) == 1 else "are falling"))
+    b_ly = cg.behaviour(then, then_before)
     return {"headline": headline, "cost": cost, "why": why, "actions": actions,
-            "period": f"{start_date:%d %b %Y} – {end_date:%d %b %Y}"}
+            "period": f"{start_date:%d %b %Y} – {end_date:%d %b %Y}",
+            "b": b, "b_ly": b_ly, "now": now, "then": then, "new": new, "months": months,
+            "projected": projected, "older_shops": shops, "net_new": net_new, "moved": moved}
+
+
+def _analysis_detail(r: dict, a: dict) -> list[str]:
+    """The supporting numbers under the answer: Kenya at a glance, the revenue
+    bridge, older shops, new shops, customer behaviour and the risks. Returns
+    the same as text lines for the download."""
+    older, older_ly = r["older"]
+    kenya, kenya_ly = r["kenya"]
+    new_shops, online = r["new_shops"][0], r["online"]
+    b, b_ly, months = a["b"], a["b_ly"], a["months"]
+    lines = []
+
+    # ---------------------------------------------------- Kenya at a glance
+    st.markdown("### The numbers behind it")
+    rows = [("Kenya revenue", kenya_ly["Revenue"], kenya["Revenue"], True),
+            ("Older locations' revenue", older_ly["Revenue"], older["Revenue"], True),
+            ("New shops' revenue", r["new_shops"][1]["Revenue"], new_shops["Revenue"], True),
+            ("Kenya customers", kenya_ly["Customers"], kenya["Customers"], False),
+            ("First-time Denri buyers", kenya_ly["New Customers"], kenya["New Customers"], False),
+            ("Returning customers", kenya_ly["Returning Customers"], kenya["Returning Customers"], False),
+            ("Older locations' first-time buyers", older_ly["New Customers"], older["New Customers"], False),
+            ("Older locations' returning-customer revenue", older_ly["Returning-Customer Revenue"],
+             older["Returning-Customer Revenue"], True),
+            ("Spend per customer, older locations", older_ly["Avg Spend / Customer"] or 0,
+             older["Avg Spend / Customer"] or 0, True)]
+    glance = pd.DataFrame([{
+        "Figure": f, "Last year": _money(a_) if m else f"{a_:,.0f}", "This period": _money(b_) if m else f"{b_:,.0f}",
+        "Change": (_money(b_ - a_) if m else f"{b_ - a_:+,.0f}"),
+        "Change %": f"{(b_ - a_) / a_ * 100:+.1f}%" if a_ else "new"} for f, a_, b_, m in rows])
+    colour = lambda v: ("color: #2e9e5b; font-weight: 600" if str(v).startswith("+")
+                        else "color: #e5534b; font-weight: 600" if str(v).startswith("-") else "")
+    c1, c2 = st.columns([3, 2])
+    with c1, st.container(border=True):
+        st.markdown("**Kenya at a glance**")
+        st.dataframe(glance.style.map(colour, subset=["Change %"]), hide_index=True, width="stretch")
+    lines += [f"- {x['Figure']}: {x['Last year']} → {x['This period']} ({x['Change %']})"
+              for _, x in glance.iterrows()]
+
+    # ---------------------------------------------------- revenue bridge
+    with c2, st.container(border=True):
+        steps = [("Last year", kenya_ly["Revenue"], "absolute"),
+                 ("Older locations", older["Revenue"] - older_ly["Revenue"], "relative"),
+                 ("New shops", new_shops["Revenue"] - r["new_shops"][1]["Revenue"], "relative"),
+                 ("Jumia", online[0]["Revenue"] - online[1]["Revenue"], "relative"),
+                 ("This period", 0, "total")]
+        fig = go.Figure(go.Waterfall(
+            x=[x for x, _, _ in steps], y=[v for _, v, _ in steps], measure=[m for _, _, m in steps],
+            text=[_money(kenya_ly["Revenue"])] + [_money(v) for _, v, _ in steps[1:-1]] + [_money(kenya["Revenue"])],
+            textposition="outside", cliponaxis=False,
+            increasing=dict(marker=dict(color=GREEN)), decreasing=dict(marker=dict(color=RED)),
+            totals=dict(marker=dict(color=theme.CATEGORICAL[0])), connector=dict(line=dict(color=theme.OTHER))))
+        theme.apply_layout(fig, show_legend=False)
+        fig.update_layout(title="Kenya revenue: last year to this period", height=360, hovermode="closest")
+        fig.update_yaxes(tickprefix="KSh ", tickformat="~s",
+                         range=[0, max(kenya_ly["Revenue"], kenya["Revenue"]) * 1.18])
+        theme.show(fig, config={"displayModeBar": False})
+
+    # ---------------------------------------------------- older shops + new shops
+    c1, c2 = st.columns(2)
+    shops = a["older_shops"].assign(
+        **{"Per Month": lambda t: t["Change"] / months,
+           "Change %": lambda t: (t["Change"] / t["Revenue LY"].where(t["Revenue LY"] > 0) * 100),
+           "First-time Buyers Change": lambda t: t["New Customers"] - t["New Customers LY"]})
+    with c1, st.container(border=True):
+        st.markdown("**Older locations: where the money went**")
+        tbl = pd.DataFrame({
+            "Location": shops["Location"], "Change": shops["Change"].map(_money),
+            "A month": shops["Per Month"].map(_money), "Change %": shops["Change %"].map(lambda v: f"{v:+.0f}%"),
+            "First-time buyers": shops["First-time Buyers Change"].map(lambda v: f"{v:+,.0f}")})
+        st.dataframe(tbl.style.map(colour, subset=["Change %"]), hide_index=True, width="stretch",
+                     height=min(460, 36 * len(tbl) + 40))
+    lines += ["", "Older locations, revenue change (a month):"] + [
+        f"- {l}: {c} ({m}), {p}" for l, c, m, p in zip(tbl["Location"], tbl["Change"], tbl["A month"], tbl["Change %"])]
+    new = a["new"]
+    with c2, st.container(border=True):
+        st.markdown("**New shops: report card**")
+        card = pd.DataFrame({
+            "Shop": new["Location"], "Verdict": new["Verdict"], "Revenue": new["Revenue"].map(_money),
+            "Per day": new["Revenue per Day"].map(_money),
+            "Share of Kenya": (new["Revenue"] / kenya["Revenue"] * 100).map(lambda v: f"{v:.1f}%"),
+            "New to Denri": new["New to Denri %"].map(lambda v: f"{v:.0f}%")})
+        tone = {"Success": "#2e9e5b", "On track": "#2a78d6", "Watch": "#d4881f", "Struggling": "#e5534b",
+                "Too early": "#8a8a93"}
+        st.dataframe(card.style.map(lambda v: f"color: {tone.get(v, '')}; font-weight: 600" if v in tone else "",
+                                    subset=["Verdict"]), hide_index=True, width="stretch")
+        st.caption(f"Genuinely new revenue from the new shops: **{_money(a['net_new'])}**. "
+                   f"Moved from existing customers: **{_money(a['moved'])}**.")
+    lines += ["", "New shops:"] + [f"- {s_}: {v}, {rv}, {pd_} a day, {nd} new to Denri" for s_, v, rv, pd_, nd in
+                                   zip(card["Shop"], card["Verdict"], card["Revenue"], card["Per day"],
+                                       card["New to Denri"])]
+
+    # ---------------------------------------------------- customer behaviour
+    st.markdown("**How customers behave** (bulk and corporate orders left out)")
+    ch = cg.by(a["now"], "Sales Channel")["Customer Share %"]
+    gender = cg.by(a["now"], "Gender")["Customer Share %"]
+    # shares of the customers whose channel / gender is recorded (gender only since 22 Jul 2026)
+    typed = ch.get(cg.ONLINE_CH, 0) + ch.get(cg.WALK_IN, 0)
+    online_share = ch.get(cg.ONLINE_CH, 0) / typed * 100 if typed else 0
+    sexed = gender.get("Female", 0) + gender.get("Male", 0)
+    women = gender.get("Female", 0) / sexed * 100 if sexed else 0
+    tiles = [
+        ("Repeat customers", f"{b['Repeat Customers %'] or 0:.1f}%",
+         f"{(b['Repeat Customers %'] or 0) - (b_ly['Repeat Customers %'] or 0):+.1f} pts · bought on 2+ days"),
+        ("Came back next month", f"{b['Came Back Next Month %'] or 0:.1f}%",
+         f"{(b['Came Back Next Month %'] or 0) - (b_ly['Came Back Next Month %'] or 0):+.1f} pts on last year"),
+        ("Average order value", _money(b["Average Order Value"] or 0),
+         f"{_pct(b['Average Order Value'] or 0, b_ly['Average Order Value'] or 0) or 0:+.1f}% · "
+         f"{b['Items per Order'] or 0:.1f} items an order"),
+        ("Revenue per customer", _money(b["Revenue per Customer"] or 0),
+         f"{_pct(b['Revenue per Customer'] or 0, b_ly['Revenue per Customer'] or 0) or 0:+.1f}% on last year"),
+        ("Online customers", f"{online_share:.0f}%", f"walk-ins {100 - online_share:.0f}%"
+         + (" · orders with a customer type" if ch.get("Other", 0) >= 5 else "")),
+        ("Women among customers", f"{women:.0f}%", f"men {100 - women:.0f}%"
+         + (" · where gender is recorded" if gender.get("Not recorded", 0) >= 5 else "")),
+    ]
+    for row in (tiles[:3], tiles[3:]):
+        for col, (label, value, note) in zip(st.columns(3), row):
+            with col.container(border=True):
+                st.metric(label, value, note, delta_color="normal" if note[:1] in "+-" else "off")
+    lines += ["", "Customer behaviour:"] + [f"- {l}: {v} ({n})" for l, v, n in tiles]
+
+    # ---------------------------------------------------- risks
+    top_new = new.iloc[0] if len(new) else None
+    risks = [
+        f"**Year-end:** if the daily gap holds, the older locations finish {end_year(a)} "
+        f"**{_money(abs(a['projected']))}** {'below' if a['projected'] < 0 else 'above'} last year.",
+        f"**Concentration:** the new shops are {new_shops['Revenue'] / kenya['Revenue'] * 100:.0f}% of Kenya revenue"
+        + (f"; {top_new['Location']} alone is {top_new['Revenue'] / kenya['Revenue'] * 100:.0f}%. A bad month "
+           f"there moves the whole business." if top_new is not None else "."),
+        f"**Leaking customers:** {100 - (b['Came Back Next Month %'] or 0):.0f} of every 100 buyers don't return "
+        f"the next month, so every month starts almost from zero and depends on new walk-ins.",
+        f"**Cannibalisation:** {_money(a['moved'])} of the new shops' sales came from customers the older "
+        "locations already had.",
+    ]
+    with st.container(border=True):
+        st.markdown("#### Risks if nothing changes")
+        st.markdown("\n".join(f"- {x}" for x in risks))
+    lines += ["", "Risks:"] + [f"- {x}" for x in risks]
+    return lines
+
+
+def end_year(a: dict) -> str:
+    return a["period"][-4:]
 
 
 def render_analysis(r: dict, start_date, end_date) -> None:
@@ -909,7 +1072,7 @@ def render_analysis(r: dict, start_date, end_date) -> None:
     st.markdown("#### What it costs us")
     for col, (label, value, note) in zip(st.columns(len(a["cost"])), a["cost"]):
         with col.container(border=True):
-            st.metric(label, value, note, delta_color="off")
+            st.metric(label, value, note, delta_color="inverse")   # a cost reads red
     c1, c2 = st.columns([3, 2])
     with c1, st.container(border=True):
         st.markdown("#### Why")
@@ -917,10 +1080,12 @@ def render_analysis(r: dict, start_date, end_date) -> None:
     with c2, st.container(border=True):
         st.markdown("#### What we do next")
         st.markdown("\n".join(f"{i}. {t}" for i, t in enumerate(a["actions"], 1)))
+    extra = _analysis_detail(r, a)
     text = "\n".join([f"CUSTOMER GROWTH — {a['period']}", "", a["headline"], "", "WHAT IT COSTS US"]
                       + [f"- {l}: {v} ({n})" for l, v, n in a["cost"]] + ["", "WHY"]
                       + [f"- {w}" for w in a["why"]] + ["", "WHAT WE DO NEXT"]
-                      + [f"{i}. {t}" for i, t in enumerate(a["actions"], 1)]).replace("**", "")
+                      + [f"{i}. {t}" for i, t in enumerate(a["actions"], 1)]
+                      + ["", "THE NUMBERS"] + extra).replace("**", "")
     st.download_button("⬇️ Download the analysis (text)", text, file_name=f"customer_growth_{end_date}.txt",
                        mime="text/plain", key="growth_analysis_download")
     st.caption("Monthly figures are the period's totals spread evenly over its months. The year-end "
