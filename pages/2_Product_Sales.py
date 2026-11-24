@@ -55,6 +55,7 @@ OFFER_COLORS = {
     # A short dated pricelist rule running beside the tier ("300 off" and the
     # like) — its own label so it no longer inflates Deal of the Week.
     deals.TIMED_OFFER: theme.CATEGORICAL[5],
+    deals.FLASH_SALE: theme.CATEGORICAL[7],
     # Sold below its usual price but on no list — amber, because it is a
     # discount that was given without being recorded, not a clean category.
     deals.UNLISTED: theme.STATUS["warning"],
@@ -64,7 +65,7 @@ OFFER_COLORS = {
 # One section at a time, not st.tabs: Streamlit runs every tab's body on every
 # rerun, hidden or not, so a date change on this page ran all six sections'
 # queries (~26s for a month) to show one. Only the chosen section loads now.
-SECTIONS = ["By Shop & Category", "By Location", "Sales Value", "Offer Types",
+SECTIONS = ["By Shop & Category", "By Location", "Sales Value", "Offer Types", "Flash Sales",
             "Self/Running Combos", "New Products", "Corporate"]
 section = st.segmented_control("Section", SECTIONS, default=SECTIONS[0],
                                key="products_section", label_visibility="collapsed")
@@ -527,7 +528,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
             "Unlisted Discounts", f"KES {unlisted_revenue:,.0f}",
             f"{unlisted_qty:,.0f} bags sold", delta_color="off",
             help="Sold below what that bag normally fetches at that shop, but on "
-                 "no Power Deal, Deal of the Week, Singles or Special Offers "
+                 "no Power Deal, Deal of the Week, Flash Sale, Singles or Special Offers "
                  "list. Either a promotion nobody recorded, or a discount given "
                  "at the till.",
         )
@@ -644,7 +645,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
                     st.error(f"Sync failed: {exc}")
 
     # Every label classify can give, so the bars add up to the tab's revenue.
-    order = ["Power Deal", "Deal of the Week", "Singles", "Special Offers",
+    order = ["Power Deal", "Deal of the Week", deals.FLASH_SALE, "Singles", "Special Offers",
              deals.TIMED_OFFER, "Combo", deals.UNLISTED, "Regular"]
     ordered = by_offer_revenue.reindex(order).fillna(0)
 
@@ -723,7 +724,7 @@ def render_by_offer(start_date: date, end_date: date) -> None:
     with col_offer:
         offer_choice = st.selectbox(
             "Offer Type",
-            ["All Offer Types", "Power Deal", "Deal of the Week", "Singles",
+            ["All Offer Types", "Power Deal", "Deal of the Week", deals.FLASH_SALE, "Singles",
              "Special Offers", deals.TIMED_OFFER, deals.UNLISTED, "Combo", "Regular"],
             key="offer_type_filter",
         )
@@ -1056,11 +1057,106 @@ def render_corporate(start_date: date, end_date: date) -> None:
                                   pinned_columns=("Quotation",), height=360)
 
 
+@st.fragment()
+def render_flash_sales(start_date: date, end_date: date) -> None:
+    """Each one-day flash sale (lib/data/flash_sales.csv), bag by bag: how many
+    sold at the flash price and how many the tills still charged otherwise."""
+    flash = deals._load_flash_sales()
+    days = sorted(d for d in set(flash["date"].astype(str))
+                  if start_date <= date.fromisoformat(d) <= end_date)
+    if not days:
+        recorded = ", ".join(f"{date.fromisoformat(d):%a %d %b %Y}"
+                             for d in sorted(set(flash["date"].astype(str)))) or "none yet"
+        st.info(f"No flash sale days in this date range. Days on record: {recorded}.")
+        return
+
+    # Only the flash days themselves are read, not the whole range.
+    df = pd.concat([db.run_query(queries.PRODUCT_LINE_ITEMS, {"start_date": d, "end_date": d})
+                    for d in map(date.fromisoformat, days)], ignore_index=True)
+    df = deals.classify(df)
+    df = df[~df["Location"].isin(deals.NON_KENYA_LOCATIONS) & (df["Price"] > 0)].copy()
+    df["day"] = pd.to_datetime(df["Date"]).dt.strftime("%Y-%m-%d")
+    df["key"] = df["Product"].str.strip().str.lower()
+    listed = flash[flash["date"].astype(str).isin(days)].assign(
+        day=lambda f: f["date"].astype(str), key=lambda f: f["product"].str.lower())
+    sales = df.merge(listed[["day", "key", "price_then", "price_now"]], on=["day", "key"])
+    sales["At Flash"] = sales["Offer Type"] == deals.FLASH_SALE
+    hit = sales[sales["At Flash"]]
+
+    bags, revenue = hit["Quantity"].sum(), hit["Total"].sum()
+    given = ((hit["price_then"] - hit["Price"]) * hit["Quantity"]).sum()
+    share = bags / sales["Quantity"].sum() * 100 if sales["Quantity"].sum() else 0.0
+    k1, k2, k3, k4 = st.columns(4)
+    with k1.container(border=True):
+        st.metric("Flash Sale Days", f"{len(days)}", f"{len(listed)} bag offers listed", delta_color="off")
+    with k2.container(border=True):
+        st.metric("Flash Sale Revenue", f"KES {revenue:,.0f}", f"{bags:,.0f} bags at the flash price",
+                  delta_color="off")
+    with k3.container(border=True):
+        st.metric("Discount Given", f"KES {given:,.0f}", "off the bags' usual prices", delta_color="off")
+    with k4.container(border=True):
+        st.metric("Charged the Flash Price", f"{share:,.0f}%", "of the listed bags sold on those days",
+                  delta_color="off",
+                  help="A listed bag sold on its flash day at any other price (usually the "
+                       "month's Power Deal or full price) means the till didn't apply the offer.")
+
+    per_day = (sales.groupby(["day", "At Flash"])["Quantity"].sum().unstack(fill_value=0)
+               .reindex(columns=[True, False], fill_value=0))
+    labels = [f"{date.fromisoformat(d):%a %d %b}" for d in per_day.index]
+    with st.container(border=True):
+        fig = go.Figure()
+        fig.add_bar(x=labels, y=per_day[True], name="At the flash price",
+                    marker=dict(color=OFFER_COLORS[deals.FLASH_SALE], cornerradius=4))
+        fig.add_bar(x=labels, y=per_day[False], name="Listed bag, other price",
+                    marker=dict(color=theme.TEXT_MUTED, cornerradius=4))
+        theme.apply_layout(fig)
+        fig.update_layout(title="Listed bags sold on each flash day", barmode="stack", height=380)
+        theme.show(fig, width="stretch")
+
+    # Every bag on each day's list, sold or not, so a bag that never moved shows too.
+    other = sales[~sales["At Flash"]]
+    usual_other = (other.groupby(["day", "key", "Price"])["Quantity"].sum().reset_index()
+                   .sort_values("Quantity", ascending=False).drop_duplicates(["day", "key"])
+                   .set_index(["day", "key"])["Price"])
+    t = listed.set_index(["day", "key"])
+    t["Sold at Flash Price"] = hit.groupby(["day", "key"])["Quantity"].sum()
+    t["Flash Revenue"] = hit.groupby(["day", "key"])["Total"].sum()
+    t["Sold at Other Prices"] = other.groupby(["day", "key"])["Quantity"].sum()
+    t["Most Common Other Price"] = usual_other
+    t = t.fillna({"Sold at Flash Price": 0, "Flash Revenue": 0, "Sold at Other Prices": 0}).reset_index()
+    sold = t["Sold at Flash Price"] + t["Sold at Other Prices"]
+    t["% at Flash Price"] = (t["Sold at Flash Price"] / sold.where(sold > 0) * 100).round(0)
+    t["Day"] = pd.to_datetime(t["day"]).dt.strftime("%a %d %b")
+    t = t.sort_values(["day", "Sold at Flash Price"], ascending=[True, False]).rename(
+        columns={"product": "Bag", "price_then": "Was", "price_now": "Flash Price", "event": "Event"})
+    st.subheader("Each day's list, bag by bag")
+    with st.container(border=True):
+        st.caption("Every bag on each flash day's list. Sold at Flash Price counts sales charged within "
+                   "KES 100 of the flash price; anything else that day is under Other Prices.")
+        grid.filterable_table(
+            t[["Day", "Event", "Bag", "Was", "Flash Price", "Sold at Flash Price", "Flash Revenue",
+               "Sold at Other Prices", "Most Common Other Price", "% at Flash Price"]],
+            pinned_columns=("Day", "Bag"),
+            currency_columns=("Was", "Flash Price", "Flash Revenue", "Most Common Other Price"),
+            height=520)
+
+    st.subheader("Flash sale bags by location")
+    by_shop = hit.assign(Day=pd.to_datetime(hit["day"]).dt.strftime("%a %d %b")).pivot_table(
+        index="Location", columns="Day", values="Quantity", aggfunc="sum", fill_value=0)
+    by_shop = by_shop[[f"{date.fromisoformat(d):%a %d %b}" for d in days if
+                       f"{date.fromisoformat(d):%a %d %b}" in by_shop.columns]]
+    by_shop["All Days"] = by_shop.sum(axis=1)
+    with st.container(border=True):
+        grid.filterable_table(by_shop.sort_values("All Days", ascending=False).reset_index(),
+                              pinned_columns=("Location",), height=420)
+
+
 RENDERERS = {
     "By Shop & Category": render_by_shop_category,
     "By Location": render_by_location,
     "Sales Value": render_by_value,
     "Offer Types": render_by_offer,
+    "Flash Sales": render_flash_sales,
     "Self/Running Combos": render_combos,
     "New Products": render_new_products,
     "Corporate": render_corporate,

@@ -208,7 +208,13 @@ def _load_deals_of_week() -> pd.DataFrame:
     return _read_deal_file("deals_of_week.csv", _modified("deals_of_week.csv"))
 
 
-# Callers clear these after a sync; both now share one cache.
+def _load_flash_sales() -> pd.DataFrame:
+    if not (_DATA_DIR / "flash_sales.csv").exists():
+        return pd.DataFrame(columns=["date", "product", "price_then", "price_now", "event"])
+    return _read_deal_file("flash_sales.csv", _modified("flash_sales.csv"))
+
+
+# Callers clear these after a sync; all share one cache.
 _load_power_deals.clear = _read_deal_file.clear
 _load_deals_of_week.clear = _read_deal_file.clear
 
@@ -287,6 +293,9 @@ DOW = "Deal of the Week"
 # A short dated pricelist rule running beside the tier ("300 off" and similar),
 # not part of Deal of the Week itself.
 TIMED_OFFER = "Timed Offer"
+# A one-day, Kenya-wide price drop (Black November's Wednesday and Friday
+# offers), listed by date in lib/data/flash_sales.csv.
+FLASH_SALE = "Flash Sale"
 
 # A sale has to be this far under the usual price before it counts as a
 # discount rather than rounding or a part-shilling difference. The real deals
@@ -530,7 +539,7 @@ def _tier_window_finder():
 
 
 def classify(df: pd.DataFrame) -> pd.DataFrame:
-    """Add "Offer Type" ("Power Deal", "Deal of the Week", "Singles",
+    """Add "Offer Type" ("Power Deal", "Deal of the Week", "Flash Sale", "Singles",
     "Special Offers", "Combo", or "Regular") and "Country" ("Kenya",
     "Uganda", or "Sinza") columns.
 
@@ -638,6 +647,22 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     offer[is_dow] = dow_type[is_dow]
     df["Tier"] = dow_tier.where(is_dow, "")
     df["Deal Window"] = dow_window.where(is_dow, "")
+    # A flash sale is the most specific of all (one day, that day's price), so
+    # on its day it wins over the Power Deal and Deal of the Week lists. Only
+    # a sale charged at (about) the flash price counts: on 18 Nov 2026 most
+    # tills kept charging the month's Power Deal prices (Jumbo at 2,800, not
+    # the flash 2,400), and those stay Power Deals.
+    flash = _load_flash_sales()
+    flash_lookup = {(str(r["date"]), r["product"].lower()): r["price_now"] for _, r in flash.iterrows()}
+    day_key = sold_on.dt.strftime("%Y-%m-%d")
+    is_flash = pd.Series(
+        [(d, p) in flash_lookup and 0 < price <= flash_lookup[(d, p)] + _DISCOUNT_FLOOR
+         for d, p, price in zip(day_key, product_key, df["Price"])],
+        index=df.index,
+    ) & is_kenya
+    offer[is_flash] = FLASH_SALE
+    df.loc[is_flash, "Tier"] = ""
+    df.loc[is_flash, "Deal Window"] = sold_on[is_flash].dt.strftime("%d %b")
     offer[is_combo] = "Combo"  # a bundle line is never a single-product deal
     if "In Bundle" in df.columns:
         # The bags inside a bundle belong to the combo, not to Regular.
@@ -663,3 +688,14 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 
     df["Country"] = df["Location"].apply(country_of)
     return df
+
+
+if __name__ == "__main__":
+    # Flash sale self-check against lib/data/flash_sales.csv (Man Bag, 6 Nov 2026, 1,100).
+    _t = classify(pd.DataFrame({
+        "Date": ["2026-11-06", "2026-11-06", "2026-11-06", "2026-11-07"],
+        "Product": ["Man Bag"] * 4, "Location": ["Hilton", "Hilton", "Uganda", "Hilton"],
+        "Price": [1100.0, 1600.0, 1100.0, 1100.0], "Quantity": [1] * 4, "Total": [1100.0] * 4,
+    }))
+    assert list(_t["Offer Type"] == FLASH_SALE) == [True, False, False, False], _t["Offer Type"].tolist()
+    print("deals ok")
