@@ -1131,8 +1131,9 @@ def render_flash_sales(start_date: date, end_date: date) -> None:
         columns={"product": "Bag", "price_then": "Was", "price_now": "Flash Price", "event": "Event"})
     st.subheader("Each day's list, bag by bag")
     with st.container(border=True):
-        st.caption("Every bag on each flash day's list. Sold at Flash Price counts sales charged within "
-                   "KES 100 of the flash price; anything else that day is under Other Prices.")
+        st.caption("Every bag on each flash day's list. Sold at Flash Price counts sales charged the "
+                   "flash price, give or take KES 1 (1,199 for 1,200); anything else that day is under "
+                   "Other Prices.")
         grid.filterable_table(
             t[["Day", "Event", "Bag", "Was", "Flash Price", "Sold at Flash Price", "Flash Revenue",
                "Sold at Other Prices", "Most Common Other Price", "% at Flash Price"]],

@@ -296,6 +296,7 @@ TIMED_OFFER = "Timed Offer"
 # A one-day, Kenya-wide price drop (Black November's Wednesday and Friday
 # offers), listed by date in lib/data/flash_sales.csv.
 FLASH_SALE = "Flash Sale"
+_FLASH_PRICE_TOLERANCE = 1.0  # KES either side of the flash price
 
 # A sale has to be this far under the usual price before it counts as a
 # discount rather than rounding or a part-shilling difference. The real deals
@@ -649,14 +650,14 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
     df["Deal Window"] = dow_window.where(is_dow, "")
     # A flash sale is the most specific of all (one day, that day's price), so
     # on its day it wins over the Power Deal and Deal of the Week lists. Only
-    # a sale charged at (about) the flash price counts: on 18 Nov 2026 most
-    # tills kept charging the month's Power Deal prices (Jumbo at 2,800, not
-    # the flash 2,400), and those stay Power Deals.
+    # a sale charged the flash price, give or take 1 (1,200 rings up as 1,199),
+    # counts: on 18 Nov 2026 most tills kept charging the month's Power Deal
+    # prices (Jumbo at 2,800, not the flash 2,400), and those stay Power Deals.
     flash = _load_flash_sales()
     flash_lookup = {(str(r["date"]), r["product"].lower()): r["price_now"] for _, r in flash.iterrows()}
     day_key = sold_on.dt.strftime("%Y-%m-%d")
     is_flash = pd.Series(
-        [(d, p) in flash_lookup and 0 < price <= flash_lookup[(d, p)] + _DISCOUNT_FLOOR
+        [(d, p) in flash_lookup and price > 0 and abs(price - flash_lookup[(d, p)]) <= _FLASH_PRICE_TOLERANCE
          for d, p, price in zip(day_key, product_key, df["Price"])],
         index=df.index,
     ) & is_kenya
@@ -693,9 +694,9 @@ def classify(df: pd.DataFrame) -> pd.DataFrame:
 if __name__ == "__main__":
     # Flash sale self-check against lib/data/flash_sales.csv (Man Bag, 6 Nov 2026, 1,100).
     _t = classify(pd.DataFrame({
-        "Date": ["2026-11-06", "2026-11-06", "2026-11-06", "2026-11-07"],
-        "Product": ["Man Bag"] * 4, "Location": ["Hilton", "Hilton", "Uganda", "Hilton"],
-        "Price": [1100.0, 1600.0, 1100.0, 1100.0], "Quantity": [1] * 4, "Total": [1100.0] * 4,
+        "Date": ["2026-11-06"] * 5 + ["2026-11-07"],
+        "Product": ["Man Bag"] * 6, "Location": ["Hilton", "Hilton", "Hilton", "Hilton", "Uganda", "Hilton"],
+        "Price": [1100.0, 1099.0, 1102.0, 1600.0, 1100.0, 1100.0], "Quantity": [1] * 6, "Total": [1100.0] * 6,
     }))
-    assert list(_t["Offer Type"] == FLASH_SALE) == [True, False, False, False], _t["Offer Type"].tolist()
+    assert list(_t["Offer Type"] == FLASH_SALE) == [True, True, False, False, False, False], _t["Offer Type"].tolist()
     print("deals ok")
