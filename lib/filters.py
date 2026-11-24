@@ -143,6 +143,32 @@ COMPARE_MAX = 4
 _CUSTOM = "custom"
 
 
+def place_control(key_prefix: str, locations) -> tuple[list[str], str]:
+    """Country, Region and Location dropdowns in one row, each narrowing the
+    next. Returns the locations chosen and a label for chart titles."""
+    from lib import regions
+
+    shops = sorted(set(locations))
+    country_names = [c for c in (regions.KENYA, regions.UGANDA, regions.TANZANIA)
+                     if any(regions.country_of(s) == c for s in shops)]
+    c1, c2, c3 = st.columns(3)
+    country = c1.selectbox("Country", ["All Countries"] + country_names, key=f"{key_prefix}_country")
+    if country != "All Countries":
+        shops = [s for s in shops if regions.country_of(s) == country]
+    region_names = [r for r in [*regions.REGIONS, "Other"] if any(regions.region_of(s) == r for s in shops)]
+    # Only Kenya is split into regions; elsewhere the country is the region.
+    region = c2.selectbox("Region", ["All Regions"] + region_names, key=f"{key_prefix}_region",
+                          disabled=country not in ("All Countries", regions.KENYA))
+    if region != "All Regions" and region in region_names:
+        shops = [s for s in shops if regions.region_of(s) == region]
+    location = c3.selectbox("Location", ["All Locations"] + shops, key=f"{key_prefix}_location")
+    if location in shops:
+        return [location], location
+    if region != "All Regions" and region in region_names:
+        return shops, f"{region} region"
+    return shops, country if country != "All Countries" else "All Locations"
+
+
 def _unit(start: date, end: date) -> str:
     """What the selected period is: a day, a Sunday-to-Saturday week (or the
     part of one so far), a month (or month to date), or just a span of days."""

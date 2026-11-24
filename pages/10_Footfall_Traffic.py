@@ -57,9 +57,8 @@ def render_footfall(start_date: date, end_date: date) -> None:
                 "entered by the shops at close of day.")
         return
 
-    shops = sorted(df["Location"].unique())
-    location = st.selectbox("Location", ["All Locations"] + shops, key="footfall_location")
-    shown = df if location == "All Locations" else df[df["Location"] == location]
+    picked, location = filters.place_control("footfall", df["Location"].unique())
+    shown = df[df["Location"].isin(picked)]
 
     # The walk-in funnel uses counted days only: a day with walk-in sales but
     # no count would add buyers with nobody counted behind them.
@@ -292,5 +291,5 @@ def _headline(start: date, end: date) -> dict:
 
 filters.comparison("footfall", start_date, end_date, _headline,
                    {"Walk-in Conversion": "%", "Revenue per Walk-in": "KES"},
-                   note="All shops, whatever location is picked below")
+                   note="All shops, whatever country, region or location is picked below")
 render_footfall(start_date, end_date)
