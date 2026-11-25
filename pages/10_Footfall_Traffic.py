@@ -69,6 +69,24 @@ def render_footfall(start_date: date, end_date: date) -> None:
     missing = shown[shown["Visitors"].isna()]
     under = counted[counted["Walk-in Orders"] > counted["Visitors"]]
 
+    # Flag counts to fix in the Footfall module, so the funnel adds up.
+    to_fix = pd.concat([under, missing]).sort_values(["Date", "Location"])
+    if not to_fix.empty:
+        with st.container(border=True):
+            st.warning(
+                f"**{len(to_fix):,} shop-day(s) need their walk-in count corrected in the Footfall "
+                "module.** Each one rang up more walk-in sales than walk-ins counted, or entered no "
+                "count. Until fixed, Purchased + Didn't Buy won't add up to Walk-ins Counted, and "
+                "uncounted days are left out of the conversion.", icon=":material/edit_note:")
+            grid.filterable_table(pd.DataFrame({
+                "Date": to_fix["Date"].dt.strftime("%a %d %b"),
+                "Shop": to_fix["Location"],
+                "Walk-ins Counted": to_fix["Visitors"],
+                "Walk-in Purchases": to_fix["Walk-in Orders"],
+                "Problem": to_fix["Visitors"].isna().map({True: "No count entered",
+                                                          False: "Count below purchases"}),
+            }), total=False, height=min(480, 100 + 36 * len(to_fix)))
+
     st.markdown("**Walk-ins** — the people who came into the shops")
     _kpis([
         ("Walk-ins Counted", f"{walkins:,.0f}", f"{len(counted):,} shop-days counted"),
